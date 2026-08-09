@@ -1,0 +1,12 @@
+tools/vasm/
+tools/vlink/
+*.o
+*.lst
+*.tos
+*.res
+*.dbg
+a.out
+TREX/m68030/trex_dsp.lod
+__pycache__/
+*.pyc
+.DS_Store
