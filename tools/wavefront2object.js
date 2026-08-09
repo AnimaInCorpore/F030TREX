@@ -3,7 +3,8 @@
 const fs = require("fs");
 
 if(process.argv.length < 4) {
-    return;
+    console.error("usage: wavefront2object.js <input.obj> <output.o3d>");
+    process.exit(1);
 }
 
 let wfObjectText = fs.readFileSync(process.argv[2], "utf-8");
@@ -134,9 +135,9 @@ for(let wfObjectTextLine of wfObjectTextLines) {
                     frontPolygon: null
                 });
             } else {
-                console.log("Unsupported polygon size " + (lineData.length - 1) + "!");
+                console.error("Unsupported polygon size " + (lineData.length - 1) + "!");
 
-                process.exit();
+                process.exit(1);
             }
 
             polygonOffset += lineData.length + 4 + TEXTURE_METADATA_WORDS;

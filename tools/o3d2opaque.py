@@ -34,8 +34,6 @@ O3D_HEADER_BYTES = 24
 O3D_POINT_BYTES = 12
 O3D_NORMAL_BYTES = 12
 O3D_POLYGON_WORDS = 16
-TREX_VERTICES = 1376
-TREX_NORMALS = 3610
 
 TIM_CLUT_DATA_OFFSET = 20
 TIM_CLUT_ENTRIES = 256
@@ -157,8 +155,15 @@ def read_o3d_polygons(path):
             data = handle.read()
     except OSError as exc:
         raise QualificationError("cannot read %s: %s" % (path, exc))
-    offset = (O3D_HEADER_BYTES + TREX_VERTICES * O3D_POINT_BYTES
-              + TREX_NORMALS * O3D_NORMAL_BYTES)
+    if len(data) < O3D_HEADER_BYTES:
+        raise QualificationError("%s is shorter than the O3D header" % path)
+    # Point/normal counts come from the O3D's own header (big-endian u16 at
+    # offset 0/2), the same way every JS tool in this pipeline reads them
+    # (see o3d2facenormals.js), rather than from constants that silently go
+    # stale if the mesh's vertex or normal count ever changes.
+    point_count, normal_count = struct.unpack_from(">HH", data, 0)
+    offset = (O3D_HEADER_BYTES + point_count * O3D_POINT_BYTES
+              + normal_count * O3D_NORMAL_BYTES)
     stride = O3D_POLYGON_WORDS * 2
     if len(data) < offset or (len(data) - offset) % stride:
         raise QualificationError("%s has a malformed polygon block" % path)

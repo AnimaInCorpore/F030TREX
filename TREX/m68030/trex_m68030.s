@@ -388,7 +388,7 @@ DSP_TRI_INDEX_BITS	= 12
 DSP_TRI_INDEX_MASK	= $00000fff
 
 
-; The survivor record arrives PACKED, fourteen words (layout mirrored from
+; The survivor record arrives PACKED, eighteen words (layout mirrored from
 ; SPAN_RECORD_WORDS in trex_dsp.asm):
 ;
 ;   w0   slot_mid<<14 | slot_top<<12 | mid<<11 | shade<<5 | chunk-local index
@@ -3191,7 +3191,7 @@ gpu_submit_ot
 
 	; Build a conventional front-end OT.  The DSP returns the sum of the
 	; projected Z values; shifting by OT_KEY_SHIFT gives useful buckets for the
-	; current 240x224 camera range.  Values outside the 1024 buckets saturate.
+	; current 240x224 camera range.  Values outside the 2048 buckets saturate.
 .gpu_submit_ot_loop
 	move.l	8(a1),d0			; packet word 2 = average-Z key
 	tst.l	d0

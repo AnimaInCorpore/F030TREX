@@ -2668,7 +2668,7 @@ never ran the demo. Note that Hatari renders one buffer pixel as one host
 pixel: it does not model the wide pixels, so its screenshots and `fb.res` are
 both squeezed by 0.8 against a real Falcon.
 
-### 6.3 Texture and CLUT reads
+### 6.7 Texture and CLUT reads
 
 The six native T-Rex texture pages are much larger than the DSP local memory
 when considered together. The DSP would also need a low-latency texture lookup
@@ -2722,13 +2722,13 @@ legacy-path estimate. The latest run measures the complete rasterizer only, so
 it does not isolate exactly how many of the saved cycles came from that one
 operation.
 
-### 6.4 Semitransparency
+### 6.8 Semitransparency
 
 The current 50/50 blend reads the existing destination pixel. It is inherently
 local to the M68030 framebuffer unless a DSP-visible framebuffer or an external
 rasterizer is introduced.
 
-### 6.5 Framebuffer clearing
+### 6.9 Framebuffer clearing
 
 The clear stage is 17.5 ms, 2.5% of the current frame, since the Z-buffer's exit
 removed two thirds of its traffic. The DSP cannot directly clear the M68030

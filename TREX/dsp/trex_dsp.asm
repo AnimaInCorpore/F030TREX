@@ -27,13 +27,14 @@
 ;   CMD_SET_FRAME:
 ;       9 matrix words, 3 translation words, 3 animation-bias words,
 ;       focal length, screen centre x, screen centre y, near distance,
-;       3 camera-space light-direction words
+;       20 light words (six channel-scaled direction/intensity vectors
+;       plus a 2-word ambient term; see LIGHT_COUNT below)
 ;
 ;   CMD_SET_ANIMATED_FRAME / CMD_LOAD_ANIMATION_GAIT /
 ;   CMD_APPLY_ANIMATION_TARGET / CMD_FINISH_ANIMATED_FRAME:
 ;       The PS1 choreography is split into acknowledged transactions.  BEGIN
 ;       receives matrix(9), translation(3), focal-x/focal-y/cx/cy/near(5)
-;       and light(3).  GAIT receives first/count and count sign-extended XYZ
+;       and light(20).  GAIT receives first/count and count sign-extended XYZ
 ;       deltas; TARGET receives weight/first/count and the same raw stream.
 ;       FINISH transforms and projects the completed object-space work array.
 ;
@@ -41,14 +42,18 @@
 ;       returns count, followed by count * (screen-x, screen-y, z, flags)
 ;
 ;   CMD_LOAD_TRIANGLES:
-;       count, followed by count * (index0 | index1<<12, index2)
+;       count, followed by count * (index0 | index1<<12, index2 | normal0<<12,
+;       normal1 | normal2<<12) -- three words per triangle since Gouraud,
 ;       the static index list, uploaded once and read by every chunk
 ;
 ;   CMD_BUILD_TRIANGLES:
-;       receives count and the global index of the chunk's first triangle;
-;       returns ACK_TRIANGLES followed by the SURVIVOR count.  The records
-;       themselves are resident, so this is three words in regardless of the
-;       chunk size, and the ack must carry the survivor count because the
+;       receives count and the global index of the chunk's first triangle,
+;       followed by the chunk's own UV pairs (two packed words per triangle,
+;       since the corner-normal table displaced the old resident UV table --
+;       see chunk_uvs); returns ACK_TRIANGLES followed by the SURVIVOR count.
+;       The index records themselves are resident, so the fixed header is
+;       three words in regardless of chunk size -- only the UV tail scales
+;       with it -- and the ack must carry the survivor count because the
 ;       host sizes its GET_TRIANGLES receive before issuing it.
 ;
 ;   CMD_PREPASS:
@@ -61,7 +66,7 @@
 ;   CMD_GET_TRIANGLES:
 ;       returns ACK_GET_TRIANGLES, survivor count, and survivor count *
 ;       SPAN_RECORD_WORDS.  Rejected triangles send nothing.  Each record is
-;       fourteen packed words -- see the layout at SPAN_RECORD_WORDS.
+;       eighteen packed words -- see the layout at SPAN_RECORD_WORDS.
 ;
 ; The matrix layout matches rotate_translate in src/3d.asm: the nine words are
 ; consumed in the same order as the existing DSP implementation.
@@ -85,9 +90,10 @@ SCREEN_HEIGHT	= 224
 MAX_CHUNK	= 32
 
 ; Words per survivor record, PACKED for the wire.  The host unpacks them
-; into its seventeen-field span-setup block:
+; into its twenty-two-field span-setup block (seventeen classic DDA fields
+; plus five Gouraud level fields):
 ;
-;   w0   slot_mid<<12 | slot_top<<10 | mid<<9 | shade<<5 | chunk-local index
+;   w0   slot_mid<<14 | slot_top<<12 | mid<<11 | shade<<5 | chunk-local index
 ;   w1   average-z / OT key
 ;   w2   rows_up<<12 | (sy0 & $fff)
 ;   w3   (sx0 & $fff)<<12 | rows_low
@@ -302,7 +308,7 @@ dispatch_odd_bit1_clear
 
 dispatch_even
 	; Even commands: 0 = PING, 2 = SET_FRAME, 4 = BUILD_TRIANGLES,
-	; 6 = GET_TRIANGLES, 8 = LOAD_TRIANGLES, 10 = LOAD_UVS, and
+	; 6 = GET_TRIANGLES, 8 = LOAD_TRIANGLES, 10 = PREPASS, and
 	; 12 = SET_ANIMATED_FRAME and 14 = APPLY_ANIMATION_TARGET.
 	jclr	#2,x0,dispatch_even_low
 	nop
@@ -690,7 +696,7 @@ get_vertex_loop
 
 command_build_triangles
 	; One chunk of up to MAX_CHUNK triangles.  BUILD_TRIANGLES acknowledges
-	; with the survivor count; GET_TRIANGLES then returns fourteen words per
+	; with the survivor count; GET_TRIANGLES then returns eighteen words per
 	; survivor (the packed span-setup record).  Culled triangles cost no
 	; result words at all -- at the measured 27% survival rate that is the
 	; bulk of the result traffic gone.
@@ -800,7 +806,7 @@ triangle_count_loop
 	jsr	<make_triangle_shade
 	jsr	<make_triangle_span
 
-	; Survivor record, fourteen packed words -- see SPAN_RECORD_WORDS for
+	; Survivor record, eighteen packed words -- see SPAN_RECORD_WORDS for
 	; the exact layout.  w0 composes by shifting fields in from the top:
 	; slot_mid, slot_top, mid, shade, chunk-local index.  The host unpacks
 	; and validates every field against its own arithmetic.
@@ -913,7 +919,7 @@ triangle_reply
 
 command_get_triangles
 	; Returns the survivor records buffered by the last CMD_BUILD_TRIANGLES
-	; chunk: fourteen packed words each, nothing for culled triangles.
+	; chunk: eighteen packed words each, nothing for culled triangles.
 	move	#ACK_GET_TRIANGLES,x0
 	jsr	<send_word
 	move	y:triangle_out_count,x0
@@ -1714,9 +1720,11 @@ triangle_area_zero
 make_triangle_bbox
 	; Clipped screen-space bounding box of the projected triangle, from the
 	; tri_x/tri_y scalars make_triangle_area already fetched.  Returns A=1
-	; with y:tri_bboxx = x_min<<12|x_max and y:tri_bboxy = y_min<<12|y_max,
-	; or A=0 when the clipped box is empty, i.e. the triangle lies entirely
-	; beyond one screen edge.
+	; with the four clamped scalars y:tri_xmin, y:tri_xmax, y:tri_ymin and
+	; y:tri_ymax set (unpacked, one word each -- nothing is bit-packed here,
+	; since the host never receives the box; see the comment below), or A=0
+	; when the clipped box is empty, i.e. the triangle lies entirely beyond
+	; one screen edge.
 	;
 	; Tcc takes only register operands, so the clamp constants pass through
 	; X1.  min(a,x1) after CMP is TGT (replace a if it is the larger);
@@ -2673,7 +2681,7 @@ chunk_uvs
 	ds	MAX_CHUNK*2
 
 ; One chunk of survivor records, SPAN_RECORD_WORDS each.  Culled triangles
-; occupy nothing.  This is the last X allocation; the layout ends at X:$3CEB,
+; occupy nothing.  This is the last X allocation; the layout ends at X:$3C5E,
 ; inside the host's 15,872-word reservation.
 triangle_out
 	ds	MAX_CHUNK*SPAN_RECORD_WORDS

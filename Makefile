@@ -56,14 +56,24 @@ $(VLINK): ./tools/vlink
 # TREX/model/trex_lod.o3d first -- the count is not a file dependency).
 TREX_LOD_TRIANGLES=1600
 
-./TREX/model/trex_lod.o3d: ./TREX/model/trex.o3d ./TREX/model/trex_facecolors.bin ./TREX/model/trex_cornernormals.bin ./TREX/model/trex_animation.bin ./TREX/model/trex_animation.json ./tools/o3dlod.js
+# One node invocation writes all four files below.  They are listed together
+# as targets of the SAME rule (rather than one real target plus empty-recipe
+# secondaries) because GNU Make expands "targetA targetB: prereqs" into one
+# independent rule per target, each carrying its own copy of the recipe: if
+# any single one of the four goes missing while the others survive, asking
+# Make to rebuild it re-runs the real command instead of silently doing
+# nothing (verified -- an empty-recipe secondary target does not regenerate
+# when only it is missing, which is exactly how this rule used to be broken).
+# The one cost is that if two or more of the four are simultaneously stale,
+# the script may run more than once; it is deterministic and cheap enough
+# that this is wasted work, not wrong output. Do not build this target with
+# `make -j`: concurrent invocations would race on the same output files.
+./TREX/model/trex_lod.o3d ./TREX/model/trex_lod_facecolors.bin ./TREX/model/trex_lod_cornernormals.bin ./TREX/model/trex_lod.inc: ./TREX/model/trex.o3d ./TREX/model/trex_facecolors.bin ./TREX/model/trex_cornernormals.bin ./TREX/model/trex_animation.bin ./TREX/model/trex_animation.json ./tools/o3dlod.js
 	node tools/o3dlod.js ./TREX/model/trex.o3d ./TREX/model/trex_facecolors.bin \
 		./TREX/model/trex_cornernormals.bin \
 		./TREX/model/trex_animation.bin ./TREX/model/trex_animation.json \
-		$(TREX_LOD_TRIANGLES) $@ ./TREX/model/trex_lod_facecolors.bin \
+		$(TREX_LOD_TRIANGLES) ./TREX/model/trex_lod.o3d ./TREX/model/trex_lod_facecolors.bin \
 		./TREX/model/trex_lod_cornernormals.bin ./TREX/model/trex_lod.inc
-
-./TREX/model/trex_lod_facecolors.bin ./TREX/model/trex_lod_cornernormals.bin ./TREX/model/trex_lod.inc: ./TREX/model/trex_lod.o3d
 
 ./TREX/model/trex_lod_facenormals.bin: ./TREX/model/trex_lod.o3d ./tools/o3d2facenormals.js
 	node tools/o3d2facenormals.js ./TREX/model/trex_lod.o3d $@
@@ -142,25 +152,37 @@ TREX_MESH_DEPS = ./TREX/model/trex_lod.o3d ./TREX/model/trex_lod.inc \
 	@[ -s $< ] || { echo "ERROR: $< is empty, refusing to copy"; exit 1; }
 	cp $< $@
 
+# Real recipe commands, not $(shell ...): $(shell ...) is a make FUNCTION
+# and is evaluated while make reads/expands the makefile, not when the
+# recipe actually runs -- so the old version of this target deleted files
+# even under `make -n` (dry run), which is supposed to only print what would
+# happen (verified: it emptied files under -n). Plain recipe lines below are
+# ordinary shell commands and respect -n like every other rule in this file.
+#
+# TREX/dsp/trex_dsp.lod is deliberately NOT removed here. It is checked into
+# git and rebuilding it needs DOSBox plus the DOS-era assembler in
+# tools/asm56k, which most checkouts will not have (see the rule for it
+# above); deleting it here would strand anyone without DOSBox. Everything
+# else below is cheaply regenerable with only node/python3, or is copied
+# from that file by the build.
 clean:
-	$(shell [ -f ./TREX/model/trex_facenormals.bin ] && rm ./TREX/model/trex_facenormals.bin)
-	$(shell [ -f ./TREX/model/trex_lod.o3d ] && rm ./TREX/model/trex_lod.o3d)
-	$(shell [ -f ./TREX/model/trex_lod.inc ] && rm ./TREX/model/trex_lod.inc)
-	$(shell [ -f ./TREX/model/trex_lod_facenormals.bin ] && rm ./TREX/model/trex_lod_facenormals.bin)
-	$(shell [ -f ./TREX/model/trex_lod_facecolors.bin ] && rm ./TREX/model/trex_lod_facecolors.bin)
-	$(shell [ -f ./TREX/model/trex_cornernormals.bin ] && rm ./TREX/model/trex_cornernormals.bin)
-	$(shell [ -f ./TREX/model/trex_lod_cornernormals.bin ] && rm ./TREX/model/trex_lod_cornernormals.bin)
-	$(shell [ -f ./TREX/model/trex_opaque.bin ] && rm ./TREX/model/trex_opaque.bin)
-	$(shell [ -f ./TREX/model/trex_lod_opaque.bin ] && rm ./TREX/model/trex_lod_opaque.bin)
-	$(shell [ -f ./TREX/m68030/trex_m68030.tos ] && rm ./TREX/m68030/trex_m68030.tos)
-	$(shell [ -f ./TREX/m68030/build/trex_m68030.o ] && rm ./TREX/m68030/build/trex_m68030.o)
-	$(shell [ -f ./TREX/m68030/build/trex_m68030.lst ] && rm ./TREX/m68030/build/trex_m68030.lst)
-	$(shell [ -f ./TREX/m68030/trex_run.tos ] && rm ./TREX/m68030/trex_run.tos)
-	$(shell [ -f ./TREX/m68030/build/trex_run.o ] && rm ./TREX/m68030/build/trex_run.o)
-	$(shell [ -f ./TREX/m68030/build/trex_run.lst ] && rm ./TREX/m68030/build/trex_run.lst)
-	$(shell [ -f ./TREX/m68030/trex_full.tos ] && rm ./TREX/m68030/trex_full.tos)
-	$(shell [ -f ./TREX/m68030/build/trex_full.o ] && rm ./TREX/m68030/build/trex_full.o)
-	$(shell [ -f ./TREX/m68030/build/trex_full.lst ] && rm ./TREX/m68030/build/trex_full.lst)
-	$(shell [ -f ./TREX/dsp/trex_dsp.lod ] && rm ./TREX/dsp/trex_dsp.lod)
-	$(shell [ -f ./TREX/m68030/trex_dsp.lod ] && rm ./TREX/m68030/trex_dsp.lod)
-	$(shell [ -d ./TREX/dsp/build ] && rm -f ./TREX/dsp/build/*)
+	rm -f ./TREX/model/trex_facenormals.bin
+	rm -f ./TREX/model/trex_lod.o3d
+	rm -f ./TREX/model/trex_lod.inc
+	rm -f ./TREX/model/trex_lod_facenormals.bin
+	rm -f ./TREX/model/trex_lod_facecolors.bin
+	rm -f ./TREX/model/trex_cornernormals.bin
+	rm -f ./TREX/model/trex_lod_cornernormals.bin
+	rm -f ./TREX/model/trex_opaque.bin
+	rm -f ./TREX/model/trex_lod_opaque.bin
+	rm -f ./TREX/m68030/trex_m68030.tos
+	rm -f ./TREX/m68030/build/trex_m68030.o
+	rm -f ./TREX/m68030/build/trex_m68030.lst
+	rm -f ./TREX/m68030/trex_run.tos
+	rm -f ./TREX/m68030/build/trex_run.o
+	rm -f ./TREX/m68030/build/trex_run.lst
+	rm -f ./TREX/m68030/trex_full.tos
+	rm -f ./TREX/m68030/build/trex_full.o
+	rm -f ./TREX/m68030/build/trex_full.lst
+	rm -f ./TREX/m68030/trex_dsp.lod
+	rm -f ./TREX/dsp/build/*
