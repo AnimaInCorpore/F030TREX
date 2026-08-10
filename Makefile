@@ -2,7 +2,7 @@ DOSBOX=dosbox
 VASM=./tools/vasm/vasmm68k_mot
 VLINK=./tools/vlink/vlink
 
-.PHONY: all clean trex_m68030 trex_m68030_run trex_m68030_full trex_dsp create_dirs
+.PHONY: all clean trex_m68030 trex_m68030_run trex_m68030_full trex_m68030_fullm trex_m68030_prepass trex_m68030_prepass_run trex_dsp create_dirs
 
 all: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_m68030.tos ./TREX/m68030/trex_run.tos ./TREX/m68030/trex_full.tos ./TREX/m68030/trex_dsp.lod
 
@@ -11,6 +11,18 @@ trex_m68030: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_m68030.tos ./TREX/m
 trex_m68030_run: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_run.tos ./TREX/m68030/trex_dsp.lod
 
 trex_m68030_full: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_full.tos ./TREX/m68030/trex_dsp.lod
+
+trex_m68030_fullm: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_fullm.tos ./TREX/m68030/trex_dsp.lod
+
+# Full-detail DSP occlusion-culling campaign binary.  Keep the complete
+# 2,724-triangle mesh explicit here: the stock DSP P/Y overlay is the binding
+# constraint this target validates, not the optional 1,600-triangle LOD.
+trex_m68030_prepass: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_prepass.tos ./TREX/m68030/trex_dsp.lod
+
+# Full-detail DSP occlusion-culling viewing binary.  TREX_RUN keeps the same
+# PREPASS/FULL_MESH code path and arm, but suppresses diagnostic GEMDOS writes
+# so the Hatari disk indicator is not hit once per frame.
+trex_m68030_prepass_run: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_prepass_run.tos ./TREX/m68030/trex_dsp.lod
 
 trex_dsp: create_dirs ./TREX/dsp/trex_dsp.lod
 
@@ -126,6 +138,29 @@ TREX_MESH_DEPS = ./TREX/model/trex_lod.o3d ./TREX/model/trex_lod.inc \
 ./TREX/m68030/trex_full.tos: ./TREX/m68030/build/trex_full.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
+# Full mesh WITHOUT -DTREX_RUN, i.e. with the per-frame render_stats.res flush
+# still enabled.  trex_full.tos cannot be measured headlessly -- TREX_RUN zeroes
+# stats_flush_enabled, so a bounded run writes nothing until a keypress that
+# never comes -- and section 8.2's 3-FPS gate is defined on this mesh, so the
+# figure it is judged by needs a target of its own.
+./TREX/m68030/build/trex_fullm.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) $< -quiet -Felf -m68030 -DTREX_FULL_MESH -o $@ -L ./TREX/m68030/build/trex_fullm.lst
+
+./TREX/m68030/trex_fullm.tos: ./TREX/m68030/build/trex_fullm.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
+./TREX/m68030/build/trex_prepass.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) $< -quiet -Felf -m68030 -DTREX_PREPASS -DTREX_FULL_MESH -o $@ -L ./TREX/m68030/build/trex_prepass.lst
+
+./TREX/m68030/trex_prepass.tos: ./TREX/m68030/build/trex_prepass.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
+./TREX/m68030/build/trex_prepass_run.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) $< -quiet -Felf -m68030 -DTREX_PREPASS -DTREX_FULL_MESH -DTREX_RUN -o $@ -L ./TREX/m68030/build/trex_prepass_run.lst
+
+./TREX/m68030/trex_prepass_run.tos: ./TREX/m68030/build/trex_prepass_run.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
 # The DSP program is assembled by DOS tools under DOSBox.  trex_dsp.lod is
 # checked in so the M68030 side builds without that toolchain: when DOSBOX is
 # not available this rule keeps the committed file instead of failing, which
@@ -184,5 +219,14 @@ clean:
 	rm -f ./TREX/m68030/trex_full.tos
 	rm -f ./TREX/m68030/build/trex_full.o
 	rm -f ./TREX/m68030/build/trex_full.lst
+	rm -f ./TREX/m68030/trex_fullm.tos
+	rm -f ./TREX/m68030/build/trex_fullm.o
+	rm -f ./TREX/m68030/build/trex_fullm.lst
+	rm -f ./TREX/m68030/trex_prepass.tos
+	rm -f ./TREX/m68030/build/trex_prepass.o
+	rm -f ./TREX/m68030/build/trex_prepass.lst
+	rm -f ./TREX/m68030/trex_prepass_run.tos
+	rm -f ./TREX/m68030/build/trex_prepass_run.o
+	rm -f ./TREX/m68030/build/trex_prepass_run.lst
 	rm -f ./TREX/m68030/trex_dsp.lod
 	rm -f ./TREX/dsp/build/*

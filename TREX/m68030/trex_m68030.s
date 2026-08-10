@@ -387,6 +387,12 @@ DSP_HOST_ISR_TXDE	= 1
 DSP_TRI_INDEX_BITS	= 12
 DSP_TRI_INDEX_MASK	= $00000fff
 
+; Bit 23 of the DSP's packed word A -- the spare top bit of its twelve-bit v1
+; field, free because vertex indices stay below 1,376.  Carries the occluder
+; qualification to the DSP occlusion stage; the DSP masks every vertex field
+; to eleven bits (TRI_VERTEX_MASK there) so the flag never reaches a lookup.
+DSP_TRI_OCCLUDER_BIT	= $00800000
+
 
 ; The survivor record arrives PACKED, eighteen words (layout mirrored from
 ; SPAN_RECORD_WORDS in trex_dsp.asm):
@@ -477,9 +483,11 @@ OCCL_RECORD_BYTES	= 48
 
 	ifd	TREX_PREPASS
 ; Occlusion prepass measurement build (-DTREX_PREPASS, target trex_prepass.tos,
-; GEMDOS name TREX_PRE.TOS).  Stage 1 only: the DSP builds a near-to-far
-; ordering of the survivors during the FINISH window and culls NOTHING, so
-; every arm of this binary must render pixel-identically (gate G2).
+; GEMDOS name TREX_PRE.TOS).  The DSP classifies the complete geometry,
+; establishes an exact near-to-far bucket order, then runs the conservative
+; 4x4-cell coverage test and writes the global BUILD kill bitmap.  The
+; correctness gate is byte-identical framebuffer output plus a lower packet
+; count; an order overflow leaves the bitmap clear and the frame unculled.
 ;
 ; Command 10 is the one dispatcher leaf that is free on the DSP side -- 9 and
 ; 11 are silent aliases of 1 and 3, so this number is not a choice.  It shares
@@ -489,28 +497,25 @@ OCCL_RECORD_BYTES	= 48
 ; Wire format, always exactly two words each way:
 ;   host -> DSP : 10, mode
 ;   DSP  -> host: DSP_ACK_PREPASS, N_s        (N_s = $ffffff on overflow)
-; Mode 3 appends N_s further words, one raw entry E = (index << 12) | bucket
-; per survivor, in the DSP's own near-to-far order.
+; Mode 3 is accepted by the DSP as a second run-now selector for legacy
+; measurement binaries, but returns only the fixed two-word acknowledgement.
 ;
-; Modes: 0 = disarm, 1 = arm every following FINISH (sticky), 2 = compute now,
-; 3 = report the last result.
+; Modes: 0 = disarm, 1 = arm every following FINISH (sticky), 2/3 = compute
+; now.  Every mode returns the same fixed two-word acknowledgement.
 DSP_CMD_PREPASS		= 10
 DSP_ACK_PREPASS		= $0070000f
 PREPASS_MODE_DISARM	= 0
 PREPASS_MODE_ARM	= 1
 PREPASS_MODE_RUN	= 2
-PREPASS_MODE_DUMP	= 3
-; N_s sentinel the DSP reports when the classification exceeded its 744-entry
+; N_s sentinel the DSP reports when the classification exceeded its 723-entry
 ; capacity.  The prepass then leaves its kill bitmap zeroed, so the frame is
 ; bit-identical to one without a prepass -- it is counted, not repaired.
 PREPASS_OVERFLOW_MARK	= $00ffffff
 ; Entry packing, mirrored from the DSP side.  Bucket is 11 bits inside a
 ; 12-bit field; the mask is the full field so a stray bit 11 is caught rather
 ; than masked away.
-PREPASS_ENTRY_BUCKET_MASK	= $00000fff
-PREPASS_ENTRY_INDEX_SHIFT	= 12
-; Magic plus nine counters, written next to render_stats.res.
-PREPASS_STATS_LONGS	= 11
+; Magic plus seven counters, written next to render_stats.res.
+PREPASS_STATS_LONGS	= 9
 	endc
 
 O3D_HEADER_BYTES	= 24
@@ -716,21 +721,26 @@ trex_dummy_frame
 	moveq	#0,d0
 .z_spin_ready
 	move.l	d0,y_spin_index
+	; The extracted choreography ends at frame 273.  The post-source hold
+	; deliberately keeps the model moving, but its right-edge poses can make
+	; the conservative per-triangle pending-coverage sweep exceed the stock
+	; DSP frame budget.  Keep occlusion armed through the authored sequence,
+	; then disarm it once for the synthetic hold; BUILD remains full geometry.
+	ifd	TREX_PREPASS
+	tst.l	gait_hold_index
+	beq	.prepass_hold_ready
+	tst.l	prepass_hold_disarmed
+	bne	.prepass_hold_ready
+	moveq	#PREPASS_MODE_DISARM,d0
+	bsr	prepass_send_mode
+	move.l	#1,prepass_hold_disarmed
+.prepass_hold_ready
+	endc
 .animation_advance_ready
 	TimeMark	stat_mark_setframe
 	bsr	dsp_set_frame
 	TimeAdd	stat_mark_setframe,stat_t_setframe
 	bsr	gpu_submit_ot
-
-	; Cross-check the DSP ordering captured earlier this slot against the
-	; OT that was just built and walked.  Same window as the occlusion dump
-	; below and for the same reason: the node lists still stand.  The DSP
-	; itself is NOT talked to here -- it is busy with the FINISH sent above
-	; and would not read the host port -- the dump was already fetched at
-	; the prepass call site in dsp_packets_begin.
-	ifd	TREX_PREPASS
-	bsr	prepass_verify_frame
-	endc
 
 	; Occlusion dump, before anything else touches the frame's state: the
 	; packet buffer, the OT and the owner-id bitmap of the frame just drawn
@@ -788,7 +798,12 @@ trex_dummy_frame
 trex_shutdown
 	movem.l	d0-d7/a0-a6,-(sp)
 
+	ifd	TREX_RUN
+	; Viewing builds intentionally perform no GEMDOS writes, including the
+	; final diagnostic flush on a clean keypress exit.
+	else
 	bsr	trex_write_render_stats
+	endc
 	bsr	gpu_close
 	bsr	dsp_close
 	bsr	lib_psyq_shutdown
@@ -880,8 +895,6 @@ trex_write_render_stats
 	move.l	prepass_surv_last,(a0)+
 	move.l	prepass_surv_max,(a0)+
 	move.l	prepass_overflow_count,(a0)+
-	move.l	prepass_verify_fail_count,(a0)+
-	move.l	prepass_verify_frames,(a0)+
 	move.l	prepass_arm,(a0)+
 	; Protocol failures MUST be visible.  A wrong ack or a lost word makes
 	; prepass_send_mode return early, so the timed bracket then contains
@@ -1655,7 +1668,9 @@ dsp_upload_triangle_indices
 	move.l	#TREX_PRIMITIVES,(a1)+
 	lea	dsp_triangle_tx_buffer+8,a0
 	lea	trex_corner_normal_data,a2
+	lea	trex_opaque_triangle_data,a3
 	moveq	#DSP_TRI_INDEX_BITS,d4
+	moveq	#0,d5				; source triangle index
 	move.l	#TREX_PRIMITIVES-1,d0
 .pack_triangle_indices
 	move.l	(a0)+,d1			; i0
@@ -1666,7 +1681,18 @@ dsp_upload_triangle_indices
 	andi.l	#DSP_TRI_INDEX_MASK,d2
 	lsl.l	d4,d2				; LSL.L takes 1..8 as an immediate only
 	or.l	d2,d1
-	move.l	d1,(a1)+			; v0 | v1<<12
+	; Occluder qualification for the DSP occlusion stage, in the v1 field's
+	; spare top bit (bit 23).  Same sidecar byte and same meaning as
+	; OPAQUE_PACKET_BIT in the packet builder: the triangle's conservative UV
+	; footprint touches no transparent texel, so its coverage may seal.  This
+	; is deliberately independent of opaque_path_enabled -- that flag is the
+	; rasterizer A/B gate, while sealing soundness is not optional.
+	tst.b	(a3,d5.l)
+	beq	.pack_no_occluder
+	ori.l	#DSP_TRI_OCCLUDER_BIT,d1
+.pack_no_occluder
+	addq.l	#1,d5
+	move.l	d1,(a1)+			; v0 | v1<<12 | occluder<<23
 	andi.l	#DSP_TRI_INDEX_MASK,d3
 	moveq	#0,d1
 	move.w	(a2)+,d1			; n0, big-endian sidecar word
@@ -2211,10 +2237,6 @@ build_gpu_shadow_packets
 	ifd	TREX_OCCL
 	bsr	occl_note_source
 	endc
-	ifd	TREX_PREPASS
-	bsr	prepass_note_source
-	endc
-
 	; TPage from the texture metadata.  For textured packets word 1 carries
 	; the page-table token prepared once by dsp_build_triangle_stream.  The
 	; face-colour table is touched only by the 136 genuinely flat polygons,
@@ -4578,9 +4600,10 @@ occl_write_frame_dump
 ;      subtracted out -- gate G10 wants the arm-3 baseline under 0.05 ms per
 ;      frame.
 ;
-; prepass_verify_enabled is orthogonal and belongs to the correctness gate G7,
-; not to any timing run: it fetches the DSP's full ordering (mode 3) at the
-; call site and compares it against the host's own OT after it was built.
+; The correctness gate is the existing framebuffer and packet-count pair:
+; the DSP consumes the same full geometry and the BUILD-side kill bitmap is
+; only enabled when the rendered bytes remain identical.  The former mode-3
+; ordering dump was removed to keep the full-mesh DSP producer inside stock P.
 ; -----------------------------------------------------------------------------
 
 ; Send one prepass command and collect its two-word ack.
@@ -4649,7 +4672,7 @@ prepass_frame_call
 	cmpi.l	#2,d0
 	beq	.prepass_call_run
 	cmpi.l	#3,d0
-	bne	.prepass_call_verify
+	bne	.prepass_call_done
 	; Arm 3: the null command.  Same site, same bracket, same four words on
 	; the wire, no DSP arithmetic behind them.
 	moveq	#PREPASS_MODE_DISARM,d0
@@ -4661,144 +4684,10 @@ prepass_frame_call
 	bsr	prepass_send_mode
 	TimeAdd	stat_mark_prepass,stat_t_prepass
 	addq.l	#1,prepass_run_count
-.prepass_call_verify
-	; Deliberately OUTSIDE the bracket, and no timing is ever quoted from a
-	; run with this on: the dump is N_s extra words of pure PIO.  It has to
-	; happen here rather than next to the comparison, because by then the
-	; DSP is mid-FINISH and does not read its host port -- a two-word
-	; command would spin forever on TXDE.
-	tst.l	prepass_verify_enabled
-	beq	.prepass_call_done
-	bsr	prepass_fetch_dump
 .prepass_call_done
 	movem.l	(sp)+,d0-d7/a0-a6
 	rts
 
-; Mode 3: ack plus N_s raw entries into prepass_dump_buffer.  Two-stage read,
-; exactly like the BUILD ack: the count has to arrive before the size of the
-; second transfer is known, and a size disagreement wedges the port.
-prepass_fetch_dump
-	clr.l	prepass_dump_valid
-	moveq	#PREPASS_MODE_DUMP,d0
-	bsr	prepass_send_mode
-	tst.l	d0
-	beq	.prepass_fetch_done
-	move.l	prepass_surv_last,d0
-	cmpi.l	#PREPASS_OVERFLOW_MARK,d0
-	beq	.prepass_fetch_done		; overflow: no entries follow
-	cmpi.l	#TREX_PRIMITIVES,d0
-	bhi	.prepass_fetch_done		; impossible count: do not read it
-	move.l	d0,prepass_dump_count
-	tst.l	d0
-	beq	.prepass_fetch_empty
-	move.l	d0,d1
-	moveq	#0,d0				; nothing to send
-	lea	prepass_dump_buffer,a1
-	bsr	dsp_block_handshake
-.prepass_fetch_empty
-	move.l	#1,prepass_dump_valid
-.prepass_fetch_done
-	rts
-
-; Remember which source triangle a submit slot came from.  In: D6 = global
-; source triangle index, called straight after dsp_packet_count_shadow was
-; incremented, so the slot is that count minus one.  The OT node for slot i
-; is gpu_ot_node_buffer + i*GPU_OT_NODE_BYTES, which is how the walk below
-; recovers the slot from a node pointer without a division.
-prepass_note_source
-	movem.l	d0-d7/a0-a6,-(sp)
-	move.l	dsp_packet_count_shadow,d0
-	subq.l	#1,d0
-	lsl.l	#2,d0
-	lea	prepass_source_index,a0
-	move.l	d6,(a0,d0.l)
-	movem.l	(sp)+,d0-d7/a0-a6
-	rts
-
-; Gate G7: compare the DSP's ordering against the host's own OT.
-;
-; The host walks its OT from bucket 0 UPWARDS here -- near to far, the reverse
-; of gpu_rasterize_ot's draw walk -- because that is the direction the DSP's
-; ascending-bucket list is in.  Three probes:
-;
-;   (a) N_s equals dsp_packet_count_shadow.  The prepass classifies with the
-;       same make_triangle_area/make_triangle_bbox the BUILD path uses, so the
-;       survivor SETS have to be identical, not merely similar.
-;   (b) entry i's bucket field equals the bucket of the host's i-th walked
-;       node.  Any disagreement means the two orderings are incompatible.
-;   (c) per bucket run, the sum and the XOR of the source triangle indices
-;       agree.  That is an order-free set probe: it tolerates the one
-;       difference that is allowed -- inside a bucket the DSP list is
-;       ascending in triangle index while the host's node list is LIFO -- and
-;       still catches any swap across a bucket boundary.
-;
-; The per-run COUNTS agree by construction once (a) and (b) hold: the walk
-; consumes exactly one entry per node, so a DSP run that is one entry too long
-; makes the next bucket's first comparison in (b) fail, and one that is too
-; short shifts every later entry and fails there.
-;
-; Preserves every register.
-prepass_verify_frame
-	movem.l	d0-d7/a0-a6,-(sp)
-	tst.l	prepass_verify_enabled
-	beq	.prepass_verify_done
-	tst.l	prepass_dump_valid
-	beq	.prepass_verify_done
-	clr.l	prepass_dump_valid
-	addq.l	#1,prepass_verify_frames
-
-	move.l	prepass_dump_count,d0
-	cmp.l	dsp_packet_count_shadow,d0
-	bne	.prepass_verify_fail
-
-	lea	ordering_table,a0
-	lea	prepass_dump_buffer,a2
-	moveq	#0,d6				; bucket index
-.prepass_verify_bucket
-	move.l	(a0)+,d2
-	beq	.prepass_verify_next
-	movea.l	d2,a1
-	moveq	#0,d0				; DSP index sum
-	moveq	#0,d1				; DSP index XOR
-	moveq	#0,d4				; host index sum
-	moveq	#0,d5				; host index XOR
-.prepass_verify_node
-	move.l	(a2)+,d7			; E = index<<12 | bucket
-	move.l	d7,d2
-	andi.l	#PREPASS_ENTRY_BUCKET_MASK,d2
-	cmp.l	d6,d2
-	bne	.prepass_verify_fail
-	lsr.l	#8,d7
-	lsr.l	#(PREPASS_ENTRY_INDEX_SHIFT-8),d7
-	add.l	d7,d0
-	eor.l	d7,d1
-	; Slot of this node, hence of its packet, hence its source triangle.
-	move.l	a1,d2
-	sub.l	#gpu_ot_node_buffer,d2
-	lsr.l	#3,d2				; / GPU_OT_NODE_BYTES
-	lsl.l	#2,d2
-	lea	prepass_source_index,a3
-	move.l	(a3,d2.l),d2
-	add.l	d2,d4
-	eor.l	d2,d5
-	move.l	4(a1),d2			; next node
-	movea.l	d2,a1
-	tst.l	d2
-	bne	.prepass_verify_node
-	cmp.l	d0,d4
-	bne	.prepass_verify_fail
-	cmp.l	d1,d5
-	bne	.prepass_verify_fail
-.prepass_verify_next
-	addq.l	#1,d6
-	cmpi.l	#OT_LENGTH,d6
-	bcs	.prepass_verify_bucket
-	bra	.prepass_verify_done
-.prepass_verify_fail
-	addq.l	#1,prepass_verify_fail_count
-.prepass_verify_done
-	movem.l	(sp)+,d0-d7/a0-a6
-	rts
 	endc
 
 ; -----------------------------------------------------------------------------
@@ -4852,12 +4741,8 @@ gouraud_enabled
 ;   2 = freestanding, timed per frame   3 = null command through the same
 ;                                            bracket (protocol-cost baseline)
 prepass_arm
-	dc.l	0
-
-; 1 = fetch the DSP ordering every frame and cross-check it against the host
-; OT (gate G7).  Costs N_s extra words of host-port PIO per frame, so a run
-; with this set is a correctness run and no timing may be quoted from it.
-prepass_verify_enabled
+	dc.l	1
+prepass_hold_disarmed
 	dc.l	0
 
 ; Deliberately NOT in stat_block: trex_dummy_frame clears that block, and it
@@ -5412,11 +5297,11 @@ lighting_enabled
 ; development.  It is a GEMDOS create/write/close per frame, which is free
 ; under Hatari's host-side emulation but a real disk access on hardware, so a
 ; release build sets this to 0 and keeps only the write in trex_shutdown.
-; TREX_RUN (vasm -DTREX_RUN, target trex_run.tos) is the viewing build the
-; documentation always promised: both capture flags 0, so the frame loop
-; performs no GEMDOS traffic and only trex_shutdown writes one final stats
-; file on a clean keypress exit.  Both variants assemble the same dc.l, so
-; the binaries stay layout-identical except for these two data longwords.
+; TREX_RUN (vasm -DTREX_RUN, targets trex_run.tos and
+; trex_prepass_run.tos) is the viewing build: both capture flags 0, so the
+; frame loop performs no GEMDOS traffic, and trex_shutdown also skips the
+; final diagnostic flush.  Both variants assemble the same dc.l, so the
+; binaries stay layout-identical except for these two data longwords.
 stats_flush_enabled
 	ifd	TREX_RUN
 	dc.l	0
@@ -5674,14 +5559,6 @@ prepass_surv_last
 prepass_surv_max
 	ds.l	1
 prepass_overflow_count
-	ds.l	1
-prepass_verify_frames
-	ds.l	1
-prepass_verify_fail_count
-	ds.l	1
-prepass_dump_valid
-	ds.l	1
-prepass_dump_count
 	ds.l	1
 	endc
 stat_block_end
@@ -6250,16 +6127,6 @@ occl_frame_dropped_mark
 ; (see the layout note above dsp_triangle_load_tx_buffer).  About 13 KB, and
 ; only the prepass binary carries it.
 ;
-; Global source triangle index per submit slot, written while the packets are
-; built and read back during the verification walk.
-prepass_source_index
-	ds.l	TREX_PRIMITIVES
-
-; One raw entry per survivor from the mode-3 dump.  Sized for the worst case
-; where nothing is culled, so a protocol error can never run off the end.
-prepass_dump_buffer
-	ds.l	TREX_PRIMITIVES
-
 prepass_stats_buffer
 	ds.l	PREPASS_STATS_LONGS
 	endc
