@@ -60,3 +60,24 @@ uses the 2,724-triangle model, DSP occlusion, and textured Gouraud shading;
 variants are not part of the release surface. Performance figures in
 OPTIMIZATION.md are identified as Hatari/emulator results; physical Falcon030
 timing remains unmeasured.
+
+## Feature comparison with the PS1 reference
+
+The port preserves the source model and animation data, but its execution
+pipeline is deliberately Falcon-specific. This table describes the current
+release rather than claiming pixel-for-pixel equivalence with the PS1 demo.
+
+| Feature | PS1 reference | Falcon port (`TREX.TOS`) |
+| --- | --- | --- |
+| Mesh | Original TMD model | Same full mesh: 1,376 vertices and 2,724 triangles |
+| Animation | Authored morph-target choreography | Extracted PS1 morph data rebuilt on the DSP: 46 full gait poses plus sparse targets 5–8; the port adds a post-source hold after frame 273 |
+| Transform and culling | Original console geometry pipeline | DSP56001 handles transform, perspective projection, near-plane, degenerate-area, back-face and screen culling |
+| Occlusion | Reference-scene behavior | Falcon addition: an armed DSP screen-space prepass builds a conservative triangle kill bitmap during the authored choreography |
+| Lighting | Original PS1 lighting | Textured Gouraud shading with three coloured lights and reddish ambient light; documented as not yet an exact PS1 lighting reproduction |
+| Textures | PS1 TIM pages and CLUT metadata | Extracted PS1 texture pages and CLUTs, sampled by the M68030 software rasterizer |
+| Rasterization | PS1 hardware GPU path | M68030 software rasterizer; the DSP supplies projected vertices and span setup, and the host links the Ordering Table |
+| Display | Original PS1 display mode | 240×224 render surface inside a 256×224 Falcon Videl mode |
+
+The release therefore matches the PS1 source data most closely in geometry,
+animation and texture assets, while transform, occlusion, lighting and
+rasterization are the Falcon implementation.
