@@ -25,9 +25,17 @@ The full-mesh occlusion-culling release package is built with:
 make trex_release
 ```
 
-This produces `TREX/m68030/TREXFULL.TOS`: the full 2,724-triangle model with
-armed DSP occlusion, textured Gouraud lighting, and no per-frame diagnostic
-file writes.  Its matching `TREXFULL.LOD` is copied beside it for deployment.
+This produces `TREX/m68030/TREX.TOS`: the full 2,724-triangle model with armed
+DSP occlusion, textured Gouraud lighting, and no per-frame diagnostic file
+writes.  Its matching `TREX.LOD` is copied beside it for deployment.
+
+Run the release on a Falcon or under Hatari from the directory containing the
+two files. For TOS 4.02 under Hatari:
+
+```sh
+hatari --machine falcon --tos /path/to/tos402.rom --dsp emu --memsize 4 \
+  TREX.TOS
+```
 
 ## Required reading
 
@@ -46,7 +54,9 @@ commands you can run here.
 ## Target and current state
 
 Atari Falcon030, 16 MHz, DSP56001. Render target 240x224 inside a 256x224
-Videl mode. The current build reaches 3.13 FPS on the shipping
-1,600-triangle LOD mesh and 2.05 FPS on the full 2,724-triangle mesh --
-Hatari emulator timings, not a measurement on real hardware. See
-OPTIMIZATION.md for the full measurement history and open roadmap.
+Videl mode. The supported release is a single full-mesh package: `TREX.TOS`
+uses the 2,724-triangle model, DSP occlusion, and textured Gouraud shading;
+`TREX.LOD` is the matching DSP program. The older flat-shaded and reduced-mesh
+variants are not part of the release surface. Performance figures in
+OPTIMIZATION.md are identified as Hatari/emulator results; physical Falcon030
+timing remains unmeasured.

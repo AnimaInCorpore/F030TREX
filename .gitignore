@@ -7,7 +7,7 @@ tools/vlink/
 *.dbg
 a.out
 TREX/m68030/trex_dsp.lod
-TREX/m68030/TREXFULL.LOD
+TREX/m68030/TREX.LOD
 __pycache__/
 *.pyc
 .DS_Store

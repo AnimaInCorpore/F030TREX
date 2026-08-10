@@ -4708,7 +4708,7 @@ banner_text
 ; copies the runtime LOD next to this executable.
 trex_dsp_lod_path
 	ifd TREX_RELEASE
-	dc.b	'TREXFULL.LOD',0
+	dc.b	'TREX.LOD',0
 	else
 	dc.b	'trex_dsp.lod',0
 	endc

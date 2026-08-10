@@ -77,8 +77,8 @@ an assembler error -- recompute it from the assembled `.lod` rather than
 trusting this figure, with the check command in the end-of-file comment of
 `trex_dsp.asm`.
 
-The `TREXFULL.TOS` release keeps the full-mesh DSP occlusion path while
-disabling the host-side diagnostic flushes. It reads `TREXFULL.LOD` once during
+The `TREX.TOS` release keeps the full-mesh DSP occlusion path while
+disabling the host-side diagnostic flushes. It reads `TREX.LOD` once during
 startup and does not write `render_stats.res`, `prep_sta.res` or `fb.res`
 during playback or shutdown.
 
@@ -192,9 +192,9 @@ make DOSBOX=/Applications/dosbox.app/Contents/MacOS/DOSBox trex_dsp
 make trex_release
 ```
 
-`trex_release` emits `TREXFULL.TOS`, the full-mesh, armed-occlusion viewing
+`trex_release` emits `TREX.TOS`, the full-mesh, armed-occlusion viewing
 package with textured Gouraud shading and no per-frame diagnostic writes.  The
-frontend copies the same DSP program to `TREXFULL.LOD` beside it, so the
+frontend copies the same DSP program to `TREX.LOD` beside it, so the
 package can be moved to a Falcon directory without renaming a shared runtime
 file.  No DSP protocol or DSP memory-layout variant is required.
 
