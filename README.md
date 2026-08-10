@@ -11,25 +11,23 @@ Requirements: `node`, `python3`, a C compiler/`make` for vasm and vlink
 (built from the bundled tarballs), and optionally DOSBox to rebuild the DSP
 program.
 
-```sh
-make trex_m68030
-```
-
-Output: `TREX/m68030/trex_m68030.tos`. Two more variants from the same
-source:
-
-```sh
-make trex_m68030_run    # no per-frame GEMDOS writes (for viewing)
-make trex_m68030_full   # the full 2,724-triangle mesh instead of the 1,600-triangle LOD
-```
-
-`TREX/dsp/trex_dsp.lod` is checked in prebuilt; `make trex_m68030` needs no
+`TREX/dsp/trex_dsp.lod` is checked in prebuilt; `make trex_release` needs no
 DOSBox for it. Rebuilding the DSP program after a change to `trex_dsp.asm`
 does:
 
 ```sh
 make DOSBOX=/Applications/dosbox.app/Contents/MacOS/DOSBox trex_dsp
 ```
+
+The full-mesh occlusion-culling release package is built with:
+
+```sh
+make trex_release
+```
+
+This produces `TREX/m68030/TREXFULL.TOS`: the full 2,724-triangle model with
+armed DSP occlusion, textured Gouraud lighting, and no per-frame diagnostic
+file writes.  Its matching `TREXFULL.LOD` is copied beside it for deployment.
 
 ## Required reading
 

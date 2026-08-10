@@ -937,11 +937,23 @@ binary. No physical-Falcon run has been completed, so DSP-window occupancy,
 stock-hardware timing and FPS remain unmeasured. The framebuffer identity is a
 Hatari correctness result, not a physical-machine performance claim.
 
-For visual playback without per-frame host-disk traffic, build
-`trex_m68030_prepass_run`. It retains `TREX_PREPASS`, `TREX_FULL_MESH` and the
-armed culling path, but also defines `TREX_RUN`: framebuffer/stat diagnostics
-and the final diagnostic flush are disabled. The DSP `.lod` is still read once
-at startup, so the mounted GEMDOS volume remains necessary.
+For visual playback without per-frame host-disk traffic, build the release
+target `trex_release`. It emits `TREXFULL.TOS`, retaining `TREX_PREPASS`,
+`TREX_FULL_MESH` and the armed culling path while defining `TREX_RUN`:
+framebuffer/stat diagnostics and the final diagnostic flush are disabled. The
+matching `TREXFULL.LOD` is still read once at startup, so the mounted GEMDOS
+volume remains necessary.
+
+### 2.3f Full-mesh release package — implemented
+
+The release viewing package is `TREXFULL.TOS`, built with
+`TREX_FULL_MESH`, `TREX_PREPASS` and `TREX_RUN`. It is the single supported
+full-mesh package: textured Gouraud shading, armed DSP occlusion through the
+authored choreography, and no per-frame diagnostic file writes. Build it with
+`make trex_release`; the matching `TREXFULL.LOD` copy is placed beside the
+TOS so the release directory is self-contained. The DSP protocol, resident
+memory layout and `.LOD` contents are the validated production path described
+above; no separate presentation-mode variants are part of the release.
 
 ### 2.4 The occlusion binary is not a timing source
 

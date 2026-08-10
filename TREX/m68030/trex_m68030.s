@@ -4707,7 +4707,11 @@ banner_text
 ; Dsp_LoadProg reads the LOD from the current GEMDOS directory.  The Makefile
 ; copies the runtime LOD next to this executable.
 trex_dsp_lod_path
+	ifd TREX_RELEASE
+	dc.b	'TREXFULL.LOD',0
+	else
 	dc.b	'trex_dsp.lod',0
+	endc
 
 render_stats_path
 	dc.b	'render_stats.res',0
@@ -4729,7 +4733,7 @@ span_validate_enabled
 ; 1 = the row loop selects a CLUT bank per span from the interpolated
 ; corner-level chain (Gouraud, smooth along Y, flat along each span);
 ; 0 = the packet's single mean-level bank, the pre-Gouraud look.  A data
-; flag so both variants ship in one binary for honest A/B measurement.
+; flag so both variants remain byte-patchable for A/B measurement.
 gouraud_enabled
 	dc.l	1
 

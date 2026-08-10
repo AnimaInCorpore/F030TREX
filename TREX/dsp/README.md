@@ -77,10 +77,10 @@ an assembler error -- recompute it from the assembled `.lod` rather than
 trusting this figure, with the check command in the end-of-file comment of
 `trex_dsp.asm`.
 
-The `trex_m68030_prepass_run` viewing target keeps the same full-mesh DSP
-occlusion path while disabling the host-side diagnostic flushes. It still
-reads `trex_dsp.lod` once during startup; it does not write `render_stats.res`,
-`prep_sta.res` or `fb.res` during playback or shutdown.
+The `TREXFULL.TOS` release keeps the full-mesh DSP occlusion path while
+disabling the host-side diagnostic flushes. It reads `TREXFULL.LOD` once during
+startup and does not write `render_stats.res`, `prep_sta.res` or `fb.res`
+during playback or shutdown.
 
 The full animation targets are not DSP-resident. The frontend sends exactly
 one of 46 full gait poses per frame, plus only the actually active, sparse
@@ -189,10 +189,14 @@ never comes.
 
 ```sh
 make DOSBOX=/Applications/dosbox.app/Contents/MacOS/DOSBox trex_dsp
-make trex_m68030
-make trex_m68030_fullm
-make trex_m68030_prepass
+make trex_release
 ```
+
+`trex_release` emits `TREXFULL.TOS`, the full-mesh, armed-occlusion viewing
+package with textured Gouraud shading and no per-frame diagnostic writes.  The
+frontend copies the same DSP program to `TREXFULL.LOD` beside it, so the
+package can be moved to a Falcon directory without renaming a shared runtime
+file.  No DSP protocol or DSP memory-layout variant is required.
 
 The non-prepass DSP core has been validated against an independent TOS test harness
 (not included in this repository): it reserves the production X/Y layout
