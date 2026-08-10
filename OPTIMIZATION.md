@@ -675,10 +675,11 @@ of the mesh's depth distribution, not of the test.
 That closes the largest open question hanging over section 2.3. What it does
 not close is the *cost* of producing that order, which is section 2.3b.
 
-### 2.3b The DSP pre-pass, measured
+### 2.3b Historical ordering-only pre-pass measurement
 
-`CMD_PREPASS` (`-DTREX_PREPASS`, `make trex_m68030_prepass`) is a prototype
-DSP pass that walks all 1,600 resident triangle indices after the projection,
+The table in this subsection is the predecessor's ordering-only measurement,
+not a result from the current full-mesh occlusion binary. Its
+`CMD_PREPASS` (`-DTREX_PREPASS`) pass walked the 1,600-triangle LOD after the projection,
 re-uses `make_triangle_area`/`make_triangle_bbox`/`make_triangle_zkey`
 unchanged, derives the host's OT bucket from the same key, and LSD-radix sorts
 the survivors into a near-to-far list — two passes of 6 and 5 bits over the
@@ -740,16 +741,16 @@ arms completed 270 to 273 frames rather than an identical count, worth up to
 the reason conclusion (b) is stated against a 0.5 ms threshold and not a
 tighter one.
 
-**The prototype left 12 words of DSP program memory.** It consumed 255 of the
+**That predecessor left 12 words of DSP program memory.** It consumed 255 of the
 267 free P words; the last occupied address was `P:$09B3` against
 `triangle_indices` at `P:$09C0`. The mask stamping that stage 2 would need had
 no room at all — the pre-pass answered the ordering question and in doing so
 exposed program memory, not data memory and not time, as the binding
 constraint. Section 2.3c is what happened when that constraint was examined.
 
-### 2.3c 166 P words were an assembler artefact, not a code budget
+### 2.3c Historical layout recovery: 166 P words were an assembler artefact
 
-The obvious response to 12 free words was to fold the pre-pass's per-triangle
+This is also a predecessor-build record. The obvious response to 12 free words was to fold the pre-pass's per-triangle
 classification into `CMD_BUILD_TRIANGLES` instead of duplicating it. That was
 designed, built and measured: **it recovers 12 words.** Twelve. BUILD gives up
 17 and takes back a `jsr` plus an `n2` setup, the pre-pass gives up 17 and takes
@@ -797,12 +798,150 @@ scarcity it only exposed; 62% of what looked like its footprint was jump
 encoding that had been there all along. Before restructuring DSP code to save
 program memory, check what the assembler is spending it on.
 
+### 2.3d Historical parallel-move reserve
+
+2.3c asked what the assembler spends words on and found jump encoding. Asked a
+second time, of the instruction stream rather than the encoding, it finds
+something larger. Counted from the assembled listing of the current program:
+
+| | count |
+|---|---:|
+| instructions | 1,582 |
+| words | 2,241 |
+| extension words | 659 |
+| standalone two-word absolute `x:`/`y:` moves | **489** |
+| ALU ops that accept a parallel move | **230** |
+| ...of those, ones that actually carry one | **9** |
+| standalone `nop` | 41 |
+
+**The DSP56001's defining feature is unused.** Every one of those 489 absolute
+moves is a standalone `move`; the architecture lets one data ALU operation carry
+a memory move in the same instruction, and 221 of the 230 eligible ALU ops carry
+nothing. Each successful pairing removes exactly one word -- the ALU op's own --
+because the move's extension word survives when the address is absolute, and the
+whole pair collapses to one word when it is register-indirect. The upper bound is
+therefore about **221 words**, against the 35 item 19 is short. Even a one-in-five
+success rate against data hazards clears it.
+
+Two things bound where to start, so the next attempt does not begin where this
+one would have. `Tcc` takes only a second *register* transfer, never a memory
+move, so the compare-and-clamp code (`cmp` 27, `tgt` 7, `tlt` 6) resists pairing
+outright -- `make_triangle_bbox`, which looks like the densest target because it
+is almost all two-word absolute reads, is in fact one of the worst. The 13
+Tcc sites are a small minority though, and the yield is in the `mac`/`mpy`/`add`
+class, i.e. the transform, projection and shading loops, where pairing removes a
+word *and* a cycle from code that runs per vertex and per corner. And short
+immediates are already exploited correctly: they are one word only for address
+registers, where the value is zero-extended, while a data ALU register left-
+aligns an 8-bit immediate into the high byte, which is why every integer constant
+in this file legitimately carries `#>`.
+
+**Consequence for item 19: program memory is no longer the blocker in
+principle.** It is an unexploited reserve in code that predates the occlusion
+work entirely, and the pass that harvests it is mechanical, site-by-site, and
+gated by the same byte-identical `fb.res` every other change here is. What it is
+not is free of risk: a parallel move reads its source register at the start of
+the instruction, so any pairing that reuses a register the ALU op also writes has
+to be reasoned about individually, which is why the bound above is an upper bound
+and not a plan.
+
 Projected saving, **estimate and not a measurement** — the baseline's Hatari
 stage times scaled by the measured shares, with the cost of the test itself
 (mask rasterizer, zkey bucket sort, extra wire words) in none of it:
 rasterizer -37.7 ms and readback/packet-build -14.5 ms per frame at `M_uv` /
 `B_vbox` / 2x2, against a DSP-side cost estimated at roughly 15 ms that would
 largely land in the cross-frame window that runs empty today.
+
+### 2.3e Current full-mesh implementation and validation status
+
+The current source implements the previously described sound design against
+the stock full geometry, rather than moving the resident arrays or switching
+to the LOD. The DSP resident index words are three words per triangle, so the
+prepass reloads `triangle_indices + 3*index`; the full 2,724-bit kill bitmap is
+114 X words. The X overlay is exactly:
+
+| Range | Words | Owner |
+|---|---:|---|
+| `X:$39DF-$3CB1` | 723 | phase-local sorted survivor order |
+| `X:$3CB2-$3F84` | 723 | radix scratch / first 336 words: seal+pending masks |
+| `X:$3F85-$3FF6` | 114 | global triangle kill bitmap |
+| `X:$3FF7-$3FFE` | 8 | BUILD cursor/status |
+
+The mask is 60 columns by 56 rows of 4x4-pixel cells, three 24-bit words per
+row and 168 words per mask. Query cells use the clipped victim bbox against
+sealed coverage. A qualified opaque triangle stamps pending coverage only if
+all four cell corners pass the front-facing point-in-triangle test; pending
+coverage is merged only when the sorted OT bucket changes. BUILD reads the
+bitmap in ascending global triangle order and skips killed triangles. If the
+723-entry order capacity overflows, the bitmap remains clear and the frame is
+unculled.
+
+The reproducible build checks performed for this implementation are:
+
+| Check | Result |
+|---|---|
+| DSP DOSBox assembly | 0 errors, 0 warnings |
+| Full-mesh P extent | last instruction `P:$09BA`; `$09BB-$09BF` remain free |
+| Full-mesh X extent | `prepass_status` ends at `X:$3FFE` |
+| Resident Y extent | indices begin at `Y:$09C0`; normals end at `Y:$3FFE` |
+| Host full-mesh build | `make trex_m68030_fullm` passes |
+| Host prepass build | `make trex_m68030_prepass` passes |
+
+The first runtime pass exposed and fixed a correctness bug in the kill writer:
+the sorted entry is `(triangle_index << 12) | bucket`, but the writer was
+adding the bucket back to the already-unpacked triangle index. That shifted
+kills onto unrelated source triangles. The writer now addresses the bitmap
+with the global triangle index alone.
+
+Hatari validation of the corrected full-mesh binary used TOS 4.02, Falcon DSP
+emulation, 4 MB ST-RAM, the exact runtime `trex_dsp.lod` mounted beside the
+program, and a 4,000-VBL bounded run. The arm-1 inline-prepass and arm-0
+disarmed control produced the same frame-100 `fb.res`:
+
+| Check | Result |
+|---|---|
+| Arm-1 framebuffer SHA-256 | `d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16` |
+| Arm-0 framebuffer SHA-256 | identical |
+| `cmp fb.res` | PASS, zero differences |
+| Full geometry | 2,724 triangles; no LOD substitution |
+
+An edge-transition regression then exposed two state-machine errors in the
+coverage sweep: the sorted-list and mask clear were inside the per-entry DSP
+loop, and an uncovered mask cell did not advance the cell cursor while the
+query result was returned as covered unconditionally. The fix moves the
+per-run setup outside that loop, advances every 4x4 cell, and returns the
+accumulated query result.
+
+A second reproduction showed that the synthetic post-source hold (the
+frontend continues moving after the extracted choreography ends at frame 273)
+can make the per-triangle pending-coverage stamp sweep exceed the stock DSP
+frame budget at the right edge. The standard full-mesh prepass therefore stays
+armed through the authored sequence and sends one disarm command when
+`gait_hold_index` starts. The hold still renders the complete 2,724-triangle
+mesh; it simply uses the already-correct unculled BUILD path rather than
+allowing culling work to stall the animation. This is a correctness guard for
+the frontend-added hold, not a physical-Falcon timing result.
+
+The guard was checked with the custom Hatari Falcon harness, TOS 4.02, 4 MB
+ST-RAM, DSP emulation and the exact runtime `.lod`. Starting at frame 270, the
+armed and disarmed controls produced identical frame-273 `fb.res`
+(`de4397e3436df8ed7818baeeaac92e753d17cd0f87f619db449fd05816280a8e`), and
+the guarded arm crossed frame 291 with the clean disarmed-control hash
+`e66d4d433360c9e63938bc78efdf774716c31dbaf22679b6ac0ffd1f42b00486`.
+The rebuilt production binary also completed an 8,000-VBL run with zero
+prepass protocol failures or overflow reports. These are emulator correctness
+results; physical-Falcon timing remains unmeasured.
+
+The diagnostic build carries owner instrumentation and is not a timing
+binary. No physical-Falcon run has been completed, so DSP-window occupancy,
+stock-hardware timing and FPS remain unmeasured. The framebuffer identity is a
+Hatari correctness result, not a physical-machine performance claim.
+
+For visual playback without per-frame host-disk traffic, build
+`trex_m68030_prepass_run`. It retains `TREX_PREPASS`, `TREX_FULL_MESH` and the
+armed culling path, but also defines `TREX_RUN`: framebuffer/stat diagnostics
+and the final diagnostic flush are disabled. The DSP `.lod` is still read once
+at startup, so the mounted GEMDOS volume remains necessary.
 
 ### 2.4 The occlusion binary is not a timing source
 
@@ -1761,17 +1900,22 @@ price in).
 
 ## 4. Work already assigned to the DSP
 
-The current DSP program keeps the static vertex mesh, UV pairs, triangle
-indices and per-triangle face normals resident and performs:
+The current DSP program keeps the static vertex mesh, the packed triangle
+indices and the complete 3,610-entry PS1 corner-normal table resident, and
+performs:
 
 1. base-pose plus deduplicated full-body gait reconstruction,
 2. signed-Q12 application of active sparse morph targets 5-8,
 3. 3x3 fixed-point matrix transformation and object-space translation,
 4. independent-X/Y perspective projection and projected Z generation,
 5. zero-area, near-plane, bounding-box and backface culling,
-6. per-face flat shading against a camera-space light direction,
+6. per-corner (Gouraud) shading against a camera-space light direction,
+   selectable back to the earlier per-face flat path (section 4.4),
 7. chunk-local average-Z/Ordering-Table key generation, and
 8. complete clipped DDA span-setup construction for every survivor.
+
+UV pairs are no longer resident: the corner-normal table displaced them, and
+each `BUILD_TRIANGLES` chunk now carries its own instead (section 4.4a).
 
 The current protocol is:
 
@@ -1782,7 +1926,10 @@ LOAD_VERTICES:
 LOAD_NORMALS:
     command, count, count * (nx, ny, nz)
     -> ACK_NORMALS, count
-    One unit object-space face normal per triangle, in triangle order.
+    The complete PS1 corner-normal table, one unit object-space normal per
+    entry in TMD normal order (count = 3,610). LOAD_TRIANGLES' packed
+    corner-normal indices address it directly. Section 4.4a has the
+    DSP-side split that makes it resident.
 
 SET_FRAME:
     command, 9 matrix words, 3 translation words,
@@ -1816,27 +1963,36 @@ GET_VERTICES:
     command -> acknowledgement, count * (screen x, screen y, z, flags)
 
 LOAD_TRIANGLES:
-    command, count, count * (i0 | i1<<12, i2)
+    command, count, count * (i0 | i1<<12, i2 | n0<<12, n1 | n2<<12)
     -> ACK_LOAD_TRIANGLES, count
-    The static index list, uploaded once. Twelve bits per index; 1,376
-    vertices need eleven. The unpacked three-word form is 8,172 words and
-    does not fit beside the equally large face-normal array in Y memory.
+    The static index list, uploaded once: three vertex AND three
+    corner-normal indices per triangle, three packed words total since
+    Gouraud (was two). Twelve bits per index; 1,376 vertices and 3,610
+    corner normals both fit. Section 4.4a has the DSP-side split that made
+    room for the wider record.
 
 BUILD_TRIANGLES:
-    command, count, global index of the chunk's first triangle
+    command, count, global index of the chunk's first triangle,
+    count * 2 packed UV words (one pair per triangle, chunk order)
     -> ACK_TRIANGLES, survivor count
-    The records themselves are resident, so the chunk command is three
-    words regardless of the chunk size.  The ack must carry the survivor
-    count: Dsp_BlkUnpacked transfers a word count fixed before the call,
-    so the host has to know the GET_TRIANGLES reply size in advance.  A
-    fully culled chunk reports zero and the host skips the fetch.
+    The index/corner-normal records are resident, so the header is three
+    words regardless of chunk size, as it always was -- but the UV tail is
+    new and does scale with chunk size, because the corner-normal table
+    displaced the UV pairs that used to be resident too (section 4.4a). It
+    ships for the WHOLE chunk, before the DSP has culled a single triangle
+    in it, not survivors only. The ack must carry the survivor count:
+    Dsp_BlkUnpacked transfers a word count fixed before the call, so the
+    host has to know the GET_TRIANGLES reply size in advance. A fully
+    culled chunk reports zero and the host skips the fetch.
 
 GET_TRIANGLES:
     command
     -> ACK_GET_TRIANGLES, survivor count,
-       survivor count * 14-word packed span-setup record
+       survivor count * 18-word packed span-setup record
     Survivors only -- culled triangles send nothing.  Section 9.2 defines
-    the semantic fields and their packing contract.
+    the seventeen classic DDA fields and their packing contract; section
+    4.4a has the four Gouraud level words the record gained on top of them
+    (section 9.2's own field table predates that addition).
 ```
 
 The survivor key packs the chunk-local triangle index in bits 0..7 and the
@@ -2181,20 +2337,39 @@ interactive flag are preserved. The current Falcon player deliberately loops
 entered after autoplay. Audio volume is retained as state but no sample/audio
 backend consumes it yet.
 
-### 4.4 Shading: the source light model, per face — implemented
+### 4.4 Shading: the source light model, per corner — implemented (Gouraud default)
 
-The Falcon path derives one geometric face normal and dots it with the three
-lights Demo One's own setup routine installs, each clamped separately so a face
-turned away from one light gets nothing from it instead of darkening the
-others. Two sums come out of that, one over the red-scaled and one over the
-green-scaled vectors (green equals blue for every light and for the ambient in
-this scene), and they carry both pieces the renderer needs:
+The Falcon path dots a surface normal against the three lights Demo One's own
+setup routine installs, each clamped separately so a face turned away from one
+light gets nothing from it instead of darkening the others. Two sums come out
+of that, one over the red-scaled and one over the green-scaled vectors (green
+equals blue for every light and for the ambient in this scene), and they carry
+both pieces the renderer needs:
 
 - the **brightness level**, from the luminance of the direct term alone, so the
   ambient floor does not eat the bottom of the sixteen-step range, and
 - the **tint class**, from the R/G ratio of the face's own light colour, as
   three threshold comparisons rather than a division: R is halved and the
   thresholds are stored halved, which keeps both operands inside 1.23.
+
+Which normal this runs against, and how many times, is what has since changed.
+`gouraud_enabled` defaults to 1 (`TREX/m68030/trex_m68030.s`), and in that
+configuration the DSP runs the pass above once per TRIANGLE CORNER, against
+that corner's own PS1 vertex normal (`shade_corner_loop` inside
+`make_triangle_shade`, `TREX/dsp/trex_dsp.asm`) — not once per face against a
+single shared normal. Section 4.4a is the memory and protocol split that put a
+corner's own normal within reach at all; this section remains the light model
+and CLUT-bank derivation both the corner pass and its pre-Gouraud predecessor
+share. Each corner's two clamped channel sums contribute exactly one third to
+a running total (`shade_acc_r`/`shade_acc_g`); that mean, quantized through the
+same brightness formula above, is the record's single tint-class-and-mean-level
+word (`triangle_shade`) — thirds keep every intermediate below the saturation
+limit the next paragraph describes, and they make the accumulator the corner
+mean without a separate division afterward. Tint class is derived from that
+same corner-mean sum, exactly as it was for a single face normal: colour class
+is not interpolated across a triangle, only brightness is. Each corner's OWN
+quantized level survives too, in `corner_levels`, for the span interpolation
+section 4.4a describes.
 
 Each channel sum has to saturate before it is stored, and that is not a
 formality: the vectors are normalised on luminance, the key light is redder
@@ -2233,7 +2408,17 @@ quantile of 1.39 against the single ramp's 1.50 — while matching the overall
 warmth that was chosen by eye. Anyone reproducing the source exactly should
 drop that factor.
 
-This is still flat shading per face, not the source's per-corner Gouraud.
+Per-corner Gouraud shading — the light model above, evaluated at each corner
+and interpolated down the two edge chains as the span rasterizer walks them —
+is what ships by default. It is not the source's per-pixel Gouraud: what is
+interpolated is a scalar brightness LEVEL that selects among the CLUT banks
+above, once per span ROW, not a continuously-varying RGB colour sampled every
+pixel — smooth down the model, flat across any one scanline. Section 4.4a has
+the split that made per-corner lighting possible and the two places the
+shipped protocol departs from the plan it followed; section 4.4b has what the
+remaining, source-exact per-pixel tier would cost. The single-normal-per-face
+path above remains selectable for direct comparison and regression
+(`gouraud_enabled=0`, 520.4 ms / 1.92 FPS on the same binary — section 2).
 
 The raw TMD and setup routine `0x80127764` establish a different source
 contract:
@@ -2260,66 +2445,129 @@ sit. The eyes are the PS1's own yellow and near-black again instead of a
 diagnostic green that, on a head twenty pixels tall, was the most conspicuous
 thing in the frame.
 
-What is still missing is per-corner colour: exact rendering needs three corner
-RGB values plus Gouraud interpolation and modulation, while the wire record
-carries one face colour as tint and level. That remains a protocol and
-pixel-loop change, and section 4.4a still describes it.
+What is still missing is per-corner COLOUR, not per-corner brightness: exact
+rendering needs three corner RGB values, interpolated and multiplied against
+the texel every pixel, while the wire record carries one flat tint class plus
+an interpolated brightness level. Section 4.4b has the cost of closing that
+gap and why it remains unbuilt.
 
-Keeping all exact source data resident does not fit the current P/Y layout.
-The 3,610 normals alone need 10,830 DSP words; even packing the six vertex/
-normal indices of each triangle into three words gives another 8,172, versus
-13,888 words in the complete `$09C0-$3FFF` window. A future implementation
-must therefore stream/overlay lighting inputs, precompute choreography corner
-colours, or deliberately use a compressed approximation. Any FPS impact must
-be measured separately: per-pixel RGB modulation adds work to the stage that
-already consumes 74.7% of the frame.
+Keeping all exact source data resident did not fit the P/Y layout on its own:
+the 3,610 normals alone need 10,830 DSP words, and packing the six vertex/
+normal indices of each triangle into three words gives another 8,172, against
+13,888 words in the complete `$09C0-$3FFF` window. Section 4.4a is the split
+that resolved this, and it shipped — it is what makes the per-corner pass
+above possible at all. Per-pixel RGB modulation, the source-exact tier this
+section's own extraction facts describe below, remains a separate and larger
+question, because it adds work to the pixel loop rather than the DSP; section
+4.4b has that cost model.
 
-### 4.4a Candidate exact DSP/CPU split for Gouraud lighting
+### 4.4a The per-corner memory and protocol split — implemented
 
-The memory conflict above has a concrete solution that keeps the PS1 Q12
-normals and the three-light calculation on the DSP rather than moving lighting
-arithmetic back to the M68030.  This is a **design proposal/cost model, not an
-implemented or measured path**:
+This section used to be a design proposal for keeping the PS1 Q12 corner
+normals and the three-light calculation on the DSP rather than moving
+lighting arithmetic back to the M68030. The split below is now the shipped
+layout, verified against `TREX/dsp/trex_dsp.asm` and
+`TREX/m68030/trex_m68030.s`. Three of its four points shipped as proposed;
+two concrete departures from the plan are called out where they occur.
 
-1. Pack each triangle's three 12-bit vertex and three 12-bit normal indices
-   into exactly three 24-bit Y words: 8,172 words for all 2,724 triangles.
-2. Store 5,715 of the 10,830 Q12 normal-component words in the remaining Y
-   window and place the other 5,115 in the current 5,448-word X `uv_pairs`
-   allocation.  The arithmetic is exact: 8,172 + 5,715 = 13,887 of the
-   13,888 Y words, and 5,115 fits in the displaced X allocation.
-3. Cull and sort geometry first.  Then have the M68030 stream the two packed
-   static UV words only for survivors, after their identities are known.  At
-   the current 1,078-packet choreography frame this is 2,156 words, modelled at
-   about 4.9 ms with the historical 2.3 us/word Hatari calibration, before
-   call/ack overhead.  This is an estimate, not a new measurement.
-4. Let the DSP reproduce the three source lights plus ambient per corner and
-   calculate both UV and RGB edge/span gradients.  The CPU remains responsible
-   for unpacking, Ordering Table linkage and framebuffer writes; its new
-   lighting-side work is limited to gathering and transporting UV records.
+1. Each triangle's three vertex indices and three corner-normal indices pack
+   into exactly three 24-bit Y words (`TRI_INDEX_BITS`/`TRI_INDEX_MASK`: word
+   A = v0|v1<<12, word B = v2|n0<<12, word C = n1|n2<<12) — 8,172 words for
+   all 2,724 triangles, uploaded once by `CMD_LOAD_TRIANGLES`. **Done as
+   proposed.**
+2. The complete 3,610-entry PS1 corner-normal table is resident, split on a
+   normal index rather than a triangle boundary: `corner_normals_y` holds the
+   first `NORMAL_Y_COUNT` = 1,905 normals (5,715 words, `Y:$29AC-$3FFE`)
+   directly behind the now-resident `triangle_indices` (`Y:$09C0-$29AB`,
+   8,172 words) — 13,887 of the Y window's 13,888 words — and
+   `corner_normals_x` holds the remaining `NORMAL_X_COUNT` = 1,705 (5,115
+   words, `X:$25E4-$39DE`) in the X allocation the resident UV pairs used to
+   occupy. **Done as proposed**, address for address: 8,172 + 5,715 = 13,887,
+   and 5,115 fits the displaced X allocation exactly. This layout does not
+   depend on which mesh LOD is linked in — the corner-normal table's size
+   comes from the source TMD, not from how many triangles the decimated mesh
+   keeps; `triangle_indices` is sized for the full 2,724-triangle mesh and a
+   smaller LOD simply leaves its tail unused (`TREX/dsp/trex_dsp.asm`, the
+   occlusion-prepass allocation comment).
+3. Cull and sort still happen on the DSP first, exactly as proposed. **First
+   departure from the plan:** UV was proposed as a survivors-only stream —
+   "stream the two packed static UV words only for survivors, after their
+   identities are known." What shipped instead sends UV for the WHOLE chunk:
+   `CMD_BUILD_TRIANGLES` receives the chunk's UV pairs, two packed words per
+   triangle, immediately after its (count, base) header — before
+   `make_triangle_area`'s backface/zero-area cull has run on a single one of
+   them. At the measured 27% survival rate (section 4.1a), roughly three
+   quarters of that UV traffic is for triangles the DSP is about to discard.
+   Section 2 folds this into the "~32 ms" corner-lighting protocol cost as
+   "chunk UV shipping" rather than accounting for the waste separately, so it
+   is real but not separately measured.
+4. The DSP reproduces the three source lights plus ambient once per corner
+   (`shade_corner_loop` inside `make_triangle_shade`), as proposed. **Second
+   departure from the plan:** it does not calculate RGB edge/span gradients.
+   It quantizes each corner's own brightness level — the same 0..15 Lambert
+   quantization the flat path always used — into `corner_levels`, and
+   `make_triangle_span` derives the wire record's `dlvl_dx`/`dlvl_up`/
+   `dlvl_low` from those three levels with the identical barycentric formula
+   already used for the UV gradients (`span_dldx`, `span_dll_up`,
+   `span_dll_low`). The wire carries a scalar brightness per corner, not a
+   colour — the cheaper "interpolated bank index" tier section 4.4b costed
+   as an alternative to true RGB, not the RGB-gradient design this point
+   originally proposed.
 
-The output format is the harder performance question.  A straightforward
-record needs roughly twelve additional words for top RGB plus three channels
-of horizontal/upper/lower gradients; at 1,065 survivors that alone models to
-about 29.4 ms of host-port traffic.  Packing those signed fixed-point fields
-two per word could approximately halve the wire estimate, subject to a range
-proof and field-by-field validation.  True textured Gouraud modulation also
-adds per-pixel work to the 531.7 ms rasterizer, so DSP lighting can raise DSP
-utilization while still lowering overall frame rate.  Cross-frame pipelining
-or SSI result DMA should therefore be evaluated with this record revision,
-not after it.
+One field is worth flagging precisely because it looks unfinished, and is:
+`dlvl_dx` (w15 on the wire) is computed by `make_triangle_span` and travels on
+every record, but `rasterize_packet` never reads it back — the row loop only
+consumes `raster_dlvl` (whichever of `dlvl_up`/`dlvl_low` matches the active
+half), added once per ROW, not once per pixel. That matches `gouraud_enabled`'s
+own comment exactly: "smooth along Y, flat along each span." The DSP cycles
+and the host-port word spent computing and shipping `dlvl_dx` are real and
+currently unconsumed; the first thing that would read it is the per-pixel
+(rather than per-row) interpolation section 4.4b costs and has not built.
 
-Before calling this path exact, a PS1/GTE validation fixture must reproduce
-the source operation order, saturation and texture-colour modulation for
-selected primitives and choreography frames.  A cheaper alternative is one
-packed 8-bit XYZ normal per source normal; it would fit comfortably and avoid
-UV displacement, but is explicitly an approximation and must be compared
-visually before consideration.
+The host remains responsible for unpacking, Ordering Table linkage and
+framebuffer writes, as proposed; its lighting-side work is still limited to
+gathering and transporting UV records, now for the whole chunk rather than
+survivors only (point 3 above).
 
-### 4.4b What Gouraud would cost, and why it is deferred
+The output format for true per-corner COLOUR is the question this section
+originally called "the harder performance question," and it is untouched by
+any of the above, because none of it was built: a straightforward record
+would still need roughly twelve additional words for top RGB plus three
+channels of horizontal/upper/lower gradients — not the four words (one packed
+level pair, three level gradients) the shipped scalar variant actually
+spends. At 1,065 survivors that alone models to about 29.4 ms of additional
+host-port traffic; packing those signed fixed-point fields two per word could
+approximately halve the estimate, subject to a range proof and field-by-field
+validation. True textured Gouraud modulation also adds per-pixel work to the
+rasterizer — section 4.4b has the current cost model — so DSP lighting could
+raise DSP utilization while still lowering overall frame rate. Cross-frame
+pipelining or SSI result DMA should therefore be evaluated together with any
+such record revision, not after it. This part of the section remains a
+design proposal/cost model, not an implemented or measured path.
 
-Section 3.5 makes this estimable. The pixel loop measures 372.8 ms for 77,853
-written pixels per frame — **4.79 us per pixel, about 77 cycles at 16 MHz** —
-and that is the number every per-pixel addition is charged against.
+Before calling per-corner brightness PS1-exact, a PS1/GTE validation fixture
+must still reproduce the source's operation order, saturation and
+texture-colour modulation for selected primitives and choreography frames.
+Unlike the span-setup record (section 4.1b), this lighting path has not been
+field-validated against reference arithmetic — it shipped on visual review,
+not a proven bit-exact match. A cheaper alternative for a future true-colour
+pass is one packed 8-bit XYZ normal per source normal; it would fit
+comfortably and avoid the UV displacement above, but is explicitly an
+approximation and must be compared visually before consideration.
+
+### 4.4b What full per-pixel RGB Gouraud would still cost, and why it remains deferred
+
+Section 4.4a's span-level brightness interpolation is done and shipped; this
+section is now only about the tier beyond it — continuous per-pixel RGB
+colour, modulated against the texel, rather than an interpolated brightness
+level that selects a preshaded bank. Section 3.5 is what made a cost model
+possible at all: the pixel loop then measured 372.8 ms for 77,853 written
+pixels per frame — **4.79 us per pixel, about 77 cycles at 16 MHz** — at the
+742.7 ms epoch, before section 6.6's render-target resize and before any pass
+of section 3.9's instruction-cache series. That is the baseline the table
+below was charged against, so its absolute ms/FPS columns are historical, not
+current; the relative shape — which fidelity tier costs how much more than
+the next — is the part still worth reading.
 
 **DSP side: effectively free.** Three corner normals instead of one face normal
 is roughly 74 more instructions per triangle, about 4.6 us at 32 MHz, so
@@ -2333,6 +2581,16 @@ twelve extra words per survivor — start colour plus three channels of three
 gradients — is **~30 ms per frame**, roughly half that if the fields are packed
 two per word. Interpolating a single scalar instead needs four words, about
 **10 ms**.
+
+Both estimates above bracket what shipped rather than describing it exactly:
+section 4.4a's scalar variant spends the ~5 ms DSP-side estimate on real
+per-corner rotations and the four-word wire estimate on real `dlvl_*` fields,
+and section 2's measured **~32 ms** corner-lighting protocol cost (rotations,
+light sums, chunk UV shipping, four level divisions and the 18-word record
+together) is consistent with those two component estimates plus the
+whole-chunk UV shipping section 4.4a's first departure adds on top. The
+twelve-word/~30 ms figures remain estimates for the true-RGB tier below,
+which is still unbuilt.
 
 **Pixel loop: this is where it is decided.**
 
@@ -2348,18 +2606,46 @@ to modulate the texel; `MULU.W` alone is 28 cycles on the 68030, so the loop
 roughly triples and the frame rate halves. Interpolating the *bank index*
 instead costs one add and one address calculation, because the preshaded banks
 already carry brightness and colour class together — about 15% of the frame
-rate for shading that is smooth across a triangle rather than flat.
+rate for shading that is smooth across a triangle rather than flat, in this
+table's model.
 
-**Deferred, deliberately.** The cheap variant is not what the PS1 does, and the
-faithful variant costs half the frame rate on a renderer that is already at
-1.35 FPS. Both are worth more once the frame has room: mesh LOD (section 10,
-item 10) is projected at +37% and does not touch the pixel loop, and the pixel
-loop itself is 45% of the frame and has never been optimized against the
-current record format. Gouraud after those two, not before — and then measured
-rather than modelled, which one build that computes the interpolation and
-discards it would settle in two runs.
+**The interpolated-bank-index row is no longer a model.** Section 4.4a shipped
+it — `gouraud_enabled` defaults to 1 — and it cost far less than modeled here.
+Measured against the pre-Gouraud build at its own epoch (section 2): the
+interpolation itself is **+8.1 ms per frame**, not the ~117 ms
+(490 - 372.8 ms) this row's pixel-loop estimate implied, and the flat path
+stays selectable at 520.4 ms / 1.92 FPS on the same binary for direct
+comparison. The gap is the row-versus-pixel granularity section 4.4a
+describes: this table assumed a per-PIXEL bank recalculation — one add, one
+address calculation, on every pixel — while the shipped rasterizer reselects
+the bank once per span ROW from the interpolated left-chain level, and the
+pixel loops are otherwise untouched (roadmap item 13). Almost none of the
+modeled per-pixel cost was ever paid, because the design that shipped never
+pays it per pixel at all. The two RGB rows above are the ones that still
+require genuine per-pixel work, and they remain the only rows this table
+still usefully estimates.
 
-Everything in the table except the 4.79 us is a model, not a measurement.
+**Deferred, deliberately — though the sequencing this paragraph originally
+waited on has since completed.** Mesh LOD (section 10, item 10) and the
+pixel-loop optimization series (section 10, item 11 — sections 3.6 through
+3.9c) were both still open when this section was first written; both are done
+now, and the span-level Gouraud this section also deferred behind them
+(roadmap item 13) has since shipped, in the order originally proposed. What
+remains deferred is specifically the true-RGB tier. The reason is the same in
+kind, though its baseline is not: it is real per-pixel work added to a loop
+that the instruction-cache series (section 3.9) has since cut by more than
+half on the LOD (376.8 to 180.7 ms rasterizer), so this table's absolute costs
+would have to be re-derived against the current pixel loop, not assumed from
+the 372.8 ms / 4.79 us figures above, before another modeling pass is worth
+running. Building one binary that computes the interpolation and discards it,
+exactly as this section originally suggested, remains the way to settle it —
+measured, not modeled, against whichever pixel loop is current when it is
+tried.
+
+Everything in the table above except the 4.79 us is a model, not a
+measurement, and the 4.79 us / 372.8 ms baseline it is charged against is
+itself superseded by every rasterizer change since section 3.6. Read the
+table as a cost shape, not a current forecast.
 
 ## 5. Recommended DSP offloads
 
@@ -3159,6 +3445,70 @@ relative improvement and a different balance between these stages.  The one
 thing that does transfer without an emulator is the mechanism: the MC68030's
 instruction cache is 256 bytes and direct-mapped on the real chip too.
 
+#### 8.2a The gate re-measured after 3.9b/3.9c, and what is actually left
+
+The full mesh could not be measured headlessly at all until now: `trex_full.tos`
+carries `-DTREX_RUN`, which zeroes `stats_flush_enabled`, so a bounded run
+writes no `render_stats.res` and the mesh this gate is defined on had no target
+that could produce its own figure.  `make trex_m68030_fullm` is that target --
+same assets, without `TREX_RUN`.
+
+Measured over 265 frames, frame-100 `fb.res` reproducing the recorded full-mesh
+checkpoint `d89958b3…3d16`, with the section 3.5 profile patches re-taken on
+the same build:
+
+| Component | ms/frame | share |
+|---|---:|---:|
+| DSP readback + packet build | **185.7** | 40.4% |
+| Raster row/span walk | 113.4 | 24.7% |
+| Raster per-packet setup | 68.3 | 14.8% |
+| Raster pixel loops | 62.2 | 13.5% |
+| set_frame + clear + OT + rounding | 30.4 | 6.6% |
+| **Total** | **460.0 ms / 2.17 FPS** | |
+
+The packet stage reads 185.7, 185.7 and 186.0 across the normal and both
+profile builds, which is the cross-check that the patches touch only the
+rasterizer.  **The distance to 333.3 ms is 126.7 ms**, down from the 155.5 ms
+section 8.2 recorded before 3.9b/3.9c.
+
+**Section 8.2's own next-step suggestion is now measured out.** It proposed
+applying section 3.9's rule -- shrink the loop below the 256-byte instruction
+cache -- to the 186.3 ms packet stage.  Listing accounting on the three
+per-survivor host loops says there is nothing there to get: the packet builder's
+body is **130 bytes**, `gpu_submit_ot`'s is **62**, and 3.9c's resolve sweep is
+**118**, all comfortably inside the cache, and the record-unpack loop was
+already pinned to 250 bytes by 3.9 step 4.  Whatever the 185.7 ms is, it is not
+loop-body eviction.
+
+**What it is, in the part that can be named:** the wire is about 26,800 words
+per frame (1,149 survivor records at eighteen words, plus 5,448 UV words for
+all 2,724 triangles, plus chunk headers and acks), or roughly 62 ms at the
+2.3 us/word calibration.  Of the remainder, one item is pure duplicated work:
+**every survivor's span record is handled twice.**  The unpack writes 22
+expanded longwords into `dsp_triangle_rx_buffer`, and `build_gpu_shadow_packets`
+then reads those 22 and writes them again into the packet through two MOVEM
+pairs.  Letting the unpack write straight into the packet's span slots -- with
+the source index and shade parked in two of 3.9c's resolve slots, which nothing
+reads until the sweep -- removes 44 longword bus accesses per survivor, 50,556
+per frame, about **25 ms** at the 8.05 cycles per longword this program
+exhibits.  It is not free to build: the projected-vertex fallback and the span
+validator both consume the old `rx_buffer` layout, so the copying builder has
+to survive for them.
+
+**The honest arithmetic for three FPS on the full mesh.**  That 25 ms and the
+occlusion stage of item 19 are the only two levers with a named mechanism.
+Occlusion at the DSP-buildable variant culls 10.5% of survivors and 11.24% of
+writes (2.3a), which against the split above is roughly 14 ms of packet stage,
+7 ms of per-packet setup and 20 ms of row/pixel work -- about **41 ms**, and
+less than that at the 4x4 cells item 19 would have to fall back to.  Both
+together are about 66 ms of the 126.7 needed, landing near **395 ms / 2.53
+FPS**.  **Three FPS on the full mesh therefore does not follow from any
+optimization currently identified**, and the residual ~60 ms has no mechanism
+short of moving the record stream off host-port PIO entirely (item 15), which
+Hatari cannot validate and which section 7.4 shows is not a small piece of
+work.  The LOD reaches three FPS and the full mesh does not; that gap is now
+quantified rather than asserted.
+
 ### Why this must be prototyped on hardware first
 
 - Hardware handshaking prevents FIFO overflow, but the host-port protocol's
@@ -3553,36 +3903,47 @@ The open roadmap, in recommended order (expected effects from the section
    0.7 ms); CLUT and texture reads sweeping the data cache are the next
    suspect.
 17. Finish the section 4.4 lighting contract. The three source lights, the
-    ambient and the two original eye colours are in; what is left is per-corner
-    Gouraud, which item 13 defers with the cost model of section 4.4b. The raw
-    TMD carries all three normal indices and the O3D conversion discards two,
-    so the representation question of section 4.4a is still open. Per-face
+    ambient and the two original eye colours are in, and per-corner Gouraud is
+    **done as the span-level variant** (item 13): section 4.4a's offline TMD
+    extraction recovers all 3,610 corner normals directly, so the O3D's
+    one-normal-per-triangle limit no longer bounds the representation — that
+    question is closed. What is left is the fidelity tier item 13 flagged
+    NOT PS1-exact: interpolated RGB modulated per pixel, not an interpolated
+    brightness level selecting a preshaded bank, which section 4.4b costs and
+    section 4.4a's PS1/GTE validation fixture still has to certify. Per-face
     preshaded CLUTs remain the fast fallback, not the fidelity target.
 18. Decide the playback timebase explicitly. The current inspection mode
     renders every extracted record and therefore slows the 274-frame sequence
     to the achieved render rate. A PS1-time mode should advance from VBL time
     and drop choreography records when rendering cannot keep up; it preserves
     shot duration but, at ~1.2 FPS, would display only a small subset of poses.
-19. DSP-side occlusion culling. **Measured, not built** — section 2.3 has the
-    campaign, 2.3a the ordering yield, 2.3b the measured pre-pass; the tooling,
-    the `-DTREX_OCCL` and `-DTREX_PREPASS` binaries are in the tree and the
-    gate chain of section 2.4 holds. The ceiling is 24.59% of survivors and
-    22.24% of framebuffer writes; the best variant buildable on the current DSP
-    memory map recovers 42.7% of it under the order the DSP can actually
-    establish, worth an estimated -37.5 ms rasterizer and -14.4 ms readback per
-    frame.
+19. DSP-side occlusion culling. **Implemented for the complete 2,724-triangle
+    mesh; build-verified and Hatari framebuffer gate passed.** The current `-DTREX_PREPASS`
+    DSP path classifies the full resident index list, sorts survivors by the
+    exact 2,048-bucket OT key, tests a 60x56 grid of 4x4 cells against sealed
+    coverage, stamps only qualified opaque triangles when all four cell
+    corners are inside, and makes BUILD skip the resulting global kill bits.
+    Modes 2 and 3 are fixed two-word run-now commands; mode 1 runs in the
+    existing FINISH window. The full-mesh stock layout uses 114 kill words and
+    leaves five safe P words (`P:$09BB-$09BF`) before the resident Y indices;
+    the DSP build currently ends at `P:$09BA` with zero assembler errors and
+    warnings.
+    The corrected full-mesh run, with the runtime DSP `.lod` mounted, produced
+    byte-identical frame-100 framebuffers in the arm-1 inline-prepass and arm-0
+    disarmed arms (`d89958b314c924ad...`). These are Hatari results only, and
+    no physical-Falcon timing or FPS is claimed.
+    The historical ordering-only measurements below remain useful baselines,
+    but do not describe this current culling binary.
     **The ordering question is closed and both halves came out well.** The
     restriction to strictly-nearer buckets costs 3.4% of the yield (2.3a), and
     the pre-pass that establishes the order costs 15.2 ms of DSP time that
     disappears completely into the cross-frame window — measured at -0.04 ms on
     `t_packets` (2.3b). Neither was the obstacle.
-    **The program-memory objection is gone.** The pre-pass left 12 free P
-    words, which looked like the end of the road for stage 2's mask stamping.
-    Section 2.3c shows 166 of those words were jump encoding: forcing short
-    addressing recovers them at a provably unchanged instruction stream and a
-    byte-identical image, so **178 words are free**. The fold that was supposed
-    to solve this recovers 12 and is held in reserve. Stage 2 is now a question
-    of whether it is worth building, not of whether it fits.
+    **The ordering-only program-memory result is historical.** Its 12-word
+    margin and 166-word jump-encoding recovery describe the predecessor build;
+    the current full-mesh implementation spends the recovered space on the
+    conservative coverage test and ends at `P:$09BA`, leaving five words
+    before the resident-index ceiling.
     Weigh it against roadmap items 11/15: the fresh full-mesh decomposition
     puts the row walker at 303.9 ms, and the stock 3-FPS chain first needs the
     complete span transport.  Occlusion is retained as a later DSP-producer
@@ -3596,6 +3957,40 @@ The open roadmap, in recommended order (expected effects from the section
     x/24 plus x mod 24 by fractional multiply with `$055556`, verified exact
     over 0..239. Prior art on Falcon hardware: Cho Ren Sha 68k keeps a 1-bit
     screen buffer in DSP memory and returns run-length data to the 68030.
+
+    **Current implementation, stages 2 and 3: the occlusion path now reaches
+    the DSP.**
+    The mask policy that decides the whole result (`M_uv`, worth a factor of
+    twelve over the per-page rule) needs one bit per triangle on the DSP, and
+    the stock full mesh needs a 114-word resident bitmap: X ends at
+    `prepass_status`/`$3FFE` and Y is full to `$3FFE`.
+    The bit rides in the resident index list instead, at no memory cost.
+    Vertex indices stay below 1,376, so each of the three twelve-bit vertex
+    fields has a spare top bit; the qualification occupies bit 23 of word A
+    (the `v1` field's). The host ORs it in from `trex_opaque_triangle_data` --
+    the same sidecar and the same predicate as `OPAQUE_PACKET_BIT`, so no new
+    tooling and no new proof obligation -- and it is deliberately not gated on
+    `opaque_path_enabled`, which is a rasterizer A/B switch while sealing
+    soundness is not optional. Every vertex extraction on the DSP now masks
+    with `TRI_VERTEX_MASK` (eleven bits), including the two that come out of a
+    shift and never masked at all; normal indices keep `TRI_INDEX_MASK`.
+
+    The qualification-only experiment and its negative-control numbers above
+    are historical predecessor-build results, not measurements of the current
+    culling binary. The current implementation retains the sound design that
+    experiment established: 4x4-pixel cells, two masks (`seal` and `pend`),
+    four-corner stamping, and a global kill bitmap consumed by BUILD. It is
+    fitted to the stock full-mesh map, as recorded in section 2.3e; the
+    remaining gates are physical-Falcon yield and end-to-end timing.
+
+    `command_get_vertices` remains retired because the span-setup record made
+    it dead on the normal path in 4.1c, and command 3 now answers
+    `ERR_BAD_COMMAND` so a stale host caller takes its shadow path instead of
+    hanging. The old mode-3 ordered-list dump and its streamer are also gone.
+    The complete geometry remains resident: indices begin at `Y:$09C0`, the
+    full mesh fills the Y window to `$3FFE`, and the current DSP program ends
+    at `P:$09BA`, leaving five words before the resident-index ceiling. No
+    LOD-only relocation or alternate hardware map is used.
 20. Delta clearing instead of the full-window clear. **Built, measured,
     REJECTED — see section 2.5.** It saves 8.0 ms in the clear and costs
     14.4 ms in bookkeeping, a net +6.1 ms, plus 13.5 ms of layout cost merely

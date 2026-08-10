@@ -59,9 +59,9 @@
 ;   CMD_PREPASS:
 ;       receives one mode word and always returns ACK_PREPASS followed by the
 ;       survivor count of the last run ($ffffff after an overrun).  Mode 0
-;       disarms, 1 arms the FINISH hook, 2 runs the prepass now, 3 dumps the
-;       ordered survivor list -- survivor count further words, one packed
-;       entry each.  See the prepass block near the end of the program.
+;       disarms, 1 arms the FINISH hook, and 2 or 3 runs the full prepass now.
+;       The reply is always exactly two words; the old ordered-list dump was
+;       removed to keep the full-mesh path inside the stock P/Y overlay.
 ;
 ;   CMD_GET_TRIANGLES:
 ;       returns ACK_GET_TRIANGLES, survivor count, and survivor count *
@@ -124,6 +124,20 @@ SPAN_RECORD_WORDS	= 18
 ; keeps it positive for LSR.
 TRI_INDEX_BITS	= 12
 TRI_INDEX_MASK	= $000fff
+
+; Vertex fields need only eleven of their twelve bits (1,376 < 2,048), so the
+; top bit of each is spare.  The occluder qualification the occlusion stage
+; needs -- may this triangle's coverage seal anything, i.e. does it write
+; opaquely everywhere -- rides in the v1 field's spare bit, which is bit 23 of
+; word A.  It is host-owned (tools/o3d2opaque.py, the same sidecar the packet
+; builder reads for OPAQUE_PACKET_BIT) and costs no memory here: the DSP has
+; neither an X nor a Y word left for the full-mesh 114-word resident bitmap.
+;
+; Every vertex extraction therefore masks with TRI_VERTEX_MASK, including the
+; two that come out of a shift and never used to mask at all.  Normal indices
+; keep the full twelve bits and TRI_INDEX_MASK.
+TRI_VERTEX_MASK	= $0007ff
+TRI_OCCLUDER_BIT	= 23
 
 ; The PS1 corner-normal table, resident in full so the packed indices above
 ; address it directly with no remap.  It does not fit in one bank beside the
@@ -216,13 +230,14 @@ ERR_BAD_COMMAND		= $7fffff
 ; -----------------------------------------------------------------------------
 OT_LENGTH	= 2048
 OT_KEY_SHIFT	= 8
+PREPASS_ENTRY_BUCKET_MASK	= $000fff
 
-; Capacity of the order list.  Two lists of PREPASS_MAX words plus the kill
-; bitmap and the status cells fill the X window from chunk_uvs to the top of
-; physical X memory exactly.  Measured over the 264-frame choreography the
-; survivor count peaks at 699, so the headroom is 6.4% -- an overrun is
-; counted and reported rather than assumed away.
-PREPASS_MAX	= 744
+; Capacity of the order list.  Two lists of PREPASS_MAX words plus the full
+; triangle kill bitmap and status cells must fit from chunk_uvs to the top of
+; physical X memory.  The stock full mesh needs 114 bitmap words (2,724 bits),
+; leaving 723 entries for the two radix lists.  An overrun is counted and
+; reported rather than assumed away, and leaves the frame unculled.
+PREPASS_MAX	= 723
 
 ; LSD radix sort over the eleven bucket bits, two passes of six bits.  The
 ; second digit masks six bits although only five of them can ever be set:
@@ -235,9 +250,19 @@ PREPASS_CNT_LO_COUNT	= 64
 PREPASS_CNT_HI_COUNT	= 32
 PREPASS_CNT_COUNT	= PREPASS_CNT_LO_COUNT+PREPASS_CNT_HI_COUNT
 
-; 1,600 triangles of kill flags, one bit each, reserved for the stage that
-; actually culls.  This stage only clears it.
-PREPASS_KILL_WORDS	= 67
+; Stage-2/3 occlusion working set.  A 4x4 pixel cell is the smallest mask
+; that fits twice in the phase-local scratch allocation.  The two masks are
+; coverage sealed by strictly nearer buckets and coverage pending in the
+; current bucket; pending coverage is merged only at a bucket boundary.
+OCCL_CELL_SIZE	= 4
+OCCL_CELL_COLS	= SCREEN_WIDTH/OCCL_CELL_SIZE
+OCCL_CELL_ROWS	= SCREEN_HEIGHT/OCCL_CELL_SIZE
+OCCL_MASK_ROW_WORDS	= (OCCL_CELL_COLS+23)/24
+OCCL_MASK_WORDS	= OCCL_CELL_ROWS*OCCL_MASK_ROW_WORDS
+
+; One bit per full-mesh triangle.  The bitmap is cleared before every run and
+; is read by BUILD_TRIANGLES only while the prepass is armed.
+PREPASS_KILL_WORDS	= (TREX_PRIMITIVES+23)/24
 PREPASS_STATUS_WORDS	= 8
 
 ; -----------------------------------------------------------------------------
@@ -259,8 +284,9 @@ PREPASS_STATUS_WORDS	= 8
 ; widening; that is the intended failure mode here.
 ;
 ; JCLR/JSET are two-word instructions regardless and take no prefix.  So do
-; the two "jpl *+2" delay-slot skips, which have no label operand, and one
-; JSR in command_get_vertices -- see the comment there.
+; the two "jpl *+2" delay-slot skips, which have no label operand.  The
+; retired projected-vertex streamer also had one intentionally long JSR; it
+; is kept only in the historical layout note below.
 
 	org	p:$0
 
@@ -293,7 +319,13 @@ dispatch_command_low
 	; 13 = LOAD_ANIMATION_GAIT, 15 = FINISH_ANIMATED_FRAME, $7f = RESET.
 	jclr	#1,x0,dispatch_odd_bit1_clear
 	nop
-	jclr	#2,x0,command_get_vertices
+	; Command 3 was GET_VERTICES.  The span-setup record retired it from the
+	; normal path (section 4.1c) and the occlusion stage needed its program
+	; words, so it now answers ERR_BAD_COMMAND.  That is deliberate: a host
+	; that still calls it -- span_validate_enabled, or the projected-vertex
+	; fallback -- gets a wrong ack and takes its shadow path instead of
+	; deadlocking on a reply that never comes.
+	jclr	#2,x0,dispatch_bad_command
 	nop
 	jclr	#3,x0,command_load_normals
 	nop
@@ -365,7 +397,7 @@ command_ping
 
 command_load_vertices
 	jsr	<receive_word
-	move	x0,y:vertex_count
+	move	x0,y:<vertex_count
 	move	#base_vertices,r0
 
 	; Three host words per vertex.  The original T-Rex mesh has 1376 vertices;
@@ -381,7 +413,7 @@ load_vertex_loop
 
 	move	#ACK_LOAD,x0
 	jsr	<send_word
-	move	y:vertex_count,x0
+	move	y:<vertex_count,x0
 	jsr	<send_word
 	jmp	<main_loop
 
@@ -393,7 +425,7 @@ command_load_normals
 	; The host sends the full table for both mesh variants; the packed
 	; triangle indices address it directly.
 	jsr	<receive_word
-	move	x0,y:normal_count
+	move	x0,y:<normal_count
 	move	#corner_normals_y,r0
 	move	#>3*NORMAL_Y_COUNT,x0
 	do	x0,load_normal_y_loop
@@ -409,11 +441,11 @@ load_normal_y_loop
 load_normal_x_loop
 
 	move	#>1,x0
-	move	x0,y:normals_loaded
+	move	x0,y:<normals_loaded
 
 	move	#ACK_NORMALS,x0
 	jsr	<send_word
-	move	y:normal_count,x0
+	move	y:<normal_count,x0
 	jsr	<send_word
 	jmp	<main_loop
 
@@ -429,7 +461,7 @@ command_load_triangles
 	; gone: the DSP stored it and never read it, and the host looks its own
 	; copy up by source index when it builds packets.
 	jsr	<receive_word
-	move	x0,y:triangle_list_count
+	move	x0,y:<triangle_list_count
 	move	#triangle_indices,r0
 
 	do	x0,load_triangle_loop
@@ -442,11 +474,11 @@ command_load_triangles
 load_triangle_loop
 
 	move	#>1,x0
-	move	x0,y:triangles_loaded
+	move	x0,y:<triangles_loaded
 
 	move	#ACK_LOAD_TRIANGLES,x0
 	jsr	<send_word
-	move	y:triangle_list_count,x0
+	move	y:<triangle_list_count,x0
 	jsr	<send_word
 	jmp	<main_loop
 
@@ -474,14 +506,14 @@ set_translation_loop
 set_bias_loop
 
 	jsr	<receive_word
-	move	x0,y:projection_focal
-	move	x0,y:projection_focal_y
+	move	x0,y:<projection_focal
+	move	x0,y:<projection_focal_y
 	jsr	<receive_word
-	move	x0,y:projection_cx
+	move	x0,y:<projection_cx
 	jsr	<receive_word
-	move	x0,y:projection_cy
+	move	x0,y:<projection_cy
 	jsr	<receive_word
-	move	x0,y:projection_near
+	move	x0,y:<projection_near
 
 	; Light direction in CAMERA space, so the light stays put while the
 	; object turns.  The host sends a unit 1.23 vector pointing from the
@@ -498,7 +530,7 @@ set_light_loop
 
 	move	#ACK_FRAME,x0
 	jsr	<send_word
-	move	y:vertex_count,x0
+	move	y:<vertex_count,x0
 	jsr	<send_word
 	jmp	<main_loop
 
@@ -520,15 +552,15 @@ set_animated_matrix_loop
 set_animated_translation_loop
 
 	jsr	<receive_word
-	move	x0,y:projection_focal
+	move	x0,y:<projection_focal
 	jsr	<receive_word
-	move	x0,y:projection_focal_y
+	move	x0,y:<projection_focal_y
 	jsr	<receive_word
-	move	x0,y:projection_cx
+	move	x0,y:<projection_cx
 	jsr	<receive_word
-	move	x0,y:projection_cy
+	move	x0,y:<projection_cy
 	jsr	<receive_word
-	move	x0,y:projection_near
+	move	x0,y:<projection_near
 
 	move	#light_direction,r0
 	do	#LIGHT_COUNT*6+2,set_animated_light_loop
@@ -560,7 +592,7 @@ command_load_animation_gait
 	move	a1,r2
 
 	jsr	<receive_word
-	move	x0,y:animation_vertices_remaining
+	move	x0,y:<animation_vertices_remaining
 
 set_animated_gait_loop
 	jsr	<receive_animation_delta
@@ -576,10 +608,10 @@ set_animated_gait_loop
 	move	y:animation_delta_z,a
 	add	x0,a
 	move	a1,x:(r2)+
-	move	y:animation_vertices_remaining,a
+	move	y:<animation_vertices_remaining,a
 	move	#>1,x0
 	sub	x0,a
-	move	a1,y:animation_vertices_remaining
+	move	a1,y:<animation_vertices_remaining
 	tst	a
 	jne	<set_animated_gait_loop
 
@@ -600,10 +632,10 @@ command_apply_animation_target
 	add	x1,a
 	move	a1,r0
 	jsr	<receive_word
-	move	x0,y:animation_target_vertex_count
+	move	x0,y:<animation_target_vertex_count
 
-	move	y:animation_target_vertex_count,x0
-	move	x0,y:animation_vertices_remaining
+	move	y:<animation_target_vertex_count,x0
+	move	x0,y:<animation_vertices_remaining
 set_animated_target_vertex_loop
 	jsr	<receive_animation_delta
 
@@ -636,10 +668,10 @@ set_animated_target_vertex_loop
 	move	x:(r0),a
 	add	x0,a
 	move	a1,x:(r0)+
-	move	y:animation_vertices_remaining,a
+	move	y:<animation_vertices_remaining,a
 	move	#>1,x0
 	sub	x0,a
-	move	a1,y:animation_vertices_remaining
+	move	a1,y:<animation_vertices_remaining
 	tst	a
 	jne	<set_animated_target_vertex_loop
 
@@ -668,31 +700,16 @@ finish_no_prepass
 
 	move	#ACK_FRAME,x0
 	jsr	<send_word
-	move	y:vertex_count,x0
+	move	y:<vertex_count,x0
 	jsr	<send_word
 	jmp	<main_loop
 
-command_get_vertices
-	move	#ACK_VERTICES,x0
-	jsr	<send_word
-	move	y:vertex_count,x0
-	jsr	<send_word
-
-	move	y:vertex_count,x0
-	move	#projected_vertices,r0
-	do	x0,get_vertex_loop
-	jsr	<send_next_x_word
-	jsr	<send_next_x_word
-	jsr	<send_next_x_word
-	; This one JSR keeps the long form on purpose.  It sits on the loop's
-	; last address LA, and the DSP56k architecture forbids a JSR there.  As
-	; a two-word instruction only its extension word lands on LA, which is
-	; allowed; adding "<" here makes the instruction itself land on LA and
-	; the assembler rejects it with "Instruction cannot appear at last
-	; address".  Do not "fix" the missing prefix.
-	jsr	send_next_x_word
-get_vertex_loop
-	jmp	<main_loop
+; command_get_vertices lived here until the occlusion stage claimed its
+; twenty-one program words.  It streamed the whole projected-vertex array back
+; to the host, which the span-setup record made unnecessary on the normal path
+; in section 4.1c; the dispatcher now routes command 3 to dispatch_bad_command.
+; The old prepass ordered-list streamer was removed with the mode-3 dump; the
+; fixed two-word PREPASS acknowledgement is the only reply path now.
 
 command_build_triangles
 	; One chunk of up to MAX_CHUNK triangles.  BUILD_TRIANGLES acknowledges
@@ -716,6 +733,20 @@ command_build_triangles
 	; index list, while the survivor keys the host gets back stay chunk-local.
 	jsr	<receive_word
 	move	x0,y:triangle_base
+	; BUILD chunks arrive in ascending global order.  Reset the streaming
+	; kill-bitmap cursor at the first chunk of each armed frame; the cursor is
+	; kept in the otherwise-unused prepass status cells across commands.
+	move	y:prepass_armed,a
+	tst	a
+	jeq	<build_no_kill_cursor_reset
+	move	y:triangle_base,a
+	tst	a
+	jne	<build_no_kill_cursor_reset
+	move	#prepass_kill,x0
+	move	x0,x:prepass_status
+	move	#>1,x1
+	move	x1,x:prepass_status+1
+build_no_kill_cursor_reset
 
 	; The chunk's UV pairs follow the command since the corner normals
 	; displaced the resident table from X: two packed words per triangle in
@@ -759,13 +790,16 @@ triangle_count_loop
 	; sign extension would index far outside either table.
 	move	y:(r2)+,x1
 	move	y:(r2)+,y1
-	move	#>TRI_INDEX_MASK,x0
+	move	#>TRI_VERTEX_MASK,x0
 	tfr	x1,a
 	and	x0,a
 	move	a1,y:triangle_i0
 	tfr	x1,a
 	rep	#TRI_INDEX_BITS
 	lsr	a
+	; The occluder bit lands in bit 11 after this shift; mask it off or the
+	; vertex lookup reads 2,048 entries past v1.
+	and	x0,a
 	move	a1,y:triangle_i1
 	tfr	y1,a
 	and	x0,a
@@ -775,6 +809,7 @@ triangle_count_loop
 	lsr	a
 	move	a1,y:triangle_n0
 	move	y:(r2)+,y1
+	move	#>TRI_INDEX_MASK,x0
 	tfr	y1,a
 	and	x0,a
 	move	a1,y:triangle_n1
@@ -782,6 +817,38 @@ triangle_count_loop
 	rep	#TRI_INDEX_BITS
 	lsr	a
 	move	a1,y:triangle_n2
+
+	; The armed prepass has already classified and bucket-ordered this frame.
+	; Its kill bitmap is conservative and is indexed by the GLOBAL triangle
+	; number, not this chunk-local survivor key.  An unarmed DSP never reads
+	; the bitmap, so the normal shipping path remains unchanged.
+	move	y:prepass_armed,a
+	tst	a
+	jeq	<build_triangle_not_killed
+	move	x:prepass_status,x0
+	move	x0,r0
+	move	x:prepass_status+1,x1
+	move	x:(r0),a
+	and	x1,a
+	move	a1,y:span_flip
+	; Advance the streaming bit cursor inline.  This is on every armed
+	; triangle, so the call/return pair costs more than the small body.
+	move	x1,a
+	asl	a
+	move	a1,x1
+	tst	a
+	jne	<build_prepass_kill_advance_store
+	move	#>1,x1
+	move	x:prepass_status,a
+	move	#>1,x0
+	add	x0,a
+	move	a1,x:prepass_status
+build_prepass_kill_advance_store
+	move	x1,x:prepass_status+1
+	move	y:span_flip,a
+	tst	a
+	jne	<triangle_culled
+build_triangle_not_killed
 
 	jsr	<make_triangle_area
 	tst	a
@@ -815,8 +882,7 @@ triangle_count_loop
 	asl	a
 	move	y:span_slot0,x0
 	add	x0,a
-	asl	a
-	move	y:span_mid,x0
+	asl	a	y:span_mid,x0
 	add	x0,a
 	rep	#SHADE_FIELD_BITS
 	asl	a
@@ -956,23 +1022,23 @@ triangle_count_done
 command_get_status
 	move	#ACK_STATUS,x0
 	jsr	<send_word
-	move	y:vertex_count,x0
+	move	y:<vertex_count,x0
 	jsr	<send_word
-	move	y:frames_processed,x0
+	move	y:<frames_processed,x0
 	jsr	<send_word
-	move	y:triangles_processed,x0
+	move	y:<triangles_processed,x0
 	jsr	<send_word
 	jmp	<main_loop
 
 command_reset
 	clr	a
-	move	a1,y:vertex_count
-	move	a1,y:normal_count
-	move	a1,y:normals_loaded
-	move	a1,y:triangle_list_count
-	move	a1,y:triangles_loaded
-	move	a1,y:frames_processed
-	move	a1,y:triangles_processed
+	move	a1,y:<vertex_count
+	move	a1,y:<normal_count
+	move	a1,y:<normals_loaded
+	move	a1,y:<triangle_list_count
+	move	a1,y:<triangles_loaded
+	move	a1,y:<frames_processed
+	move	a1,y:<triangles_processed
 	move	#ACK_RESET,x0
 	jsr	<send_word
 	jmp	<main_loop
@@ -990,11 +1056,6 @@ receive_word
 send_word
 	jclr	#1,x:m_hsr,*
 	movep	x0,x:m_htx
-	rts
-
-send_next_x_word
-	move	x:(r0)+,x0
-	jsr	<send_word
 	rts
 
 receive_animation_delta
@@ -1019,17 +1080,15 @@ apply_animation_bias
 	; This is intentionally cheap now; the same stage is the insertion point
 	; for the T-Rex's real frame/deformation stream.
 	move	x:object_translation,x0
-	move	y:animation_bias,a
-	add	x0,a
+	move	y:<animation_bias,a
+	add	x0,a	x:object_translation+1,x0
 	move	a1,x:object_translation
 
-	move	x:object_translation+1,x0
-	move	y:animation_bias+1,a
-	add	x0,a
+	move	y:<animation_bias+1,a
+	add	x0,a	x:object_translation+2,x0
 	move	a1,x:object_translation+1
 
-	move	x:object_translation+2,x0
-	move	y:animation_bias+2,a
+	move	y:<animation_bias+2,a
 	add	x0,a
 	move	a1,x:object_translation+2
 	rts
@@ -1044,7 +1103,7 @@ transform_vertices
 	; 1000 + 1000*$7fffff into 1999 instead of 2000.  The resulting one-unit
 	; shortfall propagates into the projection and collapses vertices that
 	; should stay a pixel apart.
-	move	y:vertex_count,x0
+	move	y:<vertex_count,x0
 	move	#base_vertices,r0
 	move	#object_translation,r1
 	move	#camera_vertices,r2
@@ -1076,10 +1135,10 @@ transform_vertices
 	move	b1,x:(r2)+
 transform_loop
 
-	move	y:frames_processed,a
+	move	y:<frames_processed,a
 	move	#>1,x0
 	add	x0,a
-	move	a1,y:frames_processed
+	move	a1,y:<frames_processed
 	rts
 
 transform_animated_vertices
@@ -1087,7 +1146,7 @@ transform_animated_vertices
 	; Read each XYZ triple before overwriting it, then transform in place.  The
 	; fourth word per vertex remains free for project_vertices' backward
 	; expansion into (screen-x, screen-y, z, flags).
-	move	y:vertex_count,x0
+	move	y:<vertex_count,x0
 	move	#camera_vertices,r0
 	move	#camera_vertices,r2
 
@@ -1103,11 +1162,9 @@ transform_animated_vertices
 	move	x:object_translation,a
 	move	y:animation_vertex_x,x1
 	move	y:(r4)+,y0
-	mac	x1,y0,a
-	move	y:animation_vertex_y,x1
+	mac	x1,y0,a	y:animation_vertex_y,x1
 	move	y:(r4)+,y0
-	mac	x1,y0,a
-	move	y:animation_vertex_z,x1
+	mac	x1,y0,a	y:animation_vertex_z,x1
 	move	y:(r4)+,y0
 	mac	x1,y0,a
 	rnd	a
@@ -1116,11 +1173,9 @@ transform_animated_vertices
 	move	x:object_translation+1,a
 	move	y:animation_vertex_x,x1
 	move	y:(r4)+,y0
-	mac	x1,y0,a
-	move	y:animation_vertex_y,x1
+	mac	x1,y0,a	y:animation_vertex_y,x1
 	move	y:(r4)+,y0
-	mac	x1,y0,a
-	move	y:animation_vertex_z,x1
+	mac	x1,y0,a	y:animation_vertex_z,x1
 	move	y:(r4)+,y0
 	mac	x1,y0,a
 	rnd	a
@@ -1129,21 +1184,19 @@ transform_animated_vertices
 	move	x:object_translation+2,a
 	move	y:animation_vertex_x,x1
 	move	y:(r4)+,y0
-	mac	x1,y0,a
-	move	y:animation_vertex_y,x1
+	mac	x1,y0,a	y:animation_vertex_y,x1
 	move	y:(r4)+,y0
-	mac	x1,y0,a
-	move	y:animation_vertex_z,x1
+	mac	x1,y0,a	y:animation_vertex_z,x1
 	move	y:(r4)+,y0
 	mac	x1,y0,a
 	rnd	a
 	move	a1,x:(r2)+
 transform_animated_loop
 
-	move	y:frames_processed,a
+	move	y:<frames_processed,a
 	move	#>1,x0
 	add	x0,a
-	move	a1,y:frames_processed
+	move	a1,y:<frames_processed
 	rts
 
 project_vertices
@@ -1161,14 +1214,14 @@ project_vertices
 	; N0/N1 fold the backward stride into the last access of each record:
 	; three reads end at 3i+3, minus five reaches 3(i-1); four writes end
 	; at 4i+4, minus seven reaches 4(i-1).
-	move	y:vertex_count,a
+	move	y:<vertex_count,a
 	move	a1,x0
 	add	x0,a
 	add	x0,a
 	move	#camera_vertices-3,x0
 	add	x0,a
 	move	a1,r0				; camera + 3(n-1)
-	move	y:vertex_count,a
+	move	y:<vertex_count,a
 	move	a1,x0
 	add	x0,a
 	add	x0,a
@@ -1179,19 +1232,19 @@ project_vertices
 	move	#>-5,n0
 	move	#>-7,n1
 
-	move	y:vertex_count,x0
+	move	y:<vertex_count,x0
 	do	x0,project_loop
 	move	x:(r0)+,x1
 	move	x:(r0)+,y0
 	move	x:(r0)+n0,x0
-	move	x1,y:project_temp_x
-	move	y0,y:project_temp_y
+	move	x1,y:<project_temp_x
+	move	y0,y:<project_temp_y
 
 	; Near-plane test.  There is no triangle clipping here: a vertex closer
 	; than projection_near has its divisor clamped so the division stays
 	; well-defined, and is marked in the record's flags word.  The triangle
 	; builder drops every triangle touching such a vertex.
-	move	y:projection_near,y1
+	move	y:<projection_near,y1
 	move	x0,a
 	sub	y1,a
 	jge	<project_z_ok
@@ -1203,12 +1256,11 @@ project_z_ok
 	clr	a
 	move	a1,y:project_near_flag
 project_z_done
-	move	x0,y:project_temp_z
+	move	x0,y:<project_temp_z
 
 	; screen-x
-	move	y:projection_focal,y1
-	mpy	x1,y1,a
-	move	x0,x1
+	move	y:<projection_focal,y1
+	mpy	x1,y1,a	x0,x1
 	move	a1,y1
 	tst	a
 	jpl	*+2
@@ -1219,15 +1271,14 @@ project_z_done
 	jclr	#23,y1,*+3
 	neg	a
 	move	a0,x0
-	move	y:projection_cx,a
+	move	y:<projection_cx,a
 	add	x0,a
 	move	a1,x:(r1)+
 
 	; screen-y
-	move	y:project_temp_y,x1
-	move	y:projection_focal_y,y1
-	mpy	x1,y1,b
-	move	y:project_temp_z,x1
+	move	y:<project_temp_y,x1
+	move	y:<projection_focal_y,y1
+	mpy	x1,y1,b	y:<project_temp_z,x1
 	move	b1,y1
 	tst	b
 	jpl	*+2
@@ -1238,11 +1289,11 @@ project_z_done
 	jclr	#23,y1,*+3
 	neg	b
 	move	b0,x0
-	move	y:projection_cy,a
+	move	y:<projection_cy,a
 	add	x0,a
 	move	a1,x:(r1)+
 
-	move	y:project_temp_z,x0
+	move	y:<project_temp_z,x0
 	move	x0,x:(r1)+
 	move	y:project_near_flag,a
 	move	a1,x:(r1)+n1
@@ -1265,15 +1316,14 @@ make_triangle_zkey
 
 	move	y:triangle_z0,a
 	move	y:triangle_z1,x0
-	add	x0,a
-	move	y:triangle_z2,x0
+	add	x0,a	y:triangle_z2,x0
 	add	x0,a
 	move	a1,y:triangle_zkey
 
-	move	y:triangles_processed,a
+	move	y:<triangles_processed,a
 	move	#>1,x0
 	add	x0,a
-	move	a1,y:triangles_processed
+	move	a1,y:<triangles_processed
 	rts
 
 make_triangle_shade
@@ -1302,7 +1352,7 @@ make_triangle_shade
 	; becomes the record's face level, and the tint classifies the SUMMED
 	; channels -- the ratio test is scale-invariant, so no division by
 	; three is needed there, only the ambient constant is pre-tripled.
-	move	y:normals_loaded,a
+	move	y:<normals_loaded,a
 	tst	a
 	jeq	<shade_unlit_model
 
@@ -1324,11 +1374,11 @@ shade_depth_diff_nonneg
 shade_depth_diff_clamped
 	rep	#6
 	asl	a
-	move	a1,y:shade_depth_scale
+	move	a1,y:<shade_depth_scale
 
 	clr	a
-	move	a1,y:shade_acc_r
-	move	a1,y:shade_acc_g
+	move	a1,y:<shade_acc_r
+	move	a1,y:<shade_acc_g
 	move	#triangle_n0,r5
 	move	#corner_levels,r6
 
@@ -1377,11 +1427,9 @@ shade_corner_loaded
 	; instead of through the X/Y parallel moves transform_vertices uses.
 	move	y:shade_nx,x0
 	move	y:(r4)+,y0
-	mpy	x0,y0,a
-	move	y:shade_ny,x0
+	mpy	x0,y0,a	y:shade_ny,x0
 	move	y:(r4)+,y0
-	mac	x0,y0,a
-	move	y:shade_nz,x0
+	mac	x0,y0,a	y:shade_nz,x0
 	move	y:(r4)+,y0
 	mac	x0,y0,a
 	rnd	a
@@ -1389,11 +1437,9 @@ shade_corner_loaded
 
 	move	y:shade_nx,x0
 	move	y:(r4)+,y0
-	mpy	x0,y0,a
-	move	y:shade_ny,x0
+	mpy	x0,y0,a	y:shade_ny,x0
 	move	y:(r4)+,y0
-	mac	x0,y0,a
-	move	y:shade_nz,x0
+	mac	x0,y0,a	y:shade_nz,x0
 	move	y:(r4)+,y0
 	mac	x0,y0,a
 	rnd	a
@@ -1401,11 +1447,9 @@ shade_corner_loaded
 
 	move	y:shade_nx,x0
 	move	y:(r4)+,y0
-	mpy	x0,y0,a
-	move	y:shade_ny,x0
+	mpy	x0,y0,a	y:shade_ny,x0
 	move	y:(r4)+,y0
-	mac	x0,y0,a
-	move	y:shade_nz,x0
+	mac	x0,y0,a	y:shade_nz,x0
 	move	y:(r4)+,y0
 	mac	x0,y0,a
 	rnd	a
@@ -1425,11 +1469,9 @@ shade_corner_loaded
 	do	#LIGHT_COUNT,shade_red_loop
 	move	y:shade_cx,x0
 	move	y:(r4)+,y0
-	mpy	x0,y0,a
-	move	y:shade_cy,x0
+	mpy	x0,y0,a	y:shade_cy,x0
 	move	y:(r4)+,y0
-	mac	x0,y0,a
-	move	y:shade_cz,x0
+	mac	x0,y0,a	y:shade_cz,x0
 	move	y:(r4)+,y0
 	mac	x0,y0,a
 	rnd	a
@@ -1441,20 +1483,18 @@ shade_red_none
 shade_red_loop
 	jsr	<shade_clamp_sum
 	move	a1,x0
-	move	y:shade_depth_scale,y0
+	move	y:<shade_depth_scale,y0
 	mpy	x0,y0,a
 	rnd	a
-	move	a1,y:shade_sum_r
+	move	a1,y:<shade_sum_r
 
 	clr	b
 	do	#LIGHT_COUNT,shade_green_loop
 	move	y:shade_cx,x0
 	move	y:(r4)+,y0
-	mpy	x0,y0,a
-	move	y:shade_cy,x0
+	mpy	x0,y0,a	y:shade_cy,x0
 	move	y:(r4)+,y0
-	mac	x0,y0,a
-	move	y:shade_cz,x0
+	mac	x0,y0,a	y:shade_cz,x0
 	move	y:(r4)+,y0
 	mac	x0,y0,a
 	rnd	a
@@ -1466,10 +1506,10 @@ shade_green_none
 shade_green_loop
 	jsr	<shade_clamp_sum
 	move	a1,x0
-	move	y:shade_depth_scale,y0
+	move	y:<shade_depth_scale,y0
 	mpy	x0,y0,a
 	rnd	a
-	move	a1,y:shade_sum_g
+	move	a1,y:<shade_sum_g
 
 	; This corner's own level from its two sums, then accumulate ONE THIRD
 	; of each sum: a corner sum reaches 1.09 (see shade_clamp_sum), so the
@@ -1481,30 +1521,28 @@ shade_green_loop
 	; accumulator the corner MEAN outright.
 	jsr	<shade_quantize_level
 	move	a1,y:(r6)+
-	move	y:shade_sum_r,x0
+	move	y:<shade_sum_r,x0
 	move	#>$2aaaab,y0			; 1/3
 	mpy	x0,y0,a
-	rnd	a
-	move	y:shade_acc_r,x0
+	rnd	a	y:<shade_acc_r,x0
 	add	x0,a
 	move	#>$7fffff,x0
 	cmp	x0,a
 	jle	<shade_acc_r_ok
 	move	x0,a
 shade_acc_r_ok
-	move	a1,y:shade_acc_r
-	move	y:shade_sum_g,x0
+	move	a1,y:<shade_acc_r
+	move	y:<shade_sum_g,x0
 	move	#>$2aaaab,y0
 	mpy	x0,y0,a
-	rnd	a
-	move	y:shade_acc_g,x0
+	rnd	a	y:<shade_acc_g,x0
 	add	x0,a
 	move	#>$7fffff,x0
 	cmp	x0,a
 	jle	<shade_acc_g_ok
 	move	x0,a
 shade_acc_g_ok
-	move	a1,y:shade_acc_g
+	move	a1,y:<shade_acc_g
 	nop
 shade_corner_loop
 
@@ -1513,12 +1551,12 @@ shade_corner_loop
 	; the flat-consuming host sees the corner mean where it used to see
 	; the face normal's level.  Brightness still comes from the DIRECT
 	; light only, so the ambient floor does not eat the 16-step range.
-	move	y:shade_acc_r,x0
-	move	x0,y:shade_sum_r
-	move	y:shade_acc_g,x0
-	move	x0,y:shade_sum_g
+	move	y:<shade_acc_r,x0
+	move	x0,y:<shade_sum_r
+	move	y:<shade_acc_g,x0
+	move	x0,y:<shade_sum_g
 	jsr	<shade_quantize_level
-	move	a1,y:shade_level
+	move	a1,y:<shade_level
 
 	; Tint class: how red the face's own light is, as three threshold tests
 	; on R/G without a division.  R is halved and the thresholds are stored
@@ -1527,40 +1565,40 @@ shade_corner_loop
 	; term in the scene.
 	; The tint classifies the corner-MEAN sums, so the plain ambient keeps
 	; exactly the face model's weighting against the direct term.
-	move	y:shade_acc_r,a
-	move	y:light_ambient,x0
+	move	y:<shade_acc_r,a
+	move	y:<light_ambient,x0
 	add	x0,a
 	asr	a
-	move	a1,y:shade_ratio_r
-	move	y:shade_acc_g,a
-	move	y:light_ambient+1,x0
+	move	a1,y:<shade_ratio_r
+	move	y:<shade_acc_g,a
+	move	y:<light_ambient+1,x0
 	add	x0,a
-	move	a1,y:shade_ratio_g
+	move	a1,y:<shade_ratio_g
 
 	clr	a
-	move	a1,y:triangle_tint
+	move	a1,y:<triangle_tint
 	move	#tint_thresholds,r4
 	do	#TINT_COUNT-1,shade_tint_loop
-	move	y:shade_ratio_g,x0
+	move	y:<shade_ratio_g,x0
 	move	y:(r4)+,y0
 	mpy	x0,y0,a
 	rnd	a
 	move	a1,x1
-	move	y:shade_ratio_r,a
+	move	y:<shade_ratio_r,a
 	cmp	x1,a
 	jlt	<shade_tint_below
-	move	y:triangle_tint,a
+	move	y:<triangle_tint,a
 	move	#>1,x0
 	add	x0,a
-	move	a1,y:triangle_tint
+	move	a1,y:<triangle_tint
 shade_tint_below
 	nop
 shade_tint_loop
 
-	move	y:triangle_tint,a
+	move	y:<triangle_tint,a
 	rep	#SHADE_BITS
 	asl	a
-	move	y:shade_level,x0
+	move	y:<shade_level,x0
 	add	x0,a
 	move	a1,y:triangle_shade
 	rts
@@ -1585,10 +1623,9 @@ shade_quantize_level
 	; Luminance of the sums in shade_sum_r/g, clamped and quantized to a
 	; SHADE_BITS level in a1.  Shared by the three corner passes and the
 	; mean-level computation; clobbers x0, y0 and a.
-	move	y:shade_sum_r,x0
+	move	y:<shade_sum_r,x0
 	move	#>$2cccbb,y0			; 0.299
-	mpy	x0,y0,a
-	move	y:shade_sum_g,x0
+	mpy	x0,y0,a	y:<shade_sum_g,x0
 	move	#>$59ba5e,y0			; 0.701
 	mac	x0,y0,a
 	rnd	a
@@ -1611,9 +1648,9 @@ shade_unlit_model
 	; lighting the model with whatever happens to be in Y memory.
 	move	#>SHADE_MAX,a
 	move	a1,y:triangle_shade
-	move	a1,y:corner_levels
-	move	a1,y:corner_levels+1
-	move	a1,y:corner_levels+2
+	move	a1,y:<corner_levels
+	move	a1,y:<corner_levels+1
+	move	a1,y:<corner_levels+2
 	rts
 
 lookup_projected_xy
@@ -1695,10 +1732,10 @@ tri_near_ok
 
 	move	y:tri_dx01,x0
 	move	y:tri_dy02,y0
-	mpy	x0,y0,a
-	move	y:tri_dy01,x0
+	mpy	x0,y0,a	y:tri_dy01,x0
 	move	y:tri_dx02,y0
 	mac	-x0,y0,a
+	move	a1,y:<prepass_occl_word_offset
 	; MPY/MAC uses the fractional accumulator format, whose non-zero low word
 	; would otherwise survive into the caller's integer loop counter.  The
 	; result is normalized to a clean scalar -- but to +1/-1/0, not +1/0: the
@@ -2021,11 +2058,9 @@ span_sl_low_store
 	; shifts complete the <<8 in span_div's doubled convention.
 	move	y:span_su0,x0
 	move	y:span_k0,y0
-	mpy	x0,y0,a
-	move	y:span_su1,x0
+	mpy	x0,y0,a	y:span_su1,x0
 	move	y:span_k1,y0
-	mac	x0,y0,a
-	move	y:span_su2,x0
+	mac	x0,y0,a	y:span_su2,x0
 	move	y:span_k2,y0
 	mac	x0,y0,a
 	rep	#8
@@ -2036,11 +2071,9 @@ span_sl_low_store
 
 	move	y:span_sv0,x0
 	move	y:span_k0,y0
-	mpy	x0,y0,a
-	move	y:span_sv1,x0
+	mpy	x0,y0,a	y:span_sv1,x0
 	move	y:span_k1,y0
-	mac	x0,y0,a
-	move	y:span_sv2,x0
+	mac	x0,y0,a	y:span_sv2,x0
 	move	y:span_k2,y0
 	mac	x0,y0,a
 	rep	#8
@@ -2053,11 +2086,9 @@ span_sl_low_store
 	; sorted corner levels, so the result is level units in Q4.8.
 	move	y:span_sl0,x0
 	move	y:span_k0,y0
-	mpy	x0,y0,a
-	move	y:span_sl1,x0
+	mpy	x0,y0,a	y:span_sl1,x0
 	move	y:span_k1,y0
-	mac	x0,y0,a
-	move	y:span_sl2,x0
+	mac	x0,y0,a	y:span_sl2,x0
 	move	y:span_k2,y0
 	mac	x0,y0,a
 	rep	#8
@@ -2320,7 +2351,9 @@ command_prepass
 	nop
 	jclr	#0,x0,prepass_run_now
 	nop
-	jmp	<prepass_dump
+	; Mode 3 is retained as a second run-now selector for old measurement
+	; binaries.  It has the same fixed two-word reply as mode 2.
+	jmp	<prepass_run_now
 
 prepass_arm
 	; Modes 0 and 1 share one path because the flag IS the mode word.
@@ -2332,44 +2365,18 @@ prepass_arm
 prepass_run_now
 	jsr	<prepass_run
 prepass_ack_exit
-	jsr	<prepass_send_ack
-	jmp	<main_loop
-
-prepass_dump
-	; Mode 3 appends the raw order list to the two-word acknowledgement,
-	; one packed entry per survivor.  The host learns the length from the
-	; acknowledgement and sizes its second Dsp_BlkUnpacked from it, exactly
-	; as it does for the BUILD ack -- a fixed oversized read would jam the
-	; port.  An overrun leaves a negative survivor count and sends nothing.
-	jsr	<prepass_send_ack
-	move	y:prepass_surv,a
-	tst	a
-	jle	<prepass_dump_exit
-	move	a1,x0
-	move	#prepass_order,r0
-	nop
-	do	x0,prepass_dump_loop
-	jsr	<send_next_x_word
-	nop
-prepass_dump_loop
-prepass_dump_exit
-	jmp	<main_loop
-
-prepass_send_ack
-	; Always exactly two words, whatever the mode, so the host's receive
-	; size never depends on what the DSP decided to do.
 	move	#ACK_PREPASS,x0
 	jsr	<send_word
 	move	y:prepass_surv,x0
 	jsr	<send_word
-	rts
+	jmp	<main_loop
 
 prepass_run
 	; make_triangle_zkey bumps y:triangles_processed, which CMD_GET_STATUS
 	; reports.  Save it here and restore it on every exit path, otherwise
-	; an armed run silently inflates the host's status figure by 1,600 per
+	; an armed run silently inflates the host's status figure by 2,724 per
 	; frame.
-	move	y:triangles_processed,a
+	move	y:<triangles_processed,a
 	move	a1,y:prepass_tp_save
 
 	clr	a
@@ -2402,7 +2409,7 @@ prepass_run
 	move	#triangle_indices,r2
 	move	#2,n2
 	move	#prepass_order,r1
-	move	y:triangle_list_count,x0
+	move	y:<triangle_list_count,x0
 	tfr	x0,a
 	tst	a
 	jeq	<prepass_restore
@@ -2414,13 +2421,16 @@ prepass_run
 	; B is being fetched.
 	move	y:(r2)+,x1
 	move	y:(r2)+n2,y1
-	move	#>TRI_INDEX_MASK,x0
+	move	#>TRI_VERTEX_MASK,x0
 	tfr	x1,a
 	and	x0,a
 	move	a1,y:triangle_i0
 	tfr	x1,a
 	rep	#TRI_INDEX_BITS
 	lsr	a
+	; Bit 11 here is the occluder qualification, not part of v1.  Word A is
+	; still in X1 for the stage that reads that flag.
+	and	x0,a
 	move	a1,y:triangle_i1
 	tfr	y1,a
 	and	x0,a
@@ -2477,11 +2487,11 @@ prepass_run
 	jge	<prepass_class_full
 
 	; Entry E = (triangle index << TRI_INDEX_BITS) | bucket.  The index is
-	; below 1,600 and the bucket below 2,048, so bit 11 stays clear and
-	; bit 23 never sets: LSR is correct on E and the six-bit digit masks
-	; below are exact.
+	; below 2,724 and the bucket below 2,048.  The index can set bit 23 in E,
+	; but the logical shifts and six-bit digit masks below operate on the raw
+	; packed word and remain exact.
 	move	a1,x0
-	; R3 is 16 bits and the index stays below 1,600, so whichever way the
+	; R3 is 16 bits and the index stays below 2,724, so whichever way the
 	; register-to-register move extends it the low 16 bits are the value
 	; and A1 holds it.  A2 does not matter either: the shift below feeds
 	; A1 from A1 and A0, and only A1 is stored.
@@ -2528,6 +2538,8 @@ prepass_run
 prepass_class_full
 	; Any non-zero value marks the run as overrun, and X0 still holds
 	; PREPASS_MAX -- cheaper than loading a literal 1.
+	move	#>$ffffff,a
+	move	a1,y:prepass_surv
 	move	x0,y:prepass_flow
 
 prepass_class_next
@@ -2546,7 +2558,7 @@ prepass_class_end
 	; to a frame without the prepass.
 	move	y:prepass_flow,a
 	tst	a
-	jne	<prepass_overflowed
+	jne	<prepass_restore
 	move	y:prepass_surv,a
 	tst	a
 	jeq	<prepass_restore
@@ -2629,19 +2641,352 @@ prepass_scatter_lo_end
 	move	a1,x:(r4)
 prepass_scatter_hi_end
 
+	; The list is now exact near-to-far order.  Stage 2 tests each survivor
+	; against sealed coverage and stage 3 stamps only qualified, still-visible
+	; triangles into the pending mask.  BUILD consumes the resulting global
+	; kill bitmap; the sorted list itself remains an internal DSP worklist.
+	jsr	<prepass_occlusion
+
 prepass_restore
 	move	y:prepass_tp_save,a
-	move	a1,y:triangles_processed
+	move	a1,y:<triangles_processed
 	rts
 
-prepass_overflowed
-	move	#>$ffffff,a
-	move	a1,y:prepass_surv
-	move	y:prepass_overflow,a
-	move	#>1,x0
+; The sorted list is walked once from bucket 0 (nearest) to bucket 2047
+; (farthest).  `seal` contains only complete cells from earlier buckets;
+; `pending` contains cells stamped by the current bucket.  A pending mask is
+; merged only when the next entry changes bucket, which is the ordering rule
+; that makes the result independent of the host's LIFO order within a bucket.
+prepass_occlusion
+	move	y:prepass_surv,a
+	tst	a
+	jeq	<prepass_occlusion_done
+	move	a1,x0
+	clr	a
+	move	#prepass_order,r1
+	move	#prepass_scratch,r0
+	rep	#(OCCL_MASK_WORDS*2)
+	move	a1,x:(r0)+
+	move	#>OT_LENGTH,a
+	move	a1,y:<prepass_occl_flow
+	do	x0,prepass_occlusion_loop_end
+
+prepass_occlusion_loop
+	move	x:(r1)+,a
+	tfr	a,b
+	move	#>PREPASS_ENTRY_BUCKET_MASK,x0
+	and	x0,b
+	move	b1,y:<prepass_occl_base
+	rep	#TRI_INDEX_BITS
+	lsr	a
+	move	a1,y:<prepass_occl_index
+
+	; The first entry has a negative previous-bucket sentinel.  On later
+	; changes, seal the completed bucket before testing the new one.  The
+	; merge also clears pending, so the two masks stay paired at the
+	; boundary without a second full-mask pass here.
+	move	y:<prepass_occl_flow,x0
+	cmp	x0,b
+	jeq	<prepass_occlusion_same_bucket
+	move	b1,y:<prepass_occl_flow
+	jsr	<prepass_merge_masks
+prepass_occlusion_same_bucket
+	move	y:<prepass_occl_index,x0
+	jsr	<prepass_load_triangle
+	jsr	<make_triangle_area
+	jsr	<make_triangle_bbox
+	; The third directed edge is derived once; the four-corner stamp reuses
+	; these two deltas for every cell corner.
+	move	y:tri_dx02,a
+	move	y:tri_dx01,x0
+	sub	x0,a	y:tri_dy01,x0
+	move	a1,y:<prepass_occl_dx12
+	move	y:tri_dy02,a
+	sub	x0,a
+	move	a1,y:<prepass_occl_dy12
+	; triangle_count is the cell-walk mode: zero queries seal, one stamps
+	; pending.  Keep the qualification bit in span_flip across the query.
+	move	y:<prepass_occl_mode,a
+	move	a1,y:<prepass_occl_aux
+	clr	a
+	move	a1,y:<prepass_occl_mode
+	move	#prepass_scratch,r0
+	jsr	<prepass_mask_walk
+	tst	a
+	jne	<prepass_occlusion_kill
+
+	; A visible qualified triangle is the only thing allowed to add coverage
+	; to this bucket's pending mask.  A killed triangle cannot occlude a later
+	; triangle because it contributed no visible pixels.
+	move	y:<prepass_occl_aux,a
+	tst	a
+	jeq	<prepass_occlusion_next
+	move	#>1,a
+	move	a1,y:<prepass_occl_mode
+	move	#prepass_scratch+OCCL_MASK_WORDS,r0
+	jsr	<prepass_mask_walk
+	jmp	<prepass_occlusion_next
+
+prepass_occlusion_kill
+	jsr	<prepass_set_kill
+
+prepass_occlusion_next
+	nop
+prepass_occlusion_loop_end
+prepass_occlusion_done
+	rts
+
+; Reload one resident triangle.  X0 is the triangle number on entry.  The
+; flag in word A becomes the prepass mode (0/1); only vertex fields are needed
+; by this stage, so word C is skipped entirely.
+prepass_load_triangle
+	move	x0,a
 	add	x0,a
-	move	a1,y:prepass_overflow
-	jmp	<prepass_restore
+	add	x0,a
+	move	#triangle_indices,x0
+	add	x0,a	a1,r2
+	nop
+	move	y:(r2)+,x1
+	move	y:(r2)+,y1
+	move	#>TRI_VERTEX_MASK,x0
+	tfr	x1,a
+	and	x0,a
+	move	a1,y:triangle_i0
+	tfr	x1,a
+	rep	#TRI_INDEX_BITS
+	lsr	a
+	and	x0,a
+	move	a1,y:triangle_i1
+	tfr	y1,a
+	and	x0,a
+	move	a1,y:triangle_i2
+	clr	a
+	jclr	#TRI_OCCLUDER_BIT,x1,prepass_load_not_occluder
+	nop
+	move	#>1,a
+	; fall through to the common mode store
+prepass_load_not_occluder
+prepass_load_done
+	move	a1,y:<prepass_occl_mode
+	rts
+
+; Convert triangle_count (a global triangle number) to a kill-word pointer
+; and one-hot bit.  Repeated subtraction is only paid for a kill/query and
+; keeps the common BUILD test small without another resident table.
+prepass_kill_address
+	move	#>prepass_kill,b
+	move	#>24,x0
+	move	#>1,x1
+prepass_kill_word_loop
+	cmp	x0,a
+	jlt	<prepass_kill_word_done
+	sub	x0,a
+	add	x1,b
+	jmp	<prepass_kill_word_loop
+prepass_kill_word_done
+	move	b1,r0
+	move	a1,x0
+	tst	a
+	jeq	<prepass_kill_bit_done
+	do	x0,prepass_kill_bit_end
+	move	x1,a
+	asl	a
+	move	a1,x1
+	nop
+prepass_kill_bit_end
+prepass_kill_bit_done
+	rts
+
+prepass_set_kill
+	; The packed order entry stores (triangle_index << 12) | bucket.
+	; prepass_occl_base is the bucket used for bucket-boundary sealing; it
+	; must not be added to the global triangle index when addressing the kill
+	; bitmap.  Adding it shifted every kill onto a different source triangle.
+	move	y:<prepass_occl_index,a
+	jsr	<prepass_kill_address
+	move	x:(r0),a
+	or	x1,a
+	move	a1,x:(r0)
+	rts
+
+; Common cell operation and walk.  triangle_count=0 queries seal and
+; triangle_count=1 tests the four corners and stamps pending.  Outside cells
+; are a no-op in either mode, so one cursor loop serves both stages.
+prepass_mask_cell
+	move	y:<prepass_occl_cell_sy,a
+	move	y:tri_ymax,y1
+	cmp	y1,a
+	jgt	<prepass_mask_cell_outside
+	move	#>3,x0
+	add	x0,a	y:tri_ymin,y1
+	cmp	y1,a
+	jlt	<prepass_mask_cell_outside
+	move	y:<prepass_occl_cell_sx,a
+	move	y:tri_xmax,y1
+	cmp	y1,a
+	jgt	<prepass_mask_cell_outside
+	add	x0,a	y:tri_xmin,y1
+	cmp	y1,a
+	jlt	<prepass_mask_cell_outside
+	move	y:<prepass_occl_mode,a
+	tst	a
+	jne	<prepass_stamp_cell
+	move	x:(r0),a
+	and	x1,a
+	tst	a
+	jeq	<prepass_mask_cell_uncovered
+prepass_mask_cell_done
+	move	#>1,a
+	rts
+prepass_mask_cell_uncovered
+	clr	a
+	move	a1,y:<prepass_occl_found
+	rts
+prepass_mask_cell_outside
+	clr	a
+	rts
+
+prepass_stamp_cell
+	move	y:<prepass_occl_cell_sx,a
+	move	a1,y:<prepass_occl_point_sx
+	move	y:<prepass_occl_cell_sy,a
+	move	a1,y:<prepass_occl_point_sy
+	jsr	<prepass_point_inside
+	tst	a
+	jeq	<prepass_mask_cell_done
+	move	y:<prepass_occl_cell_sx,a
+	move	#>3,x0
+	add	x0,a
+	move	a1,y:<prepass_occl_point_sx
+	jsr	<prepass_point_inside
+	tst	a
+	jeq	<prepass_mask_cell_done
+	move	y:<prepass_occl_cell_sy,a
+	move	#>3,x0
+	add	x0,a
+	move	a1,y:<prepass_occl_point_sy
+	jsr	<prepass_point_inside
+	tst	a
+	jeq	<prepass_mask_cell_done
+	move	y:<prepass_occl_cell_sx,a
+	move	a1,y:<prepass_occl_point_sx
+	jsr	<prepass_point_inside
+	tst	a
+	jeq	<prepass_mask_cell_done
+	move	x:(r0),a
+	or	x1,a
+	move	a1,x:(r0)
+	move	#>1,a
+	rts
+
+prepass_mask_walk
+	clr	a
+	move	a1,y:<prepass_occl_cell_sx
+	move	a1,y:<prepass_occl_cell_sy
+	move	#>1,a
+	move	a1,y:<prepass_occl_found
+	; Sixty cells are 12 + 24 + 24 bits.  Starting each row at bit 12
+	; makes the final 24-cell word wrap naturally into the next row, so no
+	; fourth padded word or row-boundary pointer fixup is needed.
+	move	#>$1000,x1
+	move	#>OCCL_CELL_COLS*OCCL_CELL_ROWS,x0
+	do	x0,prepass_mask_loop_end
+	jsr	<prepass_mask_cell
+	jsr	<prepass_cell_advance
+	nop
+prepass_mask_loop_end
+	move	y:<prepass_occl_found,a
+	rts
+
+; Advance the cell cursor and the mask pointer.  A=1 means a row ended; the
+; caller uses the row counter to stop after all 56 rows.  The point routine
+; deliberately leaves X1 and R0 untouched, so the same cursor serves both
+; the query and stamp walks.
+prepass_cell_advance
+	move	y:<prepass_occl_cell_sx,a
+	move	#>4,x0
+	add	x0,a
+	move	a1,y:<prepass_occl_cell_sx
+	move	x1,a
+	asl	a
+	move	a1,x1
+	tst	a
+	jne	<prepass_cell_no_word
+	move	x:(r0)+,a
+	move	#>1,x1
+prepass_cell_no_word
+	move	y:<prepass_occl_cell_sx,a
+	move	#>240,x0
+	cmp	x0,a
+	jne	<prepass_cell_continue
+	clr	a
+	move	a1,y:<prepass_occl_cell_sx
+	move	y:<prepass_occl_cell_sy,a
+	move	#>4,x0
+	add	x0,a
+	move	a1,y:<prepass_occl_cell_sy
+	move	#>$1000,x1
+	rts
+prepass_cell_continue
+	clr	a
+	rts
+
+; seal |= pending, one word per mask cell.  The pending mask itself is
+; cleared here at the same bucket boundary.
+prepass_merge_masks
+	move	#prepass_scratch,r0
+	move	#prepass_scratch+OCCL_MASK_WORDS,r2
+	move	#>OCCL_MASK_WORDS,x0
+	do	x0,prepass_merge_done
+	move	x:(r0),a
+	move	x:(r2)+,x0
+	or	x0,a
+	move	a1,x:(r0)+
+	clr	a
+	move	a1,x:(r2)+
+prepass_merge_done
+	rts
+
+; Point-in-triangle test for the current point (span_sx1, span_sy1).  The
+; front-facing area is negative, so all three directed edge signs must be
+; non-positive.  MPY/MAC supplies the cross products in the DSP fractional
+; domain; only their signs matter and no integer conversion is performed.
+prepass_point_inside
+	move	y:<prepass_occl_point_sy,a
+	move	y:tri_y0,x0
+	sub	x0,a	y:tri_dx01,x0
+	move	a1,y0
+	move	y:tri_dy01,y1
+	mpy	x0,y0,a	y:<prepass_occl_point_sx,b
+	move	y:tri_x0,x0
+	sub	x0,b
+	move	b1,y0
+	mac	-y1,y0,a
+	move	a1,y:<prepass_occl_col_end
+	tst	a
+	jgt	<prepass_point_outside
+	move	y:<prepass_occl_point_sy,a
+	move	y:tri_y1,x0
+	sub	x0,a	y:<prepass_occl_point_sx,b
+	move	a1,y0
+	move	y:tri_x1,x0
+	sub	x0,b	y:<prepass_occl_dx12,x0
+	mpy	x0,y0,a
+	move	b1,y0
+	move	y:<prepass_occl_dy12,y1
+	mac	-y1,y0,a
+	tst	a
+	jgt	<prepass_point_outside
+	move	y:<prepass_occl_col_end,x0
+	add	x0,a
+	move	y:<prepass_occl_word_offset,x0
+	cmp	x0,a
+	jlt	<prepass_point_outside
+	move	#>1,a
+	rts
+prepass_point_outside
+	clr	a
+	rts
 
 ; -----------------------------------------------------------------------------
 ; X memory
@@ -2694,23 +3039,19 @@ triangle_out
 ; exists in the LOD build and vanishes under -DTREX_FULL_MESH) and not from
 ; Y:$0100-$01FF (whose mapping the sources contradict each other about).
 ;
-; prepass_scratch is PHASE-LOCAL: it overlays chunk_uvs and triangle_out,
-; which are dead until the first BUILD chunk of the frame arrives.  It holds
-; only the intermediate list between the two radix passes, so the first BUILD
-; chunk is free to destroy it -- but that also means CMD_PREPASS must not be
-; issued once chunk traffic for the frame has started.
-;
-; prepass_order lies entirely above the old layout end at X:$3C5E and so
-; survives the BUILD chunks: the sorted list is still there when a later stage
-; wants to read it.  prepass_kill and prepass_status sit above it for the same
-; reason.  The 560 words a 120x112 two-by-two coverage mask would need fit in
-; prepass_scratch without moving any address in this block.
+; prepass_order is PHASE-LOCAL: it overlays chunk_uvs and triangle_out,
+; which are dead until the first BUILD chunk of the frame arrives.  The sorted
+; list is consumed completely by the occlusion sweep before the first BUILD,
+; so it does not need to survive chunk traffic.  prepass_scratch is the
+; external-X work area above the old layout end; it holds the intermediate
+; radix list and the two coverage masks.  prepass_kill and prepass_status also
+; live there and survive the BUILD chunks.
 ; -----------------------------------------------------------------------------
 	org	x:chunk_uvs
 
-prepass_scratch
-	ds	PREPASS_MAX
 prepass_order
+	ds	PREPASS_MAX
+prepass_scratch
 	ds	PREPASS_MAX
 prepass_kill
 	ds	PREPASS_KILL_WORDS
@@ -3001,6 +3342,26 @@ span_dll_low
 span_flip
 	ds	1
 
+; The prepass runs after projection and before BUILD_TRIANGLES, so the
+; animation/projection temporaries are dead for its whole lifetime.  Aliasing
+; its hot cursor fields onto the on-chip Y:$0028-$003F window keeps the new
+; references in the one-word short form; no value crosses the command
+; boundary and the normal shipping path never observes these aliases.
+prepass_occl_base	= shade_acc_r
+prepass_occl_index	= shade_acc_g
+prepass_occl_mode	= corner_levels+1
+prepass_occl_dx12	= shade_ratio_r
+prepass_occl_dy12	= shade_ratio_g
+prepass_occl_aux	= triangle_tint
+prepass_occl_cell_sx	= projection_focal
+prepass_occl_cell_sy	= projection_focal_y
+prepass_occl_point_sx	= projection_cx
+prepass_occl_point_sy	= projection_cy
+prepass_occl_col_end	= projection_near
+prepass_occl_found	= animation_target_vertex_count
+prepass_occl_word_offset	= animation_vertices_remaining
+prepass_occl_flow	= project_temp_x
+
 ; Occlusion prepass state.  The two counter banks MUST stay here in on-chip
 ; Y RAM: they are read and written twice per survivor and 96 times per prefix
 ; pass, while X and Y above $01FF are external SRAM with wait states.  These
@@ -3027,7 +3388,7 @@ prepass_overflow
 ; cell: it lives in R3 for the length of the classification loop.
 prepass_tp_save
 	ds	1
-	ds	5
+	ds	4
 
 ; -----------------------------------------------------------------------------
 ; Large Y allocations and the P-memory overlay
@@ -3061,10 +3422,25 @@ prepass_tp_save
 ;   tr -d '\r' < TREX/dsp/trex_dsp.lod | awk '/^_DATA P/{s=$3;n=0;i=1;next} \
 ;     /^_/{if(i)printf "letzte P = $%04X\n",("0x" s)+n-1;i=0;next} {if(i)n+=NF}'
 ;
-; The program currently ends at P:$090D, so $090E..$09BF -- 178 words -- are
-; free.  166 of those came from forcing short absolute addressing on every
-; jump to a label; see the note at "Program entry".  Keep the "<" prefix on
-; jumps that get added later, or the headroom erodes one word at a time.
+; The current full-mesh program ends at P:$09BA, leaving P:$09BB-$09BF free
+; before the resident indices.  Keep the "<" prefix on jumps and the short
+; Y-scalar forms on any code added later, or the program will overwrite the
+; first triangle indices without an assembler error.
+; Absolute-short addressing is the largest single contributor: every data
+; reference to a Y scalar below $40 carries the "<" prefix, which is the
+; one-word form.  ASM56000 sizes an absolute data address long by default,
+; exactly as it does a jump, so the prefix is mandatory and its absence is
+; silent -- keep it on new references to those cells, and note the range is
+; addresses 0..63 only.
+;
+; Four later movements: the eleven-bit vertex masking the occluder
+; qualification bit needs cost four words, retiring command_get_vertices for
+; the occlusion stage returned eighteen, and folding twenty-seven standalone
+; memory loads into the ALU operation in front of them returned twenty-seven
+; more, and forcing absolute-short data addressing returned 103 -- see
+; OPTIMIZATION.md 2.3d.  A parallel move reads its source at the
+; start of the instruction, so only loads whose source the ALU op does not
+; write may be folded, and a rep/do target must stay one word.
 ; -----------------------------------------------------------------------------
 
 	org	y:$09c0
