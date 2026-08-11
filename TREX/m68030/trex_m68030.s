@@ -5018,7 +5018,7 @@ trex_texture_page_30_end
 ; One host-owned byte per source triangle.  A value of one permits the
 ; flag-free word-CLUT path for a normal textured packet.  The table follows
 ; all TIM payloads deliberately: adding it cannot move the measured texture
-; block's unpinned phase.  tools/o3d2opaque.py owns the proof and
+; block's unpinned phase.  tools/o3d2opaque.js owns the proof and
 ; tools/opaque_selftest.py cross-checks recorded rasterizer drops.
 trex_opaque_triangle_data
 	ifd	TREX_FULL_MESH

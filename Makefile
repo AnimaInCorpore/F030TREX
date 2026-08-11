@@ -100,11 +100,11 @@ TREX_TEXTURE_DEPS = ./TREX/textures/trex_texture_page_10.tim \
 # One host-owned byte per source triangle.  A set byte proves that every
 # conservatively reachable palette word is non-zero, so a normal textured
 # packet may use the flag-free 16-bit CLUT.  This never widens the DSP record.
-./TREX/model/trex_opaque.bin: ./TREX/model/trex.o3d ./tools/o3d2opaque.py $(TREX_TEXTURE_DEPS)
-	python3 tools/o3d2opaque.py $< ./TREX/textures $@
+./TREX/model/trex_opaque.bin: ./TREX/model/trex.o3d ./tools/o3d2opaque.js $(TREX_TEXTURE_DEPS)
+	node tools/o3d2opaque.js $< ./TREX/textures $@
 
-./TREX/model/trex_lod_opaque.bin: ./TREX/model/trex_lod.o3d ./tools/o3d2opaque.py $(TREX_TEXTURE_DEPS)
-	python3 tools/o3d2opaque.py $< ./TREX/textures $@
+./TREX/model/trex_lod_opaque.bin: ./TREX/model/trex_lod.o3d ./tools/o3d2opaque.js $(TREX_TEXTURE_DEPS)
+	node tools/o3d2opaque.js $< ./TREX/textures $@
 
 TREX_MESH_DEPS = ./TREX/model/trex_lod.o3d ./TREX/model/trex_lod.inc \
 	./TREX/model/trex_lod_facenormals.bin ./TREX/model/trex_lod_facecolors.bin \
@@ -198,7 +198,7 @@ TREX_MESH_DEPS = ./TREX/model/trex_lod.o3d ./TREX/model/trex_lod.inc \
 # git and rebuilding it needs DOSBox plus the DOS-era assembler in
 # tools/asm56k, which most checkouts will not have (see the rule for it
 # above); deleting it here would strand anyone without DOSBox. Everything
-# else below is cheaply regenerable with only node/python3, or is copied
+# else below is cheaply regenerable with only node, or is copied
 # from that file by the build.
 clean:
 	rm -f ./TREX/model/trex_facenormals.bin

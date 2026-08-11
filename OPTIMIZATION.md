@@ -1503,7 +1503,7 @@ branch for every sample even when their source triangle could never reach a
 zero PS1 palette word.  The new host-owned qualification closes that branch
 without changing the DSP wire record or the potentially-transparent path:
 
-- [`tools/o3d2opaque.py`](tools/o3d2opaque.py) reads the authoritative TIM
+- [`tools/o3d2opaque.js`](tools/o3d2opaque.js) reads the authoritative TIM
   pixel data and little-endian CLUT words.  Five pages contain no invalid
   referenced palette word and qualify in full.  On holed page 10 it computes
   an integer-only closed texel-cell/affine-UV-triangle intersection and then a

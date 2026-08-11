@@ -129,7 +129,7 @@ TRI_INDEX_MASK	= $000fff
 ; top bit of each is spare.  The occluder qualification the occlusion stage
 ; needs -- may this triangle's coverage seal anything, i.e. does it write
 ; opaquely everywhere -- rides in the v1 field's spare bit, which is bit 23 of
-; word A.  It is host-owned (tools/o3d2opaque.py, the same sidecar the packet
+; word A.  It is host-owned (tools/o3d2opaque.js, the same sidecar the packet
 ; builder reads for OPAQUE_PACKET_BIT) and costs no memory here: the DSP has
 ; neither an X nor a Y word left for the full-mesh 114-word resident bitmap.
 ;

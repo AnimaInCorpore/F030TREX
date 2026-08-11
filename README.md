@@ -7,7 +7,7 @@ an M68030 software rasterizer, targeting a 240x224 render surface inside a
 
 ## Building
 
-Requirements: `node`, `python3`, a C compiler/`make` for vasm and vlink
+Requirements: `node`, a C compiler/`make` for vasm and vlink
 (built from the bundled tarballs), and optionally DOSBox to rebuild the DSP
 program.
 
@@ -20,7 +20,7 @@ source:
 
 ```sh
 make trex_m68030_run    # no per-frame GEMDOS writes (for viewing)
-make trex_m68030_full   # the full 2,724-triangle mesh instead of the 1,600-triangle LOD
+make trex_m68030_full   # the 2,724-triangle mesh
 ```
 
 `TREX/dsp/trex_dsp.lod` is checked in prebuilt; `make trex_m68030` needs no
@@ -30,6 +30,17 @@ does:
 ```sh
 make DOSBOX=/Applications/dosbox.app/Contents/MacOS/DOSBox trex_dsp
 ```
+
+## Running in Hatari
+
+Use a Falcon configuration with TOS 4.02, 4 MB of ST-RAM, and DSP emulation
+enabled. Mount `TREX/m68030` as the emulated GEMDOS drive and auto-start
+`TREX_RUN.TOS`; the adjacent `trex_dsp.lod` must remain in that directory.
+
+TOS 4.04 is not compatible with the current DSP load path: the program can
+reach its video-mode setup, but the DSP remains closed, no triangle packets
+are produced, and the display stays black. This is a TOS/DSP startup issue,
+not an empty framebuffer or a renderer timing failure.
 
 ## Required reading
 
@@ -48,7 +59,6 @@ commands you can run here.
 ## Target and current state
 
 Atari Falcon030, 16 MHz, DSP56001. Render target 240x224 inside a 256x224
-Videl mode. The current build reaches 3.13 FPS on the shipping
-1,600-triangle LOD mesh and 2.05 FPS on the full 2,724-triangle mesh --
+Videl mode. The current build reaches 2.05 FPS on the 2,724-triangle mesh --
 Hatari emulator timings, not a measurement on real hardware. See
 OPTIMIZATION.md for the full measurement history and open roadmap.

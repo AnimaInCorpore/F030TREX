@@ -147,7 +147,7 @@ Word A additionally carries the **occluder qualification** in bit 23, the
 spare top bit of its twelve-bit `v1` field (vertex indices stay below 1,376,
 so eleven bits carry them). Set means the triangle writes opaquely everywhere
 its conservative UV footprint reaches, so its coverage may seal for occlusion
-culling; the host takes it from the same `o3d2opaque.py` sidecar that drives
+culling; the host takes it from the same `o3d2opaque.js` sidecar that drives
 `OPAQUE_PACKET_BIT`. Every vertex extraction on the DSP masks to eleven bits
 (`TRI_VERTEX_MASK`) -- including the two taken from a shift, which previously
 needed no mask at all -- while normal indices keep the full twelve.
