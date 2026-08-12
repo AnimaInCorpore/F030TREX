@@ -29,6 +29,12 @@ This produces `TREX/m68030/TREX.TOS`: the full 2,724-triangle model with armed
 DSP occlusion, textured Gouraud lighting, and no per-frame diagnostic file
 writes.  Its matching `TREX.LOD` is copied beside it for deployment.
 
+The release also draws a frame-rate readout in the top-left corner: white
+`NN.NN` frames per second, fixed width so the digits never shift column.  It is
+built from `-DTREX_FPS` and is on the release target only -- it writes into the
+framebuffer, so the diagnostic and capture binaries deliberately omit it (see
+OPTIMIZATION.md 2.6).
+
 Run the release on a Falcon or under Hatari from the directory containing the
 two files. For TOS 4.02 under Hatari:
 

@@ -163,8 +163,12 @@ TREX_MESH_DEPS = ./TREX/model/trex_lod.o3d ./TREX/model/trex_lod.inc \
 ./TREX/m68030/trex_prepass_run.tos: ./TREX/m68030/build/trex_prepass_run.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
+# TREX_FPS draws the NN.NN fps overlay in the render window's top-left corner.
+# It is on the release target ONLY: it writes into the framebuffer, so any
+# binary whose output is compared or dumped (trex_prepass*, the fb.res capture
+# path, the span validator) must stay without it.
 ./TREX/m68030/build/TREX.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) $< -quiet -Felf -m68030 -DTREX_RUN -DTREX_PREPASS -DTREX_FULL_MESH -DTREX_RELEASE -o $@ -L ./TREX/m68030/build/TREX.lst
+	$(VASM) $< -quiet -Felf -m68030 -DTREX_RUN -DTREX_PREPASS -DTREX_FULL_MESH -DTREX_RELEASE -DTREX_FPS -o $@ -L ./TREX/m68030/build/TREX.lst
 
 ./TREX/m68030/TREX.TOS: ./TREX/m68030/build/TREX.o ./TREX/m68030/TREX.LOD
 	$(VLINK) ./TREX/m68030/build/TREX.o -tos-fastload -b ataritos -s -e start -o $@

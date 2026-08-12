@@ -257,6 +257,51 @@ VIDEO_LINE_OFFSET	= 0
 VIDEO_X_OFFSET		= (VIDEO_SCREEN_WIDTH-SCREEN_WIDTH)/2
 VIDEO_Y_OFFSET		= (VIDEO_SCREEN_HEIGHT-SCREEN_HEIGHT)/2
 RENDER_WINDOW_OFFSET	= (VIDEO_Y_OFFSET*VIDEO_SCREEN_STRIDE)+(VIDEO_X_OFFSET*FRAMEBUFFER_BPP)
+
+; -----------------------------------------------------------------------------
+; Frame-rate overlay (-DTREX_FPS)
+;
+; Fixed NN.NN, zero padded: "02.07", "09.11", "10.60".  Both halves are always
+; two digits and the point never moves, so the field cannot shift sideways as
+; the rate crosses 10 -- blanking the leading zero instead would make the whole
+; number jump every time it did.  Two fraction digits are what make the readout
+; useful at all here: gpu_present_frame documents the rate as well under 2 fps
+; and OPTIMIZATION.md's last figure is ~482.5 ms/frame, so an integer field
+; would sit on "02" and hide every variation worth watching.
+;
+; Geometry is in render-window pixels: the field sits at the top-left of the
+; 240x224 target, so FPS_X/FPS_Y are relative to render_base and a row step is
+; VIDEO_SCREEN_STRIDE, not the field's own width.
+;
+; Drawn 1:1, so the whole field is 30x7 pixels.  Those 256 mode pixels are wide
+; ones (see the presentation notes above), so each glyph displays about 6.25x7
+; square-equivalent -- small, and on a 15 kHz TV it will be near the limit of
+; what is readable.  FPS_SCALE carries the 1:1 through the derived geometry
+; below (field size, cell advance, row step); doubling it also needs the
+; companion MOVE.Ws in gpu_draw_fps's inner loop, which is written for 1:1.
+FPS_X			= 2
+FPS_Y			= 2
+FPS_GLYPH_COLS		= 5
+FPS_GLYPH_ROWS		= 7
+FPS_SCALE		= 1
+; One blank source column between cells, scaled with everything else.
+FPS_CELL_ADVANCE	= (FPS_GLYPH_COLS+1)*FPS_SCALE*FRAMEBUFFER_BPP
+; Two digits, the point, two more: five cells, always all five drawn.
+FPS_TEXT_CHARS		= 5
+FPS_FIELD_WIDTH		= FPS_TEXT_CHARS*(FPS_GLYPH_COLS+1)*FPS_SCALE
+FPS_FIELD_ROWS		= FPS_GLYPH_ROWS*FPS_SCALE
+; Falcon RGB555X: R bits 11..15, G bits 6..10, B bits 0..4, bit 5 unused.  Full
+; white is $ffdf and not $ffff -- bit 5 is the one gpu_prepare_texture_clut
+; never sets, so the overlay stays inside the pixel format the renderer emits.
+; The two differ by the green LSB alone and are indistinguishable on screen.
+FPS_WHITE		= $ffdf
+; Font cell index past the ten digits.
+FPS_GLYPH_DOT		= 10
+; fps*100, so the value carries its own two fraction digits.  20000 = 200 Hz
+; tick * 100.  Clamped to 9999 (99.99) because the field holds four digits.
+FPS_SCALED_NUMERATOR	= 20000
+FPS_MAX_CENTI		= 9999
+
 ; Vertices closer than this are flagged by the DSP and their triangles are
 ; dropped.  With focal 160 anything nearer produces screen coordinates far
 ; outside the 240x224 target anyway.
@@ -636,6 +681,13 @@ trex_dummy_frame
 
 	move.l	$466.w,stat_vbl_start
 	move.l	$4ba.w,stat_hz200_start
+
+	; Prime the overlay's reference tick from the same clock read the run is
+	; bracketed with.  Without this the first frame would subtract zero from
+	; the boot-time tick and display the clamp, 9999.
+	ifd	TREX_FPS
+	move.l	$4ba.w,fps_last_tick
+	endc
 
 	; Prime the cross-frame pipeline: send frame 0's animation before the
 	; first slot, so every iteration -- including the first -- begins by
@@ -3253,6 +3305,12 @@ gpu_submit_ot
 	TimeMark	stat_mark_raster
 	bsr	gpu_rasterize_ot
 	TimeAdd	stat_mark_raster,stat_t_raster
+	; Outside the raster and present marks on purpose: the overlay is not
+	; part of either stage and must not be charged to one of them in
+	; render_stats.res.
+	ifd	TREX_FPS
+	bsr	gpu_draw_fps
+	endc
 	TimeMark	stat_mark_present
 	bsr	gpu_present_frame
 	TimeAdd	stat_mark_present,stat_t_present
@@ -3292,6 +3350,130 @@ gpu_present_frame
 	move.l	d0,render_base
 .gpu_present_done
 	rts
+
+	ifd	TREX_FPS
+; -----------------------------------------------------------------------------
+; Frame-rate overlay.  Called once per frame between gpu_rasterize_ot and
+; gpu_present_frame, so it lands in the back buffer the flip is about to show
+; and the tick delta it samples spans one whole frame, present included.
+;
+; Plain CPU stores throughout -- no Blitter.  The field is drawn 1:1, so a set
+; source pixel is one MOVE.W immediate straight into the framebuffer.
+;
+; Cost is bounded and tiny: a 30x7 wipe (105 longword stores) plus at most
+; 5*7*5 = 175 tested source pixels.  Against a ~480 ms frame that is noise, so
+; nothing here is unrolled or made conditional for speed.
+;
+; Deliberately NOT gated on video_mode_active or present_enabled: the field is
+; drawn into the render target either way, which keeps a headless capture and a
+; live run showing the same buffer contents.
+; -----------------------------------------------------------------------------
+gpu_draw_fps
+	movem.l	d0-d7/a0-a6,-(sp)
+
+	; Frame period from the 200 Hz tick.  Sampled here rather than in the
+	; frame loop so the mark and the drawing that consumes it cannot drift
+	; apart if either moves.
+	move.l	$4ba.w,d0
+	move.l	d0,d1
+	sub.l	fps_last_tick,d1
+	move.l	d0,fps_last_tick
+
+	; fps*100 = 20000/ticks, so the quotient carries its own two fraction
+	; digits and no second division is needed.  Both ends need a guard: a
+	; frame that finished inside one 5 ms tick would divide by zero, and a
+	; long stall would overflow DIVU.W's 16-bit divisor.
+	moveq	#0,d0			; the "too slow to measure" reading, 00.00
+	tst.l	d1
+	beq	.fps_peg
+	cmpi.l	#FPS_SCALED_NUMERATOR,d1
+	bhi	.fps_value_ready
+	move.l	#FPS_SCALED_NUMERATOR,d0
+	divu.w	d1,d0
+	andi.l	#$0000ffff,d0
+	cmpi.l	#FPS_MAX_CENTI,d0
+	bls	.fps_value_ready
+.fps_peg
+	move.l	#FPS_MAX_CENTI,d0	; peg at 99.99 rather than wrap
+.fps_value_ready
+
+	; Fixed NN.NN, zero padded and never blanked: every cell is always a
+	; glyph, so the point and both digit pairs hold their column no matter
+	; what the rate does.  DIVU.W leaves the remainder in the high word and
+	; the quotient in the low one; the clamp above keeps every step in range.
+	divu.w	#10,d0
+	move.l	d0,d1
+	swap	d1
+	move.b	d1,fps_text+4		; hundredths
+	andi.l	#$0000ffff,d0
+	divu.w	#10,d0
+	move.l	d0,d1
+	swap	d1
+	move.b	d1,fps_text+3		; tenths
+	andi.l	#$0000ffff,d0
+	divu.w	#10,d0
+	move.l	d0,d1
+	swap	d1
+	move.b	d1,fps_text+1		; units
+	andi.l	#$0000ffff,d0
+	move.b	d0,fps_text		; tens, 0..9 because the value is clamped
+	move.b	#FPS_GLYPH_DOT,fps_text+2
+
+	; Repaint the field's own background first.  The full clear would have
+	; wiped it already, but delta_clear_enabled is documented as a byte patch
+	; applied to the built file: with the delta clear armed the frame clear
+	; only touches bands the geometry dirtied, and last frame's digits would
+	; survive underneath this frame's.  An unconditional 210-pixel wipe is
+	; cheaper than teaching the delta tracker about the overlay.
+	move.l	render_base,a0
+	adda.l	#(FPS_Y*VIDEO_SCREEN_STRIDE)+(FPS_X*FRAMEBUFFER_BPP),a0
+	moveq	#0,d0
+	moveq	#FPS_FIELD_ROWS-1,d1
+.fps_wipe_row
+	move.l	a0,a1
+	moveq	#(FPS_FIELD_WIDTH/2)-1,d2
+.fps_wipe_loop
+	move.l	d0,(a1)+
+	dbra	d2,.fps_wipe_loop
+	adda.l	#VIDEO_SCREEN_STRIDE,a0
+	dbra	d1,.fps_wipe_row
+
+	; Blit the five cells.
+	move.l	render_base,a1
+	adda.l	#(FPS_Y*VIDEO_SCREEN_STRIDE)+(FPS_X*FRAMEBUFFER_BPP),a1
+	lea	fps_text,a2
+	moveq	#FPS_TEXT_CHARS-1,d7
+.fps_char_loop
+	moveq	#0,d1
+	move.b	(a2)+,d1
+	move.l	d1,d5			; index*FPS_GLYPH_ROWS
+	lsl.l	#3,d5
+	sub.l	d1,d5
+	lea	fps_font,a0
+	adda.l	d5,a0
+
+	move.l	a1,a3			; row cursor inside this cell
+	moveq	#FPS_GLYPH_ROWS-1,d6
+.fps_row_loop
+	move.b	(a0)+,d2
+	move.l	a3,a4
+	moveq	#FPS_GLYPH_COLS-1,d4
+.fps_col_loop
+	add.b	d2,d2			; leftmost pixel out into carry
+	bcc	.fps_col_clear
+	move.w	#FPS_WHITE,(a4)
+.fps_col_clear
+	addq.l	#FPS_SCALE*FRAMEBUFFER_BPP,a4
+	dbra	d4,.fps_col_loop
+	adda.l	#FPS_SCALE*VIDEO_SCREEN_STRIDE,a3
+	dbra	d6,.fps_row_loop
+
+	adda.l	#FPS_CELL_ADVANCE,a1
+	dbra	d7,.fps_char_loop
+
+	movem.l	(sp)+,d0-d7/a0-a6
+	rts
+	endc
 
 ; Walk the OT from far to near and invoke the software triangle backend for
 ; every linked packet.  The packet/node format is deliberately independent of
@@ -5501,6 +5683,109 @@ y_spin_matrices
 	dc.w	3925,0,-1163,0,4096,0,1163,0,3925			; step 118, -354.0 deg
 	dc.w	3859,0,-1367,0,4096,0,1367,0,3859			; step 119, -357.0 deg
 
+	ifd	TREX_FPS
+; -----------------------------------------------------------------------------
+; Overlay font: 5x7 cells, one byte per row, leftmost pixel in bit 7.  The low
+; three bits of every byte are unused padding.  Cells are indexed 0..9 for the
+; digits, then FPS_GLYPH_DOT.  There is no blank cell: the NN.NN field is zero
+; padded, so all five positions always hold a real glyph.
+;
+; At the end of the data section deliberately: the texture pages above depend
+; on their measured cache phase (see the layout note at the TIM payloads), and
+; appending here cannot move any of them.
+; -----------------------------------------------------------------------------
+fps_font
+	dc.b	%01110000		; 0
+	dc.b	%10001000
+	dc.b	%10001000
+	dc.b	%10001000
+	dc.b	%10001000
+	dc.b	%10001000
+	dc.b	%01110000
+
+	dc.b	%00100000		; 1
+	dc.b	%01100000
+	dc.b	%00100000
+	dc.b	%00100000
+	dc.b	%00100000
+	dc.b	%00100000
+	dc.b	%01110000
+
+	dc.b	%01110000		; 2
+	dc.b	%10001000
+	dc.b	%00001000
+	dc.b	%00010000
+	dc.b	%00100000
+	dc.b	%01000000
+	dc.b	%11111000
+
+	dc.b	%11110000		; 3
+	dc.b	%00001000
+	dc.b	%00001000
+	dc.b	%01110000
+	dc.b	%00001000
+	dc.b	%00001000
+	dc.b	%11110000
+
+	dc.b	%10001000		; 4
+	dc.b	%10001000
+	dc.b	%10001000
+	dc.b	%11111000
+	dc.b	%00001000
+	dc.b	%00001000
+	dc.b	%00001000
+
+	dc.b	%11111000		; 5
+	dc.b	%10000000
+	dc.b	%11110000
+	dc.b	%00001000
+	dc.b	%00001000
+	dc.b	%10001000
+	dc.b	%01110000
+
+	dc.b	%01110000		; 6
+	dc.b	%10001000
+	dc.b	%10000000
+	dc.b	%11110000
+	dc.b	%10001000
+	dc.b	%10001000
+	dc.b	%01110000
+
+	dc.b	%11111000		; 7
+	dc.b	%00001000
+	dc.b	%00010000
+	dc.b	%00100000
+	dc.b	%00100000
+	dc.b	%00100000
+	dc.b	%00100000
+
+	dc.b	%01110000		; 8
+	dc.b	%10001000
+	dc.b	%10001000
+	dc.b	%01110000
+	dc.b	%10001000
+	dc.b	%10001000
+	dc.b	%01110000
+
+	dc.b	%01110000		; 9
+	dc.b	%10001000
+	dc.b	%10001000
+	dc.b	%01111000
+	dc.b	%00001000
+	dc.b	%10001000
+	dc.b	%01110000
+
+	dc.b	%00000000		; . (FPS_GLYPH_DOT)
+	dc.b	%00000000
+	dc.b	%00000000
+	dc.b	%00000000
+	dc.b	%00000000
+	dc.b	%01100000
+	dc.b	%01100000
+
+	even
+	endc
+
 
 	bss
 
@@ -6133,6 +6418,19 @@ occl_frame_dropped_mark
 ;
 prepass_stats_buffer
 	ds.l	PREPASS_STATS_LONGS
+	endc
+
+	ifd	TREX_FPS
+; Overlay state, placed after every bulk buffer so enabling the flag cannot
+; shift the pinned framebuffer, CLUT or raster regions above it.  TOS clears
+; BSS on load, so fps_last_tick starts at zero and trex_dummy_frame primes it
+; with the real clock before the first frame is drawn.
+fps_last_tick
+	ds.l	1
+; One font-cell index per character, not ASCII.
+fps_text
+	ds.b	FPS_TEXT_CHARS
+	even
 	endc
 
 	end
