@@ -232,29 +232,38 @@ OT_LENGTH	= 2048
 OT_KEY_SHIFT	= 8
 PREPASS_ENTRY_BUCKET_MASK	= $000fff
 
-; Capacity of the order list.  Two lists of PREPASS_MAX words plus the full
-; triangle kill bitmap and status cells must fit from chunk_uvs to the top of
-; physical X memory.  The stock full mesh needs 114 bitmap words (2,724 bits),
-; leaving 723 entries for the two radix lists.  An overrun is counted and
-; reported rather than assumed away, and leaves the frame unculled.
-PREPASS_MAX	= 723
+; Capacity of the order list.  ONE list of PREPASS_MAX words plus the two
+; coverage masks, the full triangle kill bitmap and the status cells must fit
+; from chunk_uvs to the top of physical X memory -- 1,569 words in the stock
+; full-mesh layout.  The old radix sort needed a second, equally sized
+; ping-pong list, which capped the list at 723 entries; the full mesh's
+; area+box survivor count is ~1,100-1,200 in the measured choreography, so
+; the classification overflowed EVERY frame, silently disabled the sweep,
+; and the wrap of the $ffffff overrun marker (+1 on the next survivor) even
+; hid the overflow from the host's ack check.  The two-pass counting sort
+; below needs no second list, which is what makes this capacity fit the
+; mesh.  An overrun is still detected -- once, after the counting pass --
+; and leaves the frame unculled.
+PREPASS_MAX	= 1335
 
-; LSD radix sort over the eleven bucket bits, two passes of six bits.  The
-; second digit masks six bits although only five of them can ever be set:
-; the entry packs the triangle index from bit 12 upwards and the bucket is at
-; most 2047, so bit 11 is always clear.  One mask constant therefore serves
-; both digits and the second counter bank stays 32 words.
-PREPASS_RADIX_BITS	= 6
-PREPASS_DIGIT_MASK	= $00003f
-PREPASS_CNT_LO_COUNT	= 64
-PREPASS_CNT_HI_COUNT	= 32
-PREPASS_CNT_COUNT	= PREPASS_CNT_LO_COUNT+PREPASS_CNT_HI_COUNT
+; Depth classes for the counting sort.  The sweep does not need the full
+; eleven-bucket-bit order: it only ever compares neighbouring entries for
+; INEQUALITY, to know when to seal pending coverage.  Coarsening the classes
+; to 32 OT buckets each keeps that relation a subset of the host's draw
+; order -- sealing strictly-nearer classes can only under-approximate
+; strictly-nearer buckets, so kills stay sound -- and 64 classes are exactly
+; what the on-chip counter bank holds.
+PREPASS_COARSE_BITS	= 5
+PREPASS_CNT_COUNT	= OT_LENGTH/(1<<PREPASS_COARSE_BITS)
 
-; Stage-2/3 occlusion working set.  A 4x4 pixel cell is the smallest mask
-; that fits twice in the phase-local scratch allocation.  The two masks are
-; coverage sealed by strictly nearer buckets and coverage pending in the
-; current bucket; pending coverage is merged only at a bucket boundary.
-OCCL_CELL_SIZE	= 4
+; Stage-2/3 occlusion working set.  An 8x8 pixel cell is the smallest mask
+; whose two copies fit beside the single-list order allocation above.  The
+; two masks are coverage sealed by strictly nearer depth classes and
+; coverage pending in the current class; pending coverage is merged only at
+; a class boundary.  Each mask row is two words with cell c at word c/24,
+; bit c mod 24; the last word carries eighteen spare bits, which costs
+; nothing and lets a row cursor start at any cell without a bias term.
+OCCL_CELL_SIZE	= 8
 OCCL_CELL_COLS	= SCREEN_WIDTH/OCCL_CELL_SIZE
 OCCL_CELL_ROWS	= SCREEN_HEIGHT/OCCL_CELL_SIZE
 OCCL_MASK_ROW_WORDS	= (OCCL_CELL_COLS+23)/24
@@ -833,11 +842,14 @@ triangle_count_loop
 	move	a1,y:span_flip
 	; Advance the streaming bit cursor inline.  This is on every armed
 	; triangle, so the call/return pair costs more than the small body.
+	; The wrap test reads A2 bit 0 -- the bit ASL just carried out of A1.
+	; The old full-accumulator TST read the SIGN EXTENSION of a bit-23
+	; one-hot as "still inside the word", zeroed the cursor and silently
+	; stopped consuming kills at the 24th triangle of every armed frame.
 	move	x1,a
 	asl	a
 	move	a1,x1
-	tst	a
-	jne	<build_prepass_kill_advance_store
+	jclr	#0,a2,build_prepass_kill_advance_store
 	move	#>1,x1
 	move	x:prepass_status,a
 	move	#>1,x0
@@ -1735,7 +1747,6 @@ tri_near_ok
 	mpy	x0,y0,a	y:tri_dy01,x0
 	move	y:tri_dx02,y0
 	mac	-x0,y0,a
-	move	a1,y:<prepass_occl_word_offset
 	; MPY/MAC uses the fractional accumulator format, whose non-zero low word
 	; would otherwise survive into the caller's integer loop counter.  The
 	; result is normalized to a clean scalar -- but to +1/-1/0, not +1/0: the
@@ -2321,24 +2332,22 @@ lookup_projected_z
 ; construction, and the host's cross-check has something to fail on rather
 ; than a tautology.
 ;
-; The order is an LSD radix sort over the eleven bucket bits in two six-bit
-; passes, ping-ponging between prepass_order and prepass_scratch.  A radix
-; sort is exact and stable and does not care how the keys are distributed, so
-; the bucket relation survives intact -- no two buckets are merged and none is
-; split.  A counting sort over all 2,048 buckets would need 4,208 words and
-; fits in no safe allocation; a coarser key would silently weaken the very
-; relation this pass exists to reproduce.
+; The order is a two-pass counting sort into 64 coarse depth classes of 32
+; OT buckets each (see PREPASS_COARSE_BITS): classification runs once to
+; count, once more to scatter, and needs no second list -- the ping-pong
+; scratch of the earlier radix sort is what limited the order list to 723
+; entries, under the full mesh's real survivor count, which disabled the
+; sweep on every frame it was meant to serve.  Coarse classes only merge
+; neighbouring buckets, never reorder them, so sealing across class
+; boundaries under-approximates the host's strictly-nearer relation and
+; kills stay sound.
 ;
-; Cost is dominated by geometry, not by ordering: at ~600 survivors the sort
-; is roughly 25k instructions against ~300k for the classification.  That is
-; why the exact sort is worth its code.
-;
-; Within one bucket the DSP order ascends in triangle index while the host
-; draws in descending submission order (the OT node list is LIFO).  That
-; difference is legal and must NOT be exploited: a later stage may only let a
-; triangle occlude another once the whole bucket has been tested, never rank
-; by rank.  Bucket boundaries are visible at run time as an inequality between
-; the bucket fields of two neighbouring entries, so no extra table is needed.
+; Within one class the DSP order ascends in triangle index while the host
+; draws its buckets in LIFO submission order.  That difference is legal and
+; must NOT be exploited: a later stage may only let a triangle occlude
+; another once the whole class has been tested, never rank by rank.  Class
+; boundaries are visible at run time as an inequality between the class
+; fields of two neighbouring entries, so no extra table is needed.
 ; -----------------------------------------------------------------------------
 
 command_prepass
@@ -2383,9 +2392,9 @@ prepass_run
 	move	a1,y:prepass_surv
 	move	a1,y:prepass_flow
 
-	; The radix counters and the stage-2 kill bitmap start every run at
-	; zero.  REP with a one-word move clears both banks in four words of
-	; program memory, which matters far more here than the cycles do.
+	; The class counters and the stage-2 kill bitmap start every run at
+	; zero.  REP with a one-word move clears each in two words of program
+	; memory, which matters far more here than the cycles do.
 	move	#prepass_cnt_lo,r0
 	nop
 	rep	#PREPASS_CNT_COUNT
@@ -2396,56 +2405,100 @@ prepass_run
 	move	a1,x:(r0)+
 
 	; -------------------------------------------------------------------
-	; Phase 0 -- classification.  One pass over the resident index list,
-	; writing one entry per survivor and histogramming both radix digits
-	; on the way, so the sort needs no separate counting pass.
+	; Phase 0/1 -- two-pass counting sort into depth classes.  The first
+	; classification pass only counts survivors per class; an exclusive
+	; prefix over the 64 counters turns them into write cursors, and the
+	; second pass runs the identical classification again, scattering each
+	; survivor directly to its class cursor.  Classifying twice costs one
+	; more sweep of geometry arithmetic; what it buys is the second list
+	; the radix sort ping-ponged through, and that list is the difference
+	; between 723 entries and the ~1,150 the full mesh actually needs.
 	; -------------------------------------------------------------------
-	; R3 carries the triangle index instead of a Y cell.  Every absolute
-	; Y access on this DSP is a two-word instruction, and the index is
-	; touched on all three exits of the loop body, so an address register
-	; that survives the three JSRs is worth six program words here.
-	; -------------------------------------------------------------------
+	clr	a
+	move	a1,y:<prepass_occl_mode
+	jsr	<prepass_classify
+
+	; An empty frame has nothing to sort or cull; an overrun would write
+	; past the order list, so it reports $ffffff and leaves the frame
+	; unculled, exactly like the old per-entry capacity stop -- but
+	; detected ONCE, after counting, where no wrap can ever hide it.
+	move	y:prepass_surv,a
+	tst	a
+	jeq	<prepass_restore
+	move	#>PREPASS_MAX,x0
+	cmp	x0,a
+	jle	<prepass_capacity_ok
+	move	#>$ffffff,a
+	move	a1,y:prepass_surv
+	move	x0,y:prepass_flow
+	jmp	<prepass_restore
+prepass_capacity_ok
+
+	; Exclusive prefix over the class counters, biased by the order base:
+	; each counter then holds the ADDRESS its next entry goes to.
+	move	#>prepass_order,a
+	move	#prepass_cnt_lo,r0
+	nop
+	do	#PREPASS_CNT_COUNT,prepass_prefix_end
+	move	y:(r0),x0
+	move	a1,y:(r0)+
+	add	x0,a
+prepass_prefix_end
+
+	move	#>1,a
+	move	a1,y:<prepass_occl_mode
+	jsr	<prepass_classify
+
+	; The list ascends in depth class, which is near to far: class 0 is
+	; the closest.  The host walks its Ordering Table from 2047 downwards
+	; and therefore draws this list back to front, as painter's algorithm
+	; requires.  Stage 2 tests each survivor against sealed coverage and
+	; stage 3 stamps only qualified, still-visible triangles into the
+	; pending mask.  BUILD consumes the resulting global kill bitmap; the
+	; sorted list itself remains an internal DSP worklist.
+	jsr	<prepass_occlusion
+
+prepass_restore
+	move	y:prepass_tp_save,a
+	move	a1,y:<triangles_processed
+	rts
+
+; One full classification pass over the resident index list.  The mode cell
+; selects the survivor action: 0 counts into the class counters, 1 writes the
+; packed entry at the class cursor.  Everything else -- the survivor tests,
+; the bucket rule, the class shift -- is bit-identical between the passes,
+; which is what entitles pass 2 to trust pass 1's counts.
+;
+; R3 carries the triangle index instead of a Y cell.  Every absolute Y access
+; on this DSP is a two-word instruction, and the index is touched on all
+; three exits of the loop body, so an address register that survives the
+; three JSRs is worth six program words here.
+prepass_classify
 	move	#0,r3
 	move	#triangle_indices,r2
 	move	#2,n2
-	move	#prepass_order,r1
-	move	y:<triangle_list_count,x0
-	tfr	x0,a
+	move	y:<triangle_list_count,a
 	tst	a
-	jeq	<prepass_restore
-	do	x0,prepass_class_end
+	jeq	<prepass_classify_done
+	move	a1,x0
+	do	x0,prepass_classify_end
 
 	; Only the three VERTEX indices matter here; the corner-normal fields
 	; feed shading, which the prepass never reaches.  Word C is therefore
 	; never read at all -- the +N2 post-increment steps over it while word
 	; B is being fetched.
-	move	y:(r2)+,x1
-	move	y:(r2)+n2,y1
-	move	#>TRI_VERTEX_MASK,x0
-	tfr	x1,a
-	and	x0,a
-	move	a1,y:triangle_i0
-	tfr	x1,a
-	rep	#TRI_INDEX_BITS
-	lsr	a
-	; Bit 11 here is the occluder qualification, not part of v1.  Word A is
-	; still in X1 for the stage that reads that flag.
-	and	x0,a
-	move	a1,y:triangle_i1
-	tfr	y1,a
-	and	x0,a
-	move	a1,y:triangle_i2
+	jsr	<prepass_unpack_indices
 
 	; The chunk pass's own survivor test, called rather than copied.  Area
 	; sign first (it also absorbs the near-plane rejects), then the clipped
-	; box, then the key.  R1 and R2 survive all three, which is what lets
-	; the loop keep its pointers in them.
+	; box, then the key.  R2 survives all three, which is what lets the
+	; loop keep its cursor in it.
 	jsr	<make_triangle_area
 	tst	a
-	jge	<prepass_class_next
+	jge	<prepass_classify_next
 	jsr	<make_triangle_bbox
 	tst	a
-	jeq	<prepass_class_next
+	jeq	<prepass_classify_next
 	jsr	<make_triangle_zkey
 
 	; The host's bucket rule, reproduced bit for bit: shift right by
@@ -2477,258 +2530,232 @@ prepass_run
 	move	#>OT_LENGTH-1,x1
 	cmp	x1,a
 	tgt	x1,a
+	; The sweep's depth class: the saturated bucket, coarsened.
+	rep	#PREPASS_COARSE_BITS
+	lsr	a
 
-	; Capacity.  The entry after the last one would land in the kill
-	; bitmap, so recording stops here and the whole run is invalidated
-	; below.  Checked before the store, never after.
+	move	y:<prepass_occl_mode,b
+	tst	b
+	jne	<prepass_classify_write
+
+	; Count pass: one class counter and the survivor total.
+	move	#>prepass_cnt_lo,x0
+	add	x0,a
+	move	a1,r0
+	move	#>1,x0
+	move	y:(r0),b
+	add	x0,b
+	move	b1,y:(r0)
 	move	y:prepass_surv,b
-	move	#>PREPASS_MAX,x0
-	cmp	x0,b
-	jge	<prepass_class_full
+	add	x0,b
+	move	b1,y:prepass_surv
+	jmp	<prepass_classify_next
 
-	; Entry E = (triangle index << TRI_INDEX_BITS) | bucket.  The index is
-	; below 2,724 and the bucket below 2,048.  The index can set bit 23 in E,
-	; but the logical shifts and six-bit digit masks below operate on the raw
-	; packed word and remain exact.
-	move	a1,x0
+prepass_classify_write
+	; Write pass: E = (triangle index << TRI_INDEX_BITS) | class, stored
+	; at the class cursor, which then advances.  Ascending R3 makes the
+	; within-class order ascending triangle index, the same stable order
+	; the radix sort produced within a bucket.
+	;
 	; R3 is 16 bits and the index stays below 2,724, so whichever way the
 	; register-to-register move extends it the low 16 bits are the value
 	; and A1 holds it.  A2 does not matter either: the shift below feeds
 	; A1 from A1 and A0, and only A1 is stored.
+	move	a1,x1
+	move	#>prepass_cnt_lo,x0
+	add	x0,a
+	move	a1,r0
 	move	r3,a
 	rep	#TRI_INDEX_BITS
 	asl	a
-	add	x0,a
-	move	a1,x:(r1)+
-
-	; Both radix digits in one go.  The counter banks are on-chip Y: they
-	; are touched twice per survivor plus 96 times per pass, and every
-	; other word this routine handles already pays external-SRAM wait
-	; states.
-	move	#>PREPASS_DIGIT_MASK,x0
-	move	#>1,y0
-	tfr	a,b
-	and	x0,b
-	move	#>prepass_cnt_lo,y1
-	add	y1,b
-	move	b1,r0
-	; The second bank's base fills the slot the address pipeline needs
-	; between writing R0 and addressing through it, so no NOP is spent.
-	move	#>prepass_cnt_hi,y1
+	add	x1,a
 	move	y:(r0),b
-	add	y0,b
+	move	b1,r1
+	move	#>1,x0
+	add	x0,b
 	move	b1,y:(r0)
+	move	a1,x:(r1)
 
-	tfr	a,b
-	rep	#PREPASS_RADIX_BITS
-	lsr	b
-	and	x0,b
-	add	y1,b
-	move	b1,r0
-	nop
-	move	y:(r0),b
-	add	y0,b
-	move	b1,y:(r0)
-
-	move	y:prepass_surv,b
-	add	y0,b
-	move	b1,y:prepass_surv
-	jmp	<prepass_class_next
-
-prepass_class_full
-	; Any non-zero value marks the run as overrun, and X0 still holds
-	; PREPASS_MAX -- cheaper than loading a literal 1.
-	move	#>$ffffff,a
-	move	a1,y:prepass_surv
-	move	x0,y:prepass_flow
-
-prepass_class_next
+prepass_classify_next
 	move	(r3)+
-	; The loop's last word is deliberately a NOP nobody jumps to.  Both
-	; cull paths and the survivor path branch to prepass_class_next, and
-	; landing a jump directly on a hardware loop's LA is the one place
-	; where the loop-back and the jump would fight over the program
-	; counter.  One word buys that whole question away.
+	; The loop's last word is deliberately a NOP nobody jumps to.  All
+	; three exits branch to prepass_classify_next, and landing a jump
+	; directly on a hardware loop's LA is the one place where the loop-back
+	; and the jump would fight over the program counter.  One word buys
+	; that whole question away.
 	nop
-prepass_class_end
-
-	; An overrun leaves the order list truncated, so nothing may be sorted
-	; from it and nothing may be culled with it.  The run reports $ffffff,
-	; the kill bitmap stays cleared, and the frame comes out bit-identical
-	; to a frame without the prepass.
-	move	y:prepass_flow,a
-	tst	a
-	jne	<prepass_restore
-	move	y:prepass_surv,a
-	tst	a
-	jeq	<prepass_restore
-
-	; -------------------------------------------------------------------
-	; Phase 1 -- exclusive prefix sums over the two counter banks, each
-	; biased by the base address its pass writes to.  A counter cell then
-	; holds the ADDRESS its next entry goes to rather than an index, which
-	; removes both the base add and the separate running index from the
-	; two scatter bodies below.
-	;
-	; The digit mask and the constant 1 the scatters need are loaded here:
-	; the prefix loops touch neither Y0 nor X1, so one load serves both
-	; passes.
-	; -------------------------------------------------------------------
-	move	#>PREPASS_DIGIT_MASK,y0
-	move	#>1,x1
-	move	#>prepass_scratch,a
-	move	#prepass_cnt_lo,r0
-	nop
-	do	#PREPASS_CNT_LO_COUNT,prepass_prefix_lo_end
-	move	y:(r0),x0
-	move	a1,y:(r0)+
-	add	x0,a
-prepass_prefix_lo_end
-	move	#>prepass_order,a
-	do	#PREPASS_CNT_HI_COUNT,prepass_prefix_hi_end
-	move	y:(r0),x0
-	move	a1,y:(r0)+
-	add	x0,a
-prepass_prefix_hi_end
-
-	; -------------------------------------------------------------------
-	; Phase 2 -- scatter on the low digit, prepass_order -> prepass_scratch
-	; -------------------------------------------------------------------
-	move	#>prepass_cnt_lo,y1
-	move	#prepass_order,r2
-	move	y:prepass_surv,x0
-	nop
-	do	x0,prepass_scatter_lo_end
-	move	x:(r2)+,a
-	tfr	a,b
-	and	y0,b
-	add	y1,b
-	move	b1,r0
-	nop
-	move	y:(r0),b
-	move	b1,r4
-	add	x1,b
-	move	b1,y:(r0)
-	move	a1,x:(r4)
-prepass_scatter_lo_end
-
-	; -------------------------------------------------------------------
-	; Phase 3 -- scatter on the high digit, prepass_scratch -> prepass_order
-	;
-	; Two stable passes over disjoint halves of the key leave the list
-	; exactly ascending in the bucket, which is near to far: bucket 0 is
-	; the closest.  The host walks its Ordering Table from 2047 downwards
-	; and therefore draws this list back to front, as painter's algorithm
-	; requires.  Equal buckets keep ascending triangle index.
-	; -------------------------------------------------------------------
-	move	#>prepass_cnt_hi,y1
-	move	#prepass_scratch,r2
-	move	y:prepass_surv,x0
-	nop
-	do	x0,prepass_scatter_hi_end
-	move	x:(r2)+,a
-	tfr	a,b
-	rep	#PREPASS_RADIX_BITS
-	lsr	b
-	and	y0,b
-	add	y1,b
-	move	b1,r0
-	nop
-	move	y:(r0),b
-	move	b1,r4
-	add	x1,b
-	move	b1,y:(r0)
-	move	a1,x:(r4)
-prepass_scatter_hi_end
-
-	; The list is now exact near-to-far order.  Stage 2 tests each survivor
-	; against sealed coverage and stage 3 stamps only qualified, still-visible
-	; triangles into the pending mask.  BUILD consumes the resulting global
-	; kill bitmap; the sorted list itself remains an internal DSP worklist.
-	jsr	<prepass_occlusion
-
-prepass_restore
-	move	y:prepass_tp_save,a
-	move	a1,y:<triangles_processed
+prepass_classify_end
+prepass_classify_done
 	rts
 
-; The sorted list is walked once from bucket 0 (nearest) to bucket 2047
-; (farthest).  `seal` contains only complete cells from earlier buckets;
-; `pending` contains cells stamped by the current bucket.  A pending mask is
-; merged only when the next entry changes bucket, which is the ordering rule
-; that makes the result independent of the host's LIFO order within a bucket.
+; The sorted list is walked once from depth class 0 (nearest) to class 63
+; (farthest).  `seal` contains only complete cells from earlier classes;
+; `pending` contains cells stamped by the current class.  A pending mask is
+; merged only when the next entry changes class, which is the ordering rule
+; that makes the result independent of the host's LIFO order within a class.
+;
+; Both coverage walks visit only the cells the survivor's clamped screen box
+; overlaps: a cell covers pixels 8c..8c+7, so the overlapped range is exactly
+; [min>>3, max>>3] on each axis.  The former cursor visited every cell of
+; the whole grid for every survivor, which is what priced the sweep out of
+; the synthetic hold's frame budget; the range walk is bounded by the
+; survivor's own screen area instead.  The query additionally stops at the
+; first unsealed cell -- one uncovered cell already proves the triangle
+; visible, and most triangles meet one in their first few cells.
+;
+; The stamp decides full-cell coverage with three incremental edge values in
+; one doubled integer domain (see prepass_stamp).  The previous revision
+; asked prepass_point_inside per cell corner, and its stored A1 edge signs
+; made the inside test unsatisfiable -- fractional MPY leaves a small
+; product's value in A0 and only its sign extension in A1, the very trap the
+; span_cross comment documents -- so no cell was ever stamped and the whole
+; stage culled nothing.  The A0-based edge setup below is what makes the
+; kill bitmap live for the first time.
 prepass_occlusion
 	move	y:prepass_surv,a
 	tst	a
 	jeq	<prepass_occlusion_done
 	move	a1,x0
+	; Both masks start the sweep empty, the pending mask has stamped
+	; nothing yet, and the class sentinel can match no real class.
 	clr	a
-	move	#prepass_order,r1
 	move	#prepass_scratch,r0
 	rep	#(OCCL_MASK_WORDS*2)
 	move	a1,x:(r0)+
+	move	a1,y:<prepass_occl_dirty
 	move	#>OT_LENGTH,a
 	move	a1,y:<prepass_occl_flow
+	; N4 is the mask-row stride for both walks, N0 the cell-size-minus-one
+	; corner shift for the stamp's anchor choice.
+	move	#OCCL_MASK_ROW_WORDS,n4
+	move	#OCCL_CELL_SIZE-1,n0
+	move	#prepass_order,r1
 	do	x0,prepass_occlusion_loop_end
 
 prepass_occlusion_loop
+	; Entry E = (triangle index << 12) | depth class.
 	move	x:(r1)+,a
-	tfr	a,b
 	move	#>PREPASS_ENTRY_BUCKET_MASK,x0
+	tfr	a,b
 	and	x0,b
-	move	b1,y:<prepass_occl_base
 	rep	#TRI_INDEX_BITS
 	lsr	a
 	move	a1,y:<prepass_occl_index
 
-	; The first entry has a negative previous-bucket sentinel.  On later
-	; changes, seal the completed bucket before testing the new one.  The
-	; merge also clears pending, so the two masks stay paired at the
-	; boundary without a second full-mask pass here.
+	; The first entry has an out-of-range previous-class sentinel.  On
+	; later changes, seal the completed class before testing the new one.
 	move	y:<prepass_occl_flow,x0
 	cmp	x0,b
 	jeq	<prepass_occlusion_same_bucket
 	move	b1,y:<prepass_occl_flow
 	jsr	<prepass_merge_masks
 prepass_occlusion_same_bucket
+	; Reload the survivor and rebuild its screen scalars with the very
+	; routines the chunk pass uses.  Both verdicts are known to pass --
+	; phase 0 proved them -- so only tri_x/tri_y and the clamped box out
+	; of make_triangle_bbox matter here.
 	move	y:<prepass_occl_index,x0
 	jsr	<prepass_load_triangle
 	jsr	<make_triangle_area
 	jsr	<make_triangle_bbox
-	; The third directed edge is derived once; the four-corner stamp reuses
-	; these two deltas for every cell corner.
-	move	y:tri_dx02,a
-	move	y:tri_dx01,x0
-	sub	x0,a	y:tri_dy01,x0
-	move	a1,y:<prepass_occl_dx12
-	move	y:tri_dy02,a
-	sub	x0,a
-	move	a1,y:<prepass_occl_dy12
-	; triangle_count is the cell-walk mode: zero queries seal, one stamps
-	; pending.  Keep the qualification bit in span_flip across the query.
-	move	y:<prepass_occl_mode,a
-	move	a1,y:<prepass_occl_aux
-	clr	a
-	move	a1,y:<prepass_occl_mode
-	move	#prepass_scratch,r0
-	jsr	<prepass_mask_walk
-	tst	a
-	jne	<prepass_occlusion_kill
 
-	; A visible qualified triangle is the only thing allowed to add coverage
-	; to this bucket's pending mask.  A killed triangle cannot occlude a later
-	; triangle because it contributed no visible pixels.
-	move	y:<prepass_occl_aux,a
-	tst	a
-	jeq	<prepass_occlusion_next
-	move	#>1,a
-	move	a1,y:<prepass_occl_mode
-	move	#prepass_scratch+OCCL_MASK_WORDS,r0
-	jsr	<prepass_mask_walk
+	; Cell range of the clamped box.  X1 carries cx0 into the width count,
+	; N2/N3 carry the range's top-left pixel anchor to the stamp setup,
+	; and X0 holds the +1 for both inclusive-range counts.
+	move	y:tri_xmin,a
+	rep	#3
+	lsr	a
+	move	a1,x1
+	rep	#3
+	asl	a
+	move	a1,n2
+	move	y:tri_ymin,a
+	rep	#3
+	lsr	a
+	move	a1,y0
+	rep	#3
+	asl	a
+	move	a1,n3
+	move	#>1,x0
+	move	y:tri_xmax,a
+	rep	#3
+	lsr	a
+	sub	x1,a
+	add	x0,a
+	move	a1,y:<prepass_occl_ncx
+	move	y:tri_ymax,a
+	rep	#3
+	lsr	a
+	sub	y0,a
+	add	x0,a
+	move	a1,y:<prepass_occl_nrows
+
+	; Word and one-hot bit of the row's first cell, then the seal-mask row
+	; cursor R4 = prepass_scratch + 2*cy0 + word.  cy0 rides through the
+	; bit split in Y0, which prepass_bit_address never touches, and N5
+	; keeps the finished row base: the stamp reuses it for the pending
+	; mask, one full mask further on.
+	move	x1,a
+	clr	b
+	jsr	<prepass_bit_address
+	move	x1,y:<prepass_occl_b0
+	move	y0,a
+	move	a1,x0
+	add	x0,a
+	move	r0,x0
+	add	x0,a
+	move	#>prepass_scratch,x0
+	add	x0,a
+	move	a1,r4
+	move	r4,n5
+
+	; Query: killed iff every range cell is sealed.  B counts rows down;
+	; the ENDDO exit is the common one, taken at the first unsealed cell.
+	; A2 after the shift holds the bit that left A1, so the word cursor
+	; advances exactly when the one-hot mask wraps out of the word.
+	move	y:<prepass_occl_nrows,b
+	move	#>1,y0
+prepass_query_row
+	move	r4,r0
+	move	y:<prepass_occl_b0,x1
+	do	y:<prepass_occl_ncx,prepass_query_row_end
+	clr	a
+	move	x:(r0),a1
+	and	x1,a
+	jeq	<prepass_query_visible
+	move	x1,a
+	asl	a
+	move	a1,x1
+	jclr	#0,a2,prepass_query_nowrap
+	move	(r0)+
+	move	y0,x1
+prepass_query_nowrap
+	nop
+prepass_query_row_end
+	move	(r4)+n4
+	sub	y0,b
+	jne	<prepass_query_row
+	; Every range cell is sealed: set the survivor's kill bit.  The packed
+	; order entry stores (triangle_index << 12) | bucket, and only the
+	; unpacked global index may address the bitmap -- adding the bucket
+	; back once shifted every kill onto a different source triangle.
+	move	y:<prepass_occl_index,a
+	jsr	<prepass_kill_address
+	move	x:(r0),a
+	or	x1,a
+	move	a1,x:(r0)
 	jmp	<prepass_occlusion_next
 
-prepass_occlusion_kill
-	jsr	<prepass_set_kill
+prepass_query_visible
+	enddo
+	; A visible qualified triangle is the only thing allowed to add
+	; coverage to this bucket's pending mask.  A killed triangle cannot
+	; occlude a later one because it contributed no visible pixels, and an
+	; unqualified one may cover none of its cells.
+	move	y:<prepass_occl_mode,a
+	tst	a
+	jeq	<prepass_occlusion_next
+	jsr	<prepass_stamp
 
 prepass_occlusion_next
 	nop
@@ -2736,18 +2763,15 @@ prepass_occlusion_loop_end
 prepass_occlusion_done
 	rts
 
-; Reload one resident triangle.  X0 is the triangle number on entry.  The
-; flag in word A becomes the prepass mode (0/1); only vertex fields are needed
-; by this stage, so word C is skipped entirely.
-prepass_load_triangle
-	move	x0,a
-	add	x0,a
-	add	x0,a
-	move	#triangle_indices,x0
-	add	x0,a	a1,r2
-	nop
+; Unpack the two index words R2 points at into triangle_i0/i1/i2.  Word C is
+; never read at all -- the +N2 post-increment steps over it while word B is
+; being fetched.  The classification loop enters with N2 = 2; the sweep's
+; reload below enters with N2 holding its pixel anchor, which is just as
+; harmless because R2 is dead after the second read.  Word A stays in X1 for
+; the callers that read the occluder qualification bit.
+prepass_unpack_indices
 	move	y:(r2)+,x1
-	move	y:(r2)+,y1
+	move	y:(r2)+n2,y1
 	move	#>TRI_VERTEX_MASK,x0
 	tfr	x1,a
 	and	x0,a
@@ -2755,11 +2779,32 @@ prepass_load_triangle
 	tfr	x1,a
 	rep	#TRI_INDEX_BITS
 	lsr	a
+	; Bit 11 here is the occluder qualification, not part of v1.
 	and	x0,a
 	move	a1,y:triangle_i1
 	tfr	y1,a
 	and	x0,a
 	move	a1,y:triangle_i2
+	rts
+
+; Reload one resident triangle.  X0 is the triangle number on entry.  The
+; flag in word A becomes the prepass mode (0/1).
+;
+; The base add and the R2 store are two instructions on purpose.  A parallel
+; move reads its source at the START of the instruction (see the P-overlay
+; comment), so the once-folded "add x0,a a1,r2" loaded R2 with 3*index and
+; the reload walked the on-chip scalars instead of the resident list --
+; unobservable while the stamp predicate was unsatisfiable, fatal once the
+; sweep started culling for real.
+prepass_load_triangle
+	move	x0,a
+	add	x0,a
+	add	x0,a
+	move	#triangle_indices,x0
+	add	x0,a
+	move	a1,r2
+	nop
+	jsr	<prepass_unpack_indices
 	clr	a
 	jclr	#TRI_OCCLUDER_BIT,x1,prepass_load_not_occluder
 	nop
@@ -2771,10 +2816,17 @@ prepass_load_done
 	rts
 
 ; Convert triangle_count (a global triangle number) to a kill-word pointer
-; and one-hot bit.  Repeated subtraction is only paid for a kill/query and
-; keeps the common BUILD test small without another resident table.
+; and one-hot bit.  Repeated subtraction is only paid for a kill and for one
+; row-start decompose per sweep entry, and keeps the common BUILD test small
+; without another resident table.
+;
+; prepass_bit_address is the base-parameterized entry: A = bit number,
+; B = word base; out come R0 = base + bit/24 and X1 = one-hot(bit mod 24).
+; The sweep calls it with B = 0 to split a cell column into its mask word
+; and start bit.
 prepass_kill_address
 	move	#>prepass_kill,b
+prepass_bit_address
 	move	#>24,x0
 	move	#>1,x1
 prepass_kill_word_loop
@@ -2797,195 +2849,188 @@ prepass_kill_bit_end
 prepass_kill_bit_done
 	rts
 
-prepass_set_kill
-	; The packed order entry stores (triangle_index << 12) | bucket.
-	; prepass_occl_base is the bucket used for bucket-boundary sealing; it
-	; must not be added to the global triangle index when addressing the kill
-	; bitmap.  Adding it shifted every kill onto a different source triangle.
-	move	y:<prepass_occl_index,a
-	jsr	<prepass_kill_address
-	move	x:(r0),a
-	or	x1,a
-	move	a1,x:(r0)
-	rts
-
-; Common cell operation and walk.  triangle_count=0 queries seal and
-; triangle_count=1 tests the four corners and stamps pending.  Outside cells
-; are a no-op in either mode, so one cursor loop serves both stages.
-prepass_mask_cell
-	move	y:<prepass_occl_cell_sy,a
-	move	y:tri_ymax,y1
-	cmp	y1,a
-	jgt	<prepass_mask_cell_outside
-	move	#>3,x0
-	add	x0,a	y:tri_ymin,y1
-	cmp	y1,a
-	jlt	<prepass_mask_cell_outside
-	move	y:<prepass_occl_cell_sx,a
-	move	y:tri_xmax,y1
-	cmp	y1,a
-	jgt	<prepass_mask_cell_outside
-	add	x0,a	y:tri_xmin,y1
-	cmp	y1,a
-	jlt	<prepass_mask_cell_outside
-	move	y:<prepass_occl_mode,a
-	tst	a
-	jne	<prepass_stamp_cell
-	move	x:(r0),a
-	and	x1,a
-	tst	a
-	jeq	<prepass_mask_cell_uncovered
-prepass_mask_cell_done
+; Stamp every range cell that lies fully inside the survivor into the pending
+; mask.  Three edge functions decide full coverage: a cell is inside iff none
+; of them is positive at any cell corner, and for a linear function that
+; maximum sits at one fixed corner -- the one shifted +3 on each axis whose
+; gradient is positive.  Anchoring each accumulator at its own maximising
+; corner turns the four-corner test into a single sign test, and moving one
+; cell right or one row down is one add per edge.
+;
+; The domain is the doubled integer one: the MPY/MAC anchor products are
+; read from A0 after one ASR (A0 = 2E exactly, since |E| < 2^17), gradients
+; are pre-doubled from the vertex deltas, and every later step is an exact
+; 24-bit add.  The verdicts equal the four-corner point test the previous
+; revision intended, for every cell.
+;
+; The vertex ring R3/M3 hands each DO iteration one directed edge (v0->v1,
+; v1->v2, v2->v0 -- the same winding make_triangle_area's cross uses);
+; tri_x0 sits at a multiple of eight so the six-cell modulo ring is legal.
+; Clobbers A, B, X, Y, R0, R3-R7 and N0/N1; M3 is restored on exit.
+prepass_stamp
+	; This bucket now owns pending coverage the next boundary must merge.
 	move	#>1,a
-	rts
-prepass_mask_cell_uncovered
-	clr	a
-	move	a1,y:<prepass_occl_found
-	rts
-prepass_mask_cell_outside
-	clr	a
-	rts
+	move	a1,y:<prepass_occl_dirty
 
-prepass_stamp_cell
-	move	y:<prepass_occl_cell_sx,a
-	move	a1,y:<prepass_occl_point_sx
-	move	y:<prepass_occl_cell_sy,a
-	move	a1,y:<prepass_occl_point_sy
-	jsr	<prepass_point_inside
-	tst	a
-	jeq	<prepass_mask_cell_done
-	move	y:<prepass_occl_cell_sx,a
-	move	#>3,x0
-	add	x0,a
-	move	a1,y:<prepass_occl_point_sx
-	jsr	<prepass_point_inside
-	tst	a
-	jeq	<prepass_mask_cell_done
-	move	y:<prepass_occl_cell_sy,a
-	move	#>3,x0
-	add	x0,a
-	move	a1,y:<prepass_occl_point_sy
-	jsr	<prepass_point_inside
-	tst	a
-	jeq	<prepass_mask_cell_done
-	move	y:<prepass_occl_cell_sx,a
-	move	a1,y:<prepass_occl_point_sx
-	jsr	<prepass_point_inside
-	tst	a
-	jeq	<prepass_mask_cell_done
-	move	x:(r0),a
-	or	x1,a
-	move	a1,x:(r0)
-	move	#>1,a
-	rts
-
-prepass_mask_walk
-	clr	a
-	move	a1,y:<prepass_occl_cell_sx
-	move	a1,y:<prepass_occl_cell_sy
-	move	#>1,a
-	move	a1,y:<prepass_occl_found
-	; Sixty cells are 12 + 24 + 24 bits.  Starting each row at bit 12
-	; makes the final 24-cell word wrap naturally into the next row, so no
-	; fourth padded word or row-boundary pointer fixup is needed.
-	move	#>$1000,x1
-	move	#>OCCL_CELL_COLS*OCCL_CELL_ROWS,x0
-	do	x0,prepass_mask_loop_end
-	jsr	<prepass_mask_cell
-	jsr	<prepass_cell_advance
-	nop
-prepass_mask_loop_end
-	move	y:<prepass_occl_found,a
-	rts
-
-; Advance the cell cursor and the mask pointer.  A=1 means a row ended; the
-; caller uses the row counter to stop after all 56 rows.  The point routine
-; deliberately leaves X1 and R0 untouched, so the same cursor serves both
-; the query and stamp walks.
-prepass_cell_advance
-	move	y:<prepass_occl_cell_sx,a
-	move	#>4,x0
-	add	x0,a
-	move	a1,y:<prepass_occl_cell_sx
-	move	x1,a
+	; Per-edge setup: doubled gradients, per-cell and per-row steps, and
+	; the anchored accumulator seeds.
+	move	#5,m3
+	move	#tri_x0,r3
+	move	#prepass_occl_e01r,r5
+	move	#prepass_occl_sx,r6
+	move	#prepass_occl_sy,r7
+	do	#3,prepass_stamp_edges
+	; The edge's two vertices; the second is read with (r3)- so the next
+	; iteration starts on it, and the ring turns the third iteration's
+	; second vertex back into vertex 0.
+	move	y:(r3)+,x0
+	move	y:(r3)+,y1
+	move	y:(r3)+,b
+	sub	x0,b	y:(r3)-,a
+	sub	y1,a
+	; gy_d = 2*dx and gx_d = -2*dy, each parked in a short Y cell -- a
+	; 24-bit home, NOT an N register: N registers are sixteen bits and
+	; read back zero-extended, which silently turns every negative
+	; gradient positive for both the anchor sign test and the MAC below.
+	; The row step is OCCL_CELL_SIZE*gy_d, the cell step the same times
+	; gx_d.
+	asl	b
+	move	b1,y:<prepass_occl_gy
+	asl	b
+	asl	b
+	asl	b
+	move	b1,y:(r7)+
 	asl	a
-	move	a1,x1
+	neg	a
+	move	a1,y:<prepass_occl_gx
+	asl	a
+	asl	a
+	asl	a
+	move	a1,y:(r6)+
+	; Anchor point: the range's top-left pixel, +(cell-1) on each axis
+	; whose gradient is positive there; N0 has held that constant since
+	; the sweep entry.
+	move	n2,b
+	move	y:<prepass_occl_gx,a
 	tst	a
-	jne	<prepass_cell_no_word
-	move	x:(r0)+,a
-	move	#>1,x1
-prepass_cell_no_word
-	move	y:<prepass_occl_cell_sx,a
-	move	#>240,x0
-	cmp	x0,a
-	jne	<prepass_cell_continue
-	clr	a
-	move	a1,y:<prepass_occl_cell_sx
-	move	y:<prepass_occl_cell_sy,a
-	move	#>4,x0
+	jle	<prepass_stamp_anchor_x
+	move	n0,x1
+	add	x1,b
+prepass_stamp_anchor_x
+	sub	x0,b
+	move	b1,y0
+	move	n3,b
+	move	y:<prepass_occl_gy,a
+	tst	a
+	jle	<prepass_stamp_anchor_y
+	move	n0,x1
+	add	x1,b
+prepass_stamp_anchor_y
+	sub	y1,b
+	move	b1,y1
+	; E_d = (gx_d*(px-xa) + gy_d*(py-ya)) with the MPY doubling undone by
+	; one ASR; the A0 read is the whole point (see the stage comment).
+	move	y:<prepass_occl_gx,x1
+	mpy	x1,y0,a
+	move	y:<prepass_occl_gy,x1
+	move	y1,y0
+	mac	x1,y0,a
+	asr	a
+	move	a0,x1
+	move	x1,a
+	move	a1,y:(r5)+
+prepass_stamp_edges
+
+	; Pending-mask row cursor: the seal cursor's saved base plus one mask.
+	move	n5,a
+	move	#>OCCL_MASK_WORDS,x0
 	add	x0,a
-	move	a1,y:<prepass_occl_cell_sy
-	move	#>$1000,x1
-	rts
-prepass_cell_continue
-	clr	a
+	move	a1,r4
+	move	#>1,y0
+prepass_stamp_row
+	; Load this row's accumulators and advance the row-restart seeds; the
+	; seed triple is consecutive on purpose so R0 can walk it here before
+	; the cell loop claims it as the mask cursor.
+	move	#prepass_occl_cur,r5
+	move	#prepass_occl_sy,r7
+	move	#prepass_occl_e01r,r0
+	do	#3,prepass_stamp_row_seeds
+	move	y:(r0),a
+	move	a1,y:(r5)+
+	move	y:(r7)+,x0
+	add	x0,a
+	move	a1,y:(r0)+
+prepass_stamp_row_seeds
+	move	r4,r0
+	move	y:<prepass_occl_b0,x1
+	do	y:<prepass_occl_ncx,prepass_stamp_row_end
+	; One pass per cell: B collects the maximum pre-step edge value for
+	; the inside test while each accumulator steps to the next cell.
+	move	#prepass_occl_cur,r5
+	move	#prepass_occl_sx,r6
+	move	y:(r5),b
+	move	y:(r6)+,x0
+	tfr	b,a
+	add	x0,a
+	move	a1,y:(r5)+
+	move	y:(r5),a
+	move	y:(r6)+,x0
+	cmp	a,b
+	tlt	a,b
+	add	x0,a
+	move	a1,y:(r5)+
+	move	y:(r5),a
+	move	y:(r6),x0
+	cmp	a,b
+	tlt	a,b
+	add	x0,a
+	move	a1,y:(r5)
+	tst	b
+	jgt	<prepass_stamp_skip
+	move	x:(r0),b
+	or	x1,b
+	move	b1,x:(r0)
+prepass_stamp_skip
+	; Same wrap rule as the query walk.
+	move	x1,b
+	asl	b
+	move	b1,x1
+	jclr	#0,b2,prepass_stamp_nowrap
+	move	(r0)+
+	move	y0,x1
+prepass_stamp_nowrap
+	nop
+prepass_stamp_row_end
+	move	(r4)+n4
+	move	y:<prepass_occl_nrows,b
+	sub	y0,b
+	move	b1,y:<prepass_occl_nrows
+	jne	<prepass_stamp_row
+	move	#>$ffff,m3
 	rts
 
-; seal |= pending, one word per mask cell.  The pending mask itself is
-; cleared here at the same bucket boundary.
+; seal |= pending, one word per mask cell, and the pending mask clears at the
+; same bucket boundary -- but only when the closing bucket stamped anything.
+; Most buckets hold no qualified visible occluder, and for them the whole
+; 336-word external-memory pass would merge nothing.
 prepass_merge_masks
+	move	y:<prepass_occl_dirty,a
+	tst	a
+	jeq	<prepass_merge_clean
+	clr	a
+	move	a1,y:<prepass_occl_dirty
 	move	#prepass_scratch,r0
 	move	#prepass_scratch+OCCL_MASK_WORDS,r2
 	move	#>OCCL_MASK_WORDS,x0
 	do	x0,prepass_merge_done
 	move	x:(r0),a
-	move	x:(r2)+,x0
+	move	x:(r2),x0
 	or	x0,a
 	move	a1,x:(r0)+
 	clr	a
 	move	a1,x:(r2)+
 prepass_merge_done
-	rts
-
-; Point-in-triangle test for the current point (span_sx1, span_sy1).  The
-; front-facing area is negative, so all three directed edge signs must be
-; non-positive.  MPY/MAC supplies the cross products in the DSP fractional
-; domain; only their signs matter and no integer conversion is performed.
-prepass_point_inside
-	move	y:<prepass_occl_point_sy,a
-	move	y:tri_y0,x0
-	sub	x0,a	y:tri_dx01,x0
-	move	a1,y0
-	move	y:tri_dy01,y1
-	mpy	x0,y0,a	y:<prepass_occl_point_sx,b
-	move	y:tri_x0,x0
-	sub	x0,b
-	move	b1,y0
-	mac	-y1,y0,a
-	move	a1,y:<prepass_occl_col_end
-	tst	a
-	jgt	<prepass_point_outside
-	move	y:<prepass_occl_point_sy,a
-	move	y:tri_y1,x0
-	sub	x0,a	y:<prepass_occl_point_sx,b
-	move	a1,y0
-	move	y:tri_x1,x0
-	sub	x0,b	y:<prepass_occl_dx12,x0
-	mpy	x0,y0,a
-	move	b1,y0
-	move	y:<prepass_occl_dy12,y1
-	mac	-y1,y0,a
-	tst	a
-	jgt	<prepass_point_outside
-	move	y:<prepass_occl_col_end,x0
-	add	x0,a
-	move	y:<prepass_occl_word_offset,x0
-	cmp	x0,a
-	jlt	<prepass_point_outside
-	move	#>1,a
-	rts
-prepass_point_outside
-	clr	a
+prepass_merge_clean
 	rts
 
 ; -----------------------------------------------------------------------------
@@ -3042,17 +3087,18 @@ triangle_out
 ; prepass_order is PHASE-LOCAL: it overlays chunk_uvs and triangle_out,
 ; which are dead until the first BUILD chunk of the frame arrives.  The sorted
 ; list is consumed completely by the occlusion sweep before the first BUILD,
-; so it does not need to survive chunk traffic.  prepass_scratch is the
-; external-X work area above the old layout end; it holds the intermediate
-; radix list and the two coverage masks.  prepass_kill and prepass_status also
-; live there and survive the BUILD chunks.
+; so it does not need to survive chunk traffic.  prepass_scratch holds the
+; two coverage masks (seal, then pending).  prepass_kill and prepass_status
+; also live here and survive the BUILD chunks.  The four allocations fill the
+; window to the top of physical X memory exactly; PREPASS_MAX is sized from
+; that identity, so growing any of the others must shrink it.
 ; -----------------------------------------------------------------------------
 	org	x:chunk_uvs
 
 prepass_order
 	ds	PREPASS_MAX
 prepass_scratch
-	ds	PREPASS_MAX
+	ds	OCCL_MASK_WORDS*2
 prepass_kill
 	ds	PREPASS_KILL_WORDS
 prepass_status
@@ -3229,6 +3275,11 @@ shade_cy
 	ds	1
 shade_cz
 	ds	1
+; One pad word so tri_x0 sits at a multiple of eight: prepass_stamp walks the
+; six projected-corner scalars below through R3 under a modulo-6 M3, and the
+; DSP's modulo addressing requires the block's base aligned to the next power
+; of two.
+	ds	1
 tri_x0
 	ds	1
 tri_y0
@@ -3344,32 +3395,33 @@ span_flip
 
 ; The prepass runs after projection and before BUILD_TRIANGLES, so the
 ; animation/projection temporaries are dead for its whole lifetime.  Aliasing
-; its hot cursor fields onto the on-chip Y:$0028-$003F window keeps the new
-; references in the one-word short form; no value crosses the command
-; boundary and the normal shipping path never observes these aliases.
-prepass_occl_base	= shade_acc_r
-prepass_occl_index	= shade_acc_g
-prepass_occl_mode	= corner_levels+1
-prepass_occl_dx12	= shade_ratio_r
-prepass_occl_dy12	= shade_ratio_g
-prepass_occl_aux	= triangle_tint
-prepass_occl_cell_sx	= projection_focal
-prepass_occl_cell_sy	= projection_focal_y
-prepass_occl_point_sx	= projection_cx
-prepass_occl_point_sy	= projection_cy
-prepass_occl_col_end	= projection_near
-prepass_occl_found	= animation_target_vertex_count
-prepass_occl_word_offset	= animation_vertices_remaining
-prepass_occl_flow	= project_temp_x
+; its hot cells onto the on-chip Y:$002A-$003E window keeps every reference
+; in the one-word short form; no value crosses the command boundary and the
+; normal shipping path never observes these aliases.  The three triples MUST
+; stay three consecutive words each: the stamp walks the edge accumulators
+; and both step sets through R5/R6/R7 as three-word blocks.
+prepass_occl_e01r	= shade_sum_r		; row-restart edge accumulators
+prepass_occl_e12r	= shade_sum_g
+prepass_occl_e20r	= shade_depth_scale
+prepass_occl_ncx	= shade_acc_r		; cells per bbox row
+prepass_occl_nrows	= shade_acc_g		; bbox rows (stamp counts it down)
+prepass_occl_b0	= corner_levels		; one-hot bit of a row's first cell
+prepass_occl_mode	= corner_levels+1	; occluder qualification flag
+prepass_occl_dirty	= shade_level		; bucket stamped pending coverage
+prepass_occl_index	= shade_ratio_r		; entry's global triangle index
+prepass_occl_flow	= shade_ratio_g		; previous entry's bucket
+prepass_occl_gx	= corner_levels+2	; one edge's doubled gradients: 24-bit
+prepass_occl_gy	= project_temp_x	; homes, deliberately not N registers
+prepass_occl_sy	= triangle_tint		; per-row edge steps, 3 words
+prepass_occl_cur	= projection_cx		; working edge accumulators, 3 words
+prepass_occl_sx	= project_temp_y	; per-cell edge steps, 3 words
 
-; Occlusion prepass state.  The two counter banks MUST stay here in on-chip
-; Y RAM: they are read and written twice per survivor and 96 times per prefix
-; pass, while X and Y above $01FF are external SRAM with wait states.  These
-; allocations fill the on-chip window Y:$0095-$00FF exactly.
+; Occlusion prepass state.  The class counter bank MUST stay here in on-chip
+; Y RAM: it is written once per survivor in each classification pass and
+; walked by the prefix, while X and Y above $01FF are external SRAM with
+; wait states.
 prepass_cnt_lo
-	ds	PREPASS_CNT_LO_COUNT
-prepass_cnt_hi
-	ds	PREPASS_CNT_HI_COUNT
+	ds	PREPASS_CNT_COUNT
 
 ; Sticky arming flag, written only by CMD_PREPASS.  It starts at zero, so an
 ; unmodified host never runs the prepass at all.
@@ -3417,12 +3469,20 @@ prepass_tp_save
 ;
 ; Anything that grows the program past P:$09BF silently corrupts the first
 ; triangle indices instead of failing to assemble.  Check the P extent in the
-; LOD after adding code:
+; LOD after adding code (strtonum, not "0x" concatenation: plain awk reads a
+; concatenated hex string as 0 and the old one-liner therefore printed only
+; the word count):
 ;
-;   tr -d '\r' < TREX/dsp/trex_dsp.lod | awk '/^_DATA P/{s=$3;n=0;i=1;next} \
-;     /^_/{if(i)printf "letzte P = $%04X\n",("0x" s)+n-1;i=0;next} {if(i)n+=NF}'
+;   tr -d '\r' < TREX/dsp/trex_dsp.lod | awk '/^_DATA P/{s=strtonum("0x" $3); \
+;     n=0;i=1;next} /^_/{if(i&&n)printf "last P = $%04X\n",s+n-1;i=0;next} \
+;     {if(i)n+=NF}'
 ;
-; The current full-mesh program ends at P:$09BA, leaving P:$09BB-$09BF free
+; The instrumented diagnostic builds are bound by the same ceiling: a
+; temporary counter that pushes the extent past P:$09BF gets overwritten by
+; the index upload and reports garbage, which cost this stage one full round
+; of contradictory measurements once.
+;
+; The current full-mesh program ends at P:$0988, leaving P:$0989-$09BF free
 ; before the resident indices.  Keep the "<" prefix on jumps and the short
 ; Y-scalar forms on any code added later, or the program will overwrite the
 ; first triangle indices without an assembler error.

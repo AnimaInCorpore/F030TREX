@@ -46,36 +46,43 @@ corner-normal table (needed for Gouraud shading) displaced it, and each
 BUILD chunk now carries its own UV pairs instead (`chunk_uvs`, above).
 
 The `-DTREX_PREPASS` overlay uses the same X window before BUILD traffic:
-`X:$39DF-$3CB1` is the 723-word phase-local order list, `X:$3CB2-$3F84` is
-the 723-word radix scratch/mask area, `X:$3F85-$3FF6` is the 114-word
-full-mesh kill bitmap (one bit per 2,724 triangles), and `X:$3FF7-$3FFE` is
-prepass status. The two masks use the first 336 words of the scratch area.
-The order list overlays the dead UV/output window deliberately: the occlusion
-sweep consumes it before the first BUILD chunk, so no sorted-list storage is
-needed after that point. This is the stock-hardware-safe lifetime boundary.
+`X:$39DF-$3F15` is the 1,335-word phase-local order list, `X:$3F16-$3F85`
+holds the two 56-word coverage masks (seal, then pending), `X:$3F86-$3FF7`
+is the 114-word full-mesh kill bitmap (one bit per 2,724 triangles), and
+`X:$3FF8-$3FFF` holds prepass status; the four allocations fill the window
+to the top of physical X memory exactly. The order list overlays the dead
+UV/output window deliberately: the occlusion sweep consumes it before the
+first BUILD chunk, so no sorted-list storage is needed after that point.
+This is the stock-hardware-safe lifetime boundary.
 
-The coverage sweep keeps its per-run clear and order cursor outside the
-per-entry loop, advances the cell cursor for both covered and uncovered cells,
-and returns whether the query found sealed coverage. This matters at edge
-poses: without those invariants the culling build could make the displayed
-animation appear to stop when the head crossed the right border.
+The order is produced by a two-pass counting sort into 64 depth classes of
+32 OT buckets each: classification runs once to count and once to scatter,
+so no radix ping-pong list exists. That second list is what previously
+capped the order list at 723 entries -- below the full mesh's real
+1,100-1,200 area/box survivor count, so the old classification overflowed
+and self-disabled on every frame. The coverage sweep walks only the 8x8
+cells each survivor's clamped screen box overlaps, exits its seal query at
+the first uncovered cell, stamps full cells with three incrementally
+stepped edge values read from A0 (the A1 word of a small fractional product
+is only its sign extension), and merges pending coverage only for classes
+that stamped anything.
 
-The authored choreography ends at frame 273. The frontend-added post-source
-hold still renders the full 2,724-triangle mesh, but sends one PREPASS disarm
-when that hold starts: the per-triangle pending-coverage stamp sweep otherwise
-exceeds the stock DSP frame budget in the synthetic right-edge poses. Culling
-remains the standard path for the authored animation, while the hold uses the
-correct unculled BUILD path. With the custom Hatari/TOS 4.02 harness, armed and
-disarmed frame-273 captures are byte-identical, and a guarded frame-291 capture
-matches the disarmed control with no polygon corruption or stall.
+The authored choreography ends at frame 273 and the frontend-added hold
+continues past it. The prepass now stays armed through that hold: the
+one-shot disarm the frontend used to send existed to protect the stock DSP
+frame budget from the former full-grid cell cursor, which visited all
+3,360 4x4 cells for every survivor, and the range-restricted sweep removed
+that cost class. With the custom Hatari/TOS 4.02 harness, armed and
+disarmed captures are byte-identical at frame 100 and at hold frame 291,
+with zero prepass protocol failures or capacity overruns across the hold.
 
 The frontend reserves `X:$0000-$3DFF` and `Y:$0000-$3EF7`. The full-mesh
-program occupies P from `$0040` and ends at `$09BA`, leaving five safe words
-at `$09BB-$09BF` before the Y indices begin at `$09C0`. This bound has to be checked
-after every DSP change, because an overflow overwrites the index list without
-an assembler error -- recompute it from the assembled `.lod` rather than
-trusting this figure, with the check command in the end-of-file comment of
-`trex_dsp.asm`.
+program occupies P from `$0040` and ends at `$0988`, leaving the words at
+`$0989-$09BF` free before the Y indices begin at `$09C0`. This bound has to
+be checked after every DSP change, because an overflow overwrites the index
+list without an assembler error -- recompute it from the assembled `.lod`
+rather than trusting this figure, with the check command in the end-of-file
+comment of `trex_dsp.asm`.
 
 The `trex_m68030_prepass_run` viewing target keeps the same full-mesh DSP
 occlusion path while disabling the host-side diagnostic flushes. It still
@@ -205,12 +212,18 @@ enabled span validator compared 9,003 records with zero field mismatches.
 That is emulator validation; a run on real Falcon hardware is still
 outstanding. The current full-mesh prepass has been assembler-checked with
 zero errors and warnings and its P/X/Y extents fit the stock overlay. The
-standard host build has `prepass_arm = 1`, so FINISH runs the prepass inline.
-With TOS 4.02, Falcon DSP emulation, 4 MB ST-RAM and the runtime `.lod` mounted,
-the frame-100 arm-1 dump matched the disarmed control byte-for-byte:
-`d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16`.
-This is emulator validation only: culling yield and timing on a physical Falcon
-remain unmeasured.
+standard host build has `prepass_arm = 1`, so FINISH runs the prepass inline
+and it stays armed through the synthetic hold. With TOS 4.02, Falcon DSP
+emulation, 4 MB ST-RAM and the runtime `.lod` mounted, the armed dumps
+matched the disarmed controls byte-for-byte at frame 100
+(`d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16`) and at
+hold frame 291
+(`e66d4d433360c9e63938bc78efdf774716c31dbaf22679b6ac0ffd1f42b00486`), with
+zero prepass protocol failures or capacity overruns, while the armed run
+wrote measurably fewer raster pixels -- the kill bitmap is live and its
+kills are invisible, as the sealing rule requires. This is emulator
+validation only: culling yield and timing on a physical Falcon remain
+unmeasured.
 
 The DSP assembler runs under DOSBox; the result is `TREX/dsp/trex_dsp.lod`,
 which is then adopted as the runtime copy at `TREX/m68030/trex_dsp.lod`.

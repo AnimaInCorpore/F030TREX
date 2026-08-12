@@ -721,21 +721,12 @@ trex_dummy_frame
 	moveq	#0,d0
 .z_spin_ready
 	move.l	d0,y_spin_index
-	; The extracted choreography ends at frame 273.  The post-source hold
-	; deliberately keeps the model moving, but its right-edge poses can make
-	; the conservative per-triangle pending-coverage sweep exceed the stock
-	; DSP frame budget.  Keep occlusion armed through the authored sequence,
-	; then disarm it once for the synthetic hold; BUILD remains full geometry.
-	ifd	TREX_PREPASS
-	tst.l	gait_hold_index
-	beq	.prepass_hold_ready
-	tst.l	prepass_hold_disarmed
-	bne	.prepass_hold_ready
-	moveq	#PREPASS_MODE_DISARM,d0
-	bsr	prepass_send_mode
-	move.l	#1,prepass_hold_disarmed
-.prepass_hold_ready
-	endc
+	; The prepass now stays armed through the synthetic hold as well.  The
+	; one-shot disarm that used to fire here guarded against the former DSP
+	; sweep, whose full-grid cell cursor visited all 3,360 mask cells per
+	; survivor and overran the frame budget on the hold's right-edge poses;
+	; the range-restricted sweep is bounded by each survivor's own screen
+	; box and removes the overrun with the arm left on.
 .animation_advance_ready
 	TimeMark	stat_mark_setframe
 	bsr	dsp_set_frame
@@ -4742,8 +4733,6 @@ gouraud_enabled
 ;                                            bracket (protocol-cost baseline)
 prepass_arm
 	dc.l	1
-prepass_hold_disarmed
-	dc.l	0
 
 ; Deliberately NOT in stat_block: trex_dummy_frame clears that block, and it
 ; does so after prepass_startup has already run.  A command that failed at

@@ -852,9 +852,15 @@ rasterizer -37.7 ms and readback/packet-build -14.5 ms per frame at `M_uv` /
 `B_vbox` / 2x2, against a DSP-side cost estimated at roughly 15 ms that would
 largely land in the cross-frame window that runs empty today.
 
-### 2.3e Current full-mesh implementation and validation status
+### 2.3e Full-mesh implementation and first validation round (superseded by 2.3f)
 
-The current source implements the previously described sound design against
+**Historical note: every validation in this subsection was later shown to
+have exercised a non-functional culling stage -- see 2.3f for the four
+defects, the rewrite, and the re-validation.  The X overlay, `PREPASS_MAX`,
+the P extent and the hold-disarm behaviour described below are all
+obsolete.**
+
+The source at that time implemented the previously described design against
 the stock full geometry, rather than moving the resident arrays or switching
 to the LOD. The DSP resident index words are three words per triangle, so the
 prepass reloads `triangle_indices + 3*index`; the full 2,724-bit kill bitmap is
@@ -915,12 +921,14 @@ accumulated query result.
 A second reproduction showed that the synthetic post-source hold (the
 frontend continues moving after the extracted choreography ends at frame 273)
 can make the per-triangle pending-coverage stamp sweep exceed the stock DSP
-frame budget at the right edge. The standard full-mesh prepass therefore stays
-armed through the authored sequence and sends one disarm command when
-`gait_hold_index` starts. The hold still renders the complete 2,724-triangle
-mesh; it simply uses the already-correct unculled BUILD path rather than
-allowing culling work to stall the animation. This is a correctness guard for
-the frontend-added hold, not a physical-Falcon timing result.
+frame budget at the right edge. The full-mesh prepass therefore stayed
+armed through the authored sequence and sent one disarm command when
+`gait_hold_index` started. The hold still rendered the complete
+2,724-triangle mesh; it simply used the already-correct unculled BUILD path
+rather than allowing culling work to stall the animation. This was a
+correctness guard for the frontend-added hold, not a physical-Falcon timing
+result -- and the overrun it guarded against was the old full-grid cell
+walk's; the guard is retired in 2.3f.
 
 The guard was checked with the custom Hatari Falcon harness, TOS 4.02, 4 MB
 ST-RAM, DSP emulation and the exact runtime `.lod`. Starting at frame 270, the
@@ -942,6 +950,138 @@ For visual playback without per-frame host-disk traffic, build
 armed culling path, but also defines `TREX_RUN`: framebuffer/stat diagnostics
 and the final diagnostic flush are disabled. The DSP `.lod` is still read once
 at startup, so the mounted GEMDOS volume remains necessary.
+
+### 2.3f The prepass never actually culled -- four latent defects, the rewrite that fixed them, and the retired hold disarm
+
+Everything above in 2.3e describes a stage that, as later established with
+DSP-level breakpoints in Hatari, never killed a single triangle in any
+validated run. The byte-identical framebuffers were all trivially identical:
+the compared images were produced by the same unculled path on both arms.
+Four independent defects each sufficed to keep the stage dead, and the
+budget overrun that motivated the synthetic-hold disarm was a symptom of the
+same code. All four are fixed in the current source; the sweep, the sort and
+the BUILD consumption were rewritten in the process, and the rewrite is both
+smaller and asymptotically cheaper than what it replaced.
+
+The defects, in the order they were found:
+
+1. **The stamp predicate was unsatisfiable.** `prepass_point_inside` stored
+   `A1` of each fractional MPY/MAC edge product, but a small product's value
+   lands in `A0` and its `A1` is only the sign extension -- the very trap the
+   `span_cross` comment documents. The stored "edge values" were 0 or -1, and
+   the reconstructed third-edge test degenerated to "the point lies ON edge
+   01 or edge 12", which four cell corners can never satisfy simultaneously.
+   No cell was ever stamped, so seal coverage stayed empty and the query
+   could never prove a triangle covered.
+2. **The walk cursors died at bit 23.** The one-hot mask advance in the old
+   cell walk (and, independently, in BUILD's streaming kill-bitmap cursor)
+   tested the shifted mask with a full-accumulator `TST` after `MOVE X1,A`.
+   A bit-23 one-hot sign-extends into A2, so the "mask became zero, advance
+   the word" branch never fired: the walk cursor zeroed itself and stopped
+   testing or stamping past the twelfth cell of each row, and BUILD stopped
+   consuming kill bits after the 24th triangle of every armed frame.  The
+   fix reads the carried-out bit from A2 bit 0 (`JCLR #0,A2`) in all
+   walkers, at the same word count.
+3. **The classification overflowed its capacity every frame, invisibly.**
+   The full mesh has ~1,100-1,200 area+box survivors per frame (measured
+   1,145-1,194 over the choreography), but the radix sort's ping-pong
+   scratch capped `PREPASS_MAX` at 723.  Worse, the overrun marker was
+   unreliable: the capacity check compared the survivor counter that the
+   overrun path had just set to `$ffffff`, the next survivor incremented it
+   to zero, and the count then kept climbing -- so the host's
+   `PREPASS_OVERFLOW_MARK` check saw a plausible small number instead of the
+   sentinel.  The prepass aborted before the sort on every frame and
+   reported healthy-looking survivor counts while doing so.
+4. **The sweep's triangle reload read the wrong memory.** The once-folded
+   `add x0,a a1,r2` in `prepass_load_triangle` stored the PRE-add A1 into
+   R2 -- a parallel move reads its source at the start of the instruction,
+   exactly the constraint 2.3d documents -- so the reload walked the on-chip
+   scalars at `Y:3*index` instead of the resident list.  Unobservable while
+   defects 1-3 kept the stage inert; fatal the moment they were fixed.
+
+The current implementation replaces the sweep and the sort:
+
+- **Two-pass counting sort into 64 depth classes** (32 OT buckets each,
+  `PREPASS_COARSE_BITS`): classification runs once to count survivors per
+  class and once more to scatter them to prefix-summed cursors.  No second
+  list exists, which raises `PREPASS_MAX` to 1,335 -- the X window from
+  `chunk_uvs` to the top of physical X memory now holds the order list
+  (1,335), both coverage masks (2x56), the kill bitmap (114) and the status
+  cells (8) exactly.  Coarse classes only merge neighbouring buckets, so
+  sealing across class boundaries under-approximates the host's
+  strictly-nearer draw order and kills remain sound.  Overflow is now
+  detected once, after the counting pass, where no wrap can hide it.
+- **Range-restricted coverage walks.** Both the seal query and the pending
+  stamp visit only the 8x8-pixel cells the survivor's clamped screen box
+  overlaps ([min>>3, max>>3] per axis -- the box is cell-exact), instead of
+  every cell of the screen grid per survivor.  The query additionally exits
+  at the first unsealed cell, which is the common case.  This removes the
+  cost class that made the old sweep exceed the frame budget on the
+  synthetic hold's right-edge poses.
+- **Incremental three-edge stamp.** Full-cell coverage is decided by three
+  edge accumulators anchored at each edge's maximising cell corner
+  (+cell-1 per axis where the gradient is positive), so the four-corner
+  test collapses to one sign test per edge and stepping to the next cell or
+  row is one add per edge.  The anchors come from the same fractional
+  MPY/MAC the area routine uses, read from `A0` after one ASR; everything
+  downstream is exact 24-bit integer adds.  The doubled gradients live in
+  short Y cells, deliberately not N registers, whose 16-bit zero-extended
+  read-back would silently turn negative gradients positive.
+- **Dirty-flag merge.** Pending coverage is merged into seal at a class
+  boundary only when the closing class stamped anything; classes without a
+  qualified visible occluder skip the whole external-memory merge pass.
+- **Shared index unpack.** The classification loop and the sweep's reload
+  share one `prepass_unpack_indices` subroutine; the reload's base add and
+  R2 store are split into two instructions (defect 4).
+
+Sizes: the full-mesh program now ends at `P:$0988` -- 50 words smaller than
+the `P:$09BA` recorded in 2.3e -- with `$0989-$09BF` free before the
+resident indices.  The order-entry format keeps its shape
+(`(triangle_index << 12) | class`, class in the low bits), so the host
+protocol is untouched except for the retired hold disarm.
+
+**The hold disarm is retired.** `trex_m68030.s` no longer sends
+`PREPASS_MODE_DISARM` when `gait_hold_index` starts, and
+`prepass_hold_disarmed` is gone: the prepass stays armed for the entire run.
+The guard existed to keep the old full-grid sweep from overrunning the frame
+budget on the hold's right-edge poses; the range-restricted sweep is bounded
+by each survivor's own screen box and removed that overrun class.
+
+Validation, all with the Hatari 2.6.1 Falcon harness, TOS 4.02, 4 MB
+ST-RAM, DSP emulation, and the exact runtime `trex_dsp.lod` beside the
+binary -- emulator correctness results, not physical-Falcon measurements:
+
+| Check | Result |
+|---|---|
+| DSP DOSBox assembly | 0 errors, 0 warnings |
+| Full-mesh P extent | last instruction `P:$0988`; `$0989-$09BF` free |
+| Full-mesh X extent | `prepass_status` ends at `X:$3FFF` exactly |
+| Host prepass build | `make trex_m68030_prepass` passes |
+| Survivors (arm 2, freestanding) | 1,145 last / 1,194 max over 65 frames; 0 overflow, 0 protocol failures |
+| Frame-100 `fb.res`, arm 1 vs arm 0 | byte-identical, SHA-256 `d89958b314c924ad...3d16` (the recorded full-mesh hash) |
+| Hold frame-291 `fb.res`, arm 1 vs arm 0 | byte-identical, SHA-256 `e66d4d433360c9e6...b00486` (the recorded clean-control hash) |
+| Armed hold run | 351 frames over 11,500 VBLs, 0 failures, 0 overruns, no stall |
+| Culling activity | armed wrote 61,697 fewer raster pixels than disarmed by frame ~351, 19 fewer by frame 109, at identical images |
+
+The pixel deltas confirm the kill bitmap is live end-to-end (sweep, bitmap,
+BUILD skip, host packet stream) and that its kills are invisible, as the
+sealing rule requires.  The yield with 8x8 cells and 64 depth classes is
+deliberately conservative -- tens of triangles per frame in the second half
+of the choreography, near zero in the close-up frames whose depth spread
+collapses into one or two classes.  Raising the yield (finer classes via a
+segmented sort, 4x4 cells if X memory is found for the larger masks) is
+future work.  The arm-2 freestanding prepass costs 75.6 ms/frame in Hatari
+-- the two classification passes dominate -- which the production arm-1
+inline mode hides inside the FINISH window as before; these are emulator
+figures under the 2.4a caveats.
+
+One methodological note for future diagnostic work: instrumented DSP builds
+are bound by the same `P:$09BF` ceiling as the shipping program.  A
+temporary counter that pushes the extent past it lands in the words the
+resident index upload rewrites, executes index data as code, and reports
+zeros -- which produced one full round of self-contradictory measurements
+during this investigation before the extent check was applied to the
+diagnostic builds too.
 
 ### 2.4 The occlusion binary is not a timing source
 
