@@ -945,11 +945,23 @@ binary. No physical-Falcon run has been completed, so DSP-window occupancy,
 stock-hardware timing and FPS remain unmeasured. The framebuffer identity is a
 Hatari correctness result, not a physical-machine performance claim.
 
-For visual playback without per-frame host-disk traffic, build
-`trex_m68030_prepass_run`. It retains `TREX_PREPASS`, `TREX_FULL_MESH` and the
-armed culling path, but also defines `TREX_RUN`: framebuffer/stat diagnostics
-and the final diagnostic flush are disabled. The DSP `.lod` is still read once
-at startup, so the mounted GEMDOS volume remains necessary.
+For visual playback without per-frame host-disk traffic, build the release
+target `trex_release`. It emits `TREX.TOS`, retaining `TREX_PREPASS`,
+`TREX_FULL_MESH` and the armed culling path while defining `TREX_RUN`:
+framebuffer/stat diagnostics and the final diagnostic flush are disabled. The
+matching `TREX.LOD` is still read once at startup, so the mounted GEMDOS
+volume remains necessary.
+
+### 2.3f Full-mesh release package — implemented
+
+The release viewing package is `TREX.TOS`, built with
+`TREX_FULL_MESH`, `TREX_PREPASS` and `TREX_RUN`. It is the single supported
+full-mesh package: textured Gouraud shading, armed DSP occlusion through the
+authored choreography, and no per-frame diagnostic file writes. Build it with
+`make trex_release`; the matching `TREX.LOD` copy is placed beside the
+TOS so the release directory is self-contained. The DSP protocol, resident
+memory layout and `.LOD` contents are the validated production path described
+above; no separate presentation-mode variants are part of the release.
 
 ### 2.3f The prepass never actually culled -- four latent defects, the rewrite that fixed them, and the retired hold disarm
 
@@ -1296,6 +1308,55 @@ candidate, and a host-side batch -- spill `raster_xl/xr` per packet (two
 stores in place of the `bsr`) and compute every hull in one tight per-frame
 loop that stays cache-resident, amortising the fetch that costs 14.7 ms
 today.
+
+### 2.6 Frame-rate overlay — implemented, release only
+
+`-DTREX_FPS` draws a five-cell `NN.NN` frames-per-second field into the top-left
+corner of the render window, in white (`$ffdf`), from `gpu_draw_fps`. It is on
+the `TREX.TOS` rule alone. Every other target — `trex_prepass*`, the `fb.res`
+capture path, the span validator — must stay without it, because the overlay
+writes into the framebuffer and would contaminate any dump or byte-identity
+comparison. With the flag off the assembled binary is byte-identical to the
+build that predates the feature (verified: both link to SHA-1 `3810c7e5`), so
+the gate is not merely conventional.
+
+Format and placement:
+
+- **`NN.NN`, zero padded, never blanked.** Both digit pairs and the point hold
+  fixed columns, so the field cannot shift sideways as the rate crosses 10.
+- **Two fraction digits are what make it useful.** At the rate this renderer
+  runs — 2.02–2.43 fps observed below — an integer field would sit on `02` and
+  show nothing. The value is `20000/ticks` from the 200 Hz `_hz_200` tick, so
+  the quotient carries its own hundredths and no second division is needed.
+- **Clamped at both ends.** A zero tick delta would divide by zero and a long
+  stall would overflow `DIVU.W`'s 16-bit divisor; the first pegs the field at
+  `99.99`, the second reads `00.00`. Neither can wrap into a plausible number.
+- Drawn between `gpu_rasterize_ot` and `gpu_present_frame`, outside both the
+  raster and present `TimeMark` brackets, so it is charged to neither stage in
+  `render_stats.res`.
+
+Cost and layout: plain CPU stores, no Blitter. The field is drawn 1:1 — 30x7
+pixels for the whole readout — so a set source pixel is one `MOVE.W #$ffdf,(a4)`
+straight into the framebuffer. Per frame that is a 30x7 wipe (105 longword
+stores) plus at most 175 tested source pixels, against a ~480 ms frame. On the
+wide 256-mode pixels a 5x7 glyph displays about 6.25x7 square-equivalent, which
+is near the readable limit on a 15 kHz monitor; `FPS_SCALE` carries the ratio
+through the derived geometry, but doubling it also needs the companion stores
+in the inner loop, which is written for 1:1. The wipe is
+unconditional because `delta_clear_enabled` is a byte patch applied to the
+built file: with the delta clear armed the frame clear only touches dirtied
+bands and last frame's digits would survive underneath. The font (11 cells x 7
+bytes) sits at the end of the data section and the 10 bytes of state at the end
+of BSS, so no pinned buffer or measured cache phase moves. The added code and
+data fall inside the existing 4 KiB alignment pad: `text+data` is 1,183,744
+bytes with and without the flag, and only BSS grows, by 10 bytes.
+
+Validation: Hatari, TOS 4.02, Falcon DSP emulation, 4 MB ST-RAM, the runtime
+`.lod` beside the executable. The field renders as specified and updates per
+frame — `02.43` and `02.02` captured at different points in the choreography,
+holding the same columns. These are emulator readings of an emulator's frame
+rate; they are not a physical Falcon030 measurement, and the overlay running on
+hardware will report whatever that machine actually does.
 
 ## 3. Rasterizer cost model
 
