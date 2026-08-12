@@ -14,3 +14,6 @@ __pycache__/
 
 # release archives (rebuildable: make trex_release + zip)
 *.zip
+
+# announcement draft, kept locally
+forum-post.txt
