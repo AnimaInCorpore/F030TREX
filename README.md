@@ -27,7 +27,9 @@ make trex_release
 
 This produces `TREX/m68030/TREX.TOS`: the full 2,724-triangle model with armed
 DSP occlusion, textured Gouraud lighting, and no per-frame diagnostic file
-writes.  Its matching `TREX.LOD` is copied beside it for deployment.
+writes.  Its matching `TREX.LOD` is copied beside it for deployment, and
+`TREX/m68030/README.TXT` is the 40-column, CRLF release note that ships with
+them; those three files together are the release archive.
 
 The release also draws a frame-rate readout in the top-left corner: white
 `NN.NN` frames per second, fixed width so the digits never shift column.  It is
@@ -87,3 +89,25 @@ release rather than claiming pixel-for-pixel equivalence with the PS1 demo.
 The release therefore matches the PS1 source data most closely in geometry,
 animation and texture assets, while transform, occlusion, lighting and
 rasterization are the Falcon implementation.
+
+## Credits
+
+The PlayStation forensics -- working out the TMD model, the TANM morph
+animation and the TIM texture pages from the source disc -- the whole M68030
+front end and most of the DSP56001 program were written by AI: ChatGPT 5.6,
+Claude Opus 5 and Claude Fable 5.
+
+Sascha Springer's share is the direction, a number of the ideas, and the two
+innermost routines of the DSP core, both carried over from the Falcon DSP 3D
+engine he wrote in 1994: `transform_vertices` is the MAC pipeline of that
+engine's `rotate_translate`, unchanged apart from three added `rnd`
+instructions and new symbol names, and the signed perspective divide is the
+same 1994 `rep #24` / `div` sequence. They run per vertex and per visible
+triangle, so the oldest code in the repository is also the hottest.
+Everything beyond that is the AI's work.
+
+Model, animation and textures are extracted from Sony's PlayStation *Demo
+One* (SCES-00048). The 256x224 Videl register sets are Screenspain's
+(Chris/AURA and Scandion/Mugwumps), carried over from the F030Arcade snowbros
+port -- see the video-mode comment in `TREX/m68030/trex_m68030.s`. This is a
+non-commercial hobby port; the original PS1 assets belong to their owners.

@@ -24,6 +24,39 @@ per corner (Gouraud-interpolated across each span) and a colour-tint class
 per face; `gouraud_enabled` (default on, `TREX/m68030/trex_m68030.s`) keeps
 the earlier one-level-per-face path selectable for A/B measurement.
 
+## Provenance of the transform and the divide
+
+Two routines in this file are not new code and must not be treated as such.
+
+`transform_vertices` is the MAC pipeline of `rotate_translate` from
+`src/3d.asm` of the predecessor repository `f030dsp3d` ("3d routines (c) 1994
+by Sascha Springer"): 18 of that routine's 21 instructions are present
+verbatim, including the `move #8,n4` prologue, the register contract (`r0`
+vertices, `r1` position, `r2` output, `r4` matrix in Y memory), the A/B
+accumulator ping-pong and the `tfr y1,a y:(r4)-n4,y0` matrix rewind that
+starts the next vertex while the previous MAC is still in flight. The nine-word
+matrix layout the host sends is that routine's layout, so changing it breaks
+the frontend's `SET_FRAME` packet as well. `transform_animated_vertices` is the
+same pipeline adapted to transform in place.
+
+Three instructions were added, all of them `rnd` before a store. They are not
+cosmetic: `MOVE A1` alone truncates, and a 1.23 matrix cannot represent 1.0
+exactly -- the identity entry is `$7fffff`, or 1 - 2^-23 -- so truncation turns
+1000 + 1000*`$7fffff` into 1999 instead of 2000, and that one-unit shortfall
+propagates into the projection and collapses vertices that should stay a pixel
+apart.
+
+The signed division idiom (`jpl *+2` / `neg` / `andi #$fe,ccr` / `rep #24` /
+`div x1,a` / `jclr #23,y1,*+3` / `neg`) is from the same 1994 source and is
+used in three places: the two perspective divides per vertex, and the DDA span
+slope divide per visible triangle.
+
+Both sequences are shaped around the DSP56001's parallel X/Y moves so that
+every MAC issues in one cycle, and they sit in the innermost loops of the
+frame -- the transform runs 1,376 times per frame. Rewriting either for
+readability, or dropping a `rnd`, costs measured frame time or correctness.
+Re-measure before touching them, and record the result in `OPTIMIZATION.md`.
+
 ## Memory budget
 
 The Falcon gives the DSP 32K words of external 24-bit RAM. P and Y address
