@@ -265,9 +265,9 @@ RENDER_WINDOW_OFFSET	= (VIDEO_Y_OFFSET*VIDEO_SCREEN_STRIDE)+(VIDEO_X_OFFSET*FRAM
 ; two digits and the point never moves, so the field cannot shift sideways as
 ; the rate crosses 10 -- blanking the leading zero instead would make the whole
 ; number jump every time it did.  Two fraction digits are what make the readout
-; useful at all here: gpu_present_frame documents the rate as well under 2 fps
-; and OPTIMIZATION.md's last figure is ~482.5 ms/frame, so an integer field
-; would sit on "02" and hide every variation worth watching.
+; useful at all here: the full-mesh renderer is around two fps in the recorded
+; Hatari runs, so an integer field would sit on "02" and hide every variation
+; worth watching.  Physical-Falcon timing is still unmeasured.
 ;
 ; Geometry is in render-window pixels: the field sits at the top-left of the
 ; 240x224 target, so FPS_X/FPS_Y are relative to render_base and a row step is
@@ -3296,14 +3296,22 @@ gpu_submit_ot
 	TimeMark	stat_mark_raster
 	bsr	gpu_rasterize_ot
 	TimeAdd	stat_mark_raster,stat_t_raster
-	; Outside the raster and present marks on purpose: the overlay is not
-	; part of either stage and must not be charged to one of them in
-	; render_stats.res.
-	ifd	TREX_FPS
-	bsr	gpu_draw_fps
-	endc
 	TimeMark	stat_mark_present
+	; Keep this call site exactly one word-sized BSR in both release variants.
+	; Diagnostic targets retain their original short BSR and byte layout.  The rasterizer is
+	; below it in the text section and its instruction-cache phase is acutely
+	; layout-sensitive; inserting a second release-only call here would move
+	; the whole hot path.  The FPS entry draws, then tail-branches through the
+	; normal presenter so the release still performs the same page flip.
+	ifd	TREX_FPS
+	bsr.w	gpu_draw_fps
+	else
+	ifd	TREX_RELEASE
+	bsr.w	gpu_present_frame
+	else
 	bsr	gpu_present_frame
+	endc
+	endc
 	TimeAdd	stat_mark_present,stat_t_present
 	rts
 
@@ -3341,130 +3349,6 @@ gpu_present_frame
 	move.l	d0,render_base
 .gpu_present_done
 	rts
-
-	ifd	TREX_FPS
-; -----------------------------------------------------------------------------
-; Frame-rate overlay.  Called once per frame between gpu_rasterize_ot and
-; gpu_present_frame, so it lands in the back buffer the flip is about to show
-; and the tick delta it samples spans one whole frame, present included.
-;
-; Plain CPU stores throughout -- no Blitter.  The field is drawn 1:1, so a set
-; source pixel is one MOVE.W immediate straight into the framebuffer.
-;
-; Cost is bounded and tiny: a 30x7 wipe (105 longword stores) plus at most
-; 5*7*5 = 175 tested source pixels.  Against a ~480 ms frame that is noise, so
-; nothing here is unrolled or made conditional for speed.
-;
-; Deliberately NOT gated on video_mode_active or present_enabled: the field is
-; drawn into the render target either way, which keeps a headless capture and a
-; live run showing the same buffer contents.
-; -----------------------------------------------------------------------------
-gpu_draw_fps
-	movem.l	d0-d7/a0-a6,-(sp)
-
-	; Frame period from the 200 Hz tick.  Sampled here rather than in the
-	; frame loop so the mark and the drawing that consumes it cannot drift
-	; apart if either moves.
-	move.l	$4ba.w,d0
-	move.l	d0,d1
-	sub.l	fps_last_tick,d1
-	move.l	d0,fps_last_tick
-
-	; fps*100 = 20000/ticks, so the quotient carries its own two fraction
-	; digits and no second division is needed.  Both ends need a guard: a
-	; frame that finished inside one 5 ms tick would divide by zero, and a
-	; long stall would overflow DIVU.W's 16-bit divisor.
-	moveq	#0,d0			; the "too slow to measure" reading, 00.00
-	tst.l	d1
-	beq	.fps_peg
-	cmpi.l	#FPS_SCALED_NUMERATOR,d1
-	bhi	.fps_value_ready
-	move.l	#FPS_SCALED_NUMERATOR,d0
-	divu.w	d1,d0
-	andi.l	#$0000ffff,d0
-	cmpi.l	#FPS_MAX_CENTI,d0
-	bls	.fps_value_ready
-.fps_peg
-	move.l	#FPS_MAX_CENTI,d0	; peg at 99.99 rather than wrap
-.fps_value_ready
-
-	; Fixed NN.NN, zero padded and never blanked: every cell is always a
-	; glyph, so the point and both digit pairs hold their column no matter
-	; what the rate does.  DIVU.W leaves the remainder in the high word and
-	; the quotient in the low one; the clamp above keeps every step in range.
-	divu.w	#10,d0
-	move.l	d0,d1
-	swap	d1
-	move.b	d1,fps_text+4		; hundredths
-	andi.l	#$0000ffff,d0
-	divu.w	#10,d0
-	move.l	d0,d1
-	swap	d1
-	move.b	d1,fps_text+3		; tenths
-	andi.l	#$0000ffff,d0
-	divu.w	#10,d0
-	move.l	d0,d1
-	swap	d1
-	move.b	d1,fps_text+1		; units
-	andi.l	#$0000ffff,d0
-	move.b	d0,fps_text		; tens, 0..9 because the value is clamped
-	move.b	#FPS_GLYPH_DOT,fps_text+2
-
-	; Repaint the field's own background first.  The full clear would have
-	; wiped it already, but delta_clear_enabled is documented as a byte patch
-	; applied to the built file: with the delta clear armed the frame clear
-	; only touches bands the geometry dirtied, and last frame's digits would
-	; survive underneath this frame's.  An unconditional 210-pixel wipe is
-	; cheaper than teaching the delta tracker about the overlay.
-	move.l	render_base,a0
-	adda.l	#(FPS_Y*VIDEO_SCREEN_STRIDE)+(FPS_X*FRAMEBUFFER_BPP),a0
-	moveq	#0,d0
-	moveq	#FPS_FIELD_ROWS-1,d1
-.fps_wipe_row
-	move.l	a0,a1
-	moveq	#(FPS_FIELD_WIDTH/2)-1,d2
-.fps_wipe_loop
-	move.l	d0,(a1)+
-	dbra	d2,.fps_wipe_loop
-	adda.l	#VIDEO_SCREEN_STRIDE,a0
-	dbra	d1,.fps_wipe_row
-
-	; Blit the five cells.
-	move.l	render_base,a1
-	adda.l	#(FPS_Y*VIDEO_SCREEN_STRIDE)+(FPS_X*FRAMEBUFFER_BPP),a1
-	lea	fps_text,a2
-	moveq	#FPS_TEXT_CHARS-1,d7
-.fps_char_loop
-	moveq	#0,d1
-	move.b	(a2)+,d1
-	move.l	d1,d5			; index*FPS_GLYPH_ROWS
-	lsl.l	#3,d5
-	sub.l	d1,d5
-	lea	fps_font,a0
-	adda.l	d5,a0
-
-	move.l	a1,a3			; row cursor inside this cell
-	moveq	#FPS_GLYPH_ROWS-1,d6
-.fps_row_loop
-	move.b	(a0)+,d2
-	move.l	a3,a4
-	moveq	#FPS_GLYPH_COLS-1,d4
-.fps_col_loop
-	add.b	d2,d2			; leftmost pixel out into carry
-	bcc	.fps_col_clear
-	move.w	#FPS_WHITE,(a4)
-.fps_col_clear
-	addq.l	#FPS_SCALE*FRAMEBUFFER_BPP,a4
-	dbra	d4,.fps_col_loop
-	adda.l	#FPS_SCALE*VIDEO_SCREEN_STRIDE,a3
-	dbra	d6,.fps_row_loop
-
-	adda.l	#FPS_CELL_ADVANCE,a1
-	dbra	d7,.fps_char_loop
-
-	movem.l	(sp)+,d0-d7/a0-a6
-	rts
-	endc
 
 ; Walk the OT from far to near and invoke the software triangle backend for
 ; every linked packet.  The packet/node format is deliberately independent of
@@ -4861,6 +4745,144 @@ prepass_frame_call
 	movem.l	(sp)+,d0-d7/a0-a6
 	rts
 
+	endc
+
+	ifd	TREX_FPS
+; -----------------------------------------------------------------------------
+; Frame-rate overlay.  This is appended after all existing render and prepass
+; code deliberately: enabling the release-only feature must not move
+; gpu_rasterize_ot, rasterize_packet, span_walk_half, or any other measured hot
+; text.  The release build substitutes its word-sized present BSR with a
+; same-width BSR here; after drawing, this entry tail-branches through
+; gpu_present_frame.
+;
+; The field therefore lands in the back buffer the flip is about to show and
+; the tick delta it samples spans one whole frame, present included.  It is
+; inside the release-only present timing bracket, but TREX_RUN emits no stats
+; file; diagnostic targets retain their original call and byte layout.
+;
+; Plain CPU stores throughout -- no Blitter.  The field is drawn 1:1, so a set
+; source pixel is one MOVE.W immediate straight into the framebuffer.
+;
+; Direct work is bounded: a 30x7 wipe (105 longword stores) plus at most
+; 5*7*5 = 175 tested source pixels.  No end-to-end performance claim follows
+; from that count; the release has not been timed on physical Falcon hardware.
+;
+; Deliberately NOT gated on video_mode_active, present_enabled or
+; dsp_program_loaded: the field is drawn into the render target either way.
+; With no DSP geometry it therefore remains visible on the black framebuffer,
+; distinguishing a live frontend from a failed packet path.
+; -----------------------------------------------------------------------------
+gpu_draw_fps
+	movem.l	d0-d7/a0-a6,-(sp)
+
+	; Frame period from the 200 Hz tick.  Sampled here rather than in the
+	; frame loop so the mark and the drawing that consumes it cannot drift
+	; apart if either moves.
+	move.l	$4ba.w,d0
+	move.l	d0,d1
+	sub.l	fps_last_tick,d1
+	move.l	d0,fps_last_tick
+
+	; fps*100 = 20000/ticks, so the quotient carries its own two fraction
+	; digits and no second division is needed.  Both ends need a guard: a
+	; frame that finished inside one 5 ms tick would divide by zero, and a
+	; long stall would overflow DIVU.W's 16-bit divisor.
+	moveq	#0,d0			; the "too slow to measure" reading, 00.00
+	tst.l	d1
+	beq	.fps_peg
+	cmpi.l	#FPS_SCALED_NUMERATOR,d1
+	bhi	.fps_value_ready
+	move.l	#FPS_SCALED_NUMERATOR,d0
+	divu.w	d1,d0
+	andi.l	#$0000ffff,d0
+	cmpi.l	#FPS_MAX_CENTI,d0
+	bls	.fps_value_ready
+.fps_peg
+	move.l	#FPS_MAX_CENTI,d0	; peg at 99.99 rather than wrap
+.fps_value_ready
+
+	; Fixed NN.NN, zero padded and never blanked: every cell is always a
+	; glyph, so the point and both digit pairs hold their column no matter
+	; what the rate does.  DIVU.W leaves the remainder in the high word and
+	; the quotient in the low one; the clamp above keeps every step in range.
+	divu.w	#10,d0
+	move.l	d0,d1
+	swap	d1
+	move.b	d1,fps_text+4		; hundredths
+	andi.l	#$0000ffff,d0
+	divu.w	#10,d0
+	move.l	d0,d1
+	swap	d1
+	move.b	d1,fps_text+3		; tenths
+	andi.l	#$0000ffff,d0
+	divu.w	#10,d0
+	move.l	d0,d1
+	swap	d1
+	move.b	d1,fps_text+1		; units
+	andi.l	#$0000ffff,d0
+	move.b	d0,fps_text		; tens, 0..9 because the value is clamped
+	move.b	#FPS_GLYPH_DOT,fps_text+2
+
+	; Repaint the field's own background first.  The full clear would have
+	; wiped it already, but delta_clear_enabled is documented as a byte patch
+	; applied to the built file: with the delta clear armed the frame clear
+	; only touches bands the geometry dirtied, and last frame's digits would
+	; survive underneath this frame's.  An unconditional 210-pixel wipe is
+	; cheaper than teaching the delta tracker about the overlay.
+	move.l	render_base,a0
+	adda.l	#(FPS_Y*VIDEO_SCREEN_STRIDE)+(FPS_X*FRAMEBUFFER_BPP),a0
+	moveq	#0,d0
+	moveq	#FPS_FIELD_ROWS-1,d1
+.fps_wipe_row
+	move.l	a0,a1
+	moveq	#(FPS_FIELD_WIDTH/2)-1,d2
+.fps_wipe_loop
+	move.l	d0,(a1)+
+	dbra	d2,.fps_wipe_loop
+	adda.l	#VIDEO_SCREEN_STRIDE,a0
+	dbra	d1,.fps_wipe_row
+
+	; Blit the five cells.
+	move.l	render_base,a1
+	adda.l	#(FPS_Y*VIDEO_SCREEN_STRIDE)+(FPS_X*FRAMEBUFFER_BPP),a1
+	lea	fps_text,a2
+	moveq	#FPS_TEXT_CHARS-1,d7
+.fps_char_loop
+	moveq	#0,d1
+	move.b	(a2)+,d1
+	move.l	d1,d5			; index*FPS_GLYPH_ROWS
+	lsl.l	#3,d5
+	sub.l	d1,d5
+	lea	fps_font,a0
+	adda.l	d5,a0
+
+	move.l	a1,a3			; row cursor inside this cell
+	moveq	#FPS_GLYPH_ROWS-1,d6
+.fps_row_loop
+	move.b	(a0)+,d2
+	move.l	a3,a4
+	moveq	#FPS_GLYPH_COLS-1,d4
+.fps_col_loop
+	add.b	d2,d2			; leftmost pixel out into carry
+	bcc	.fps_col_clear
+	move.w	#FPS_WHITE,(a4)
+.fps_col_clear
+	addq.l	#FPS_SCALE*FRAMEBUFFER_BPP,a4
+	dbra	d4,.fps_col_loop
+	adda.l	#FPS_SCALE*VIDEO_SCREEN_STRIDE,a3
+	dbra	d6,.fps_row_loop
+
+	adda.l	#FPS_CELL_ADVANCE,a1
+	dbra	d7,.fps_char_loop
+
+	movem.l	(sp)+,d0-d7/a0-a6
+	; Tail-call the existing presenter.  Its RTS consumes gpu_submit_ot's
+	; original BSR return address, so the release has exactly one call here.
+	bra.w	gpu_present_frame
+	; Keep total TREX_FPS text size equal to the merged implementation: the
+	; following alignment NOP is skipped by the tail branch.
+	nop
 	endc
 
 ; -----------------------------------------------------------------------------

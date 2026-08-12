@@ -48,10 +48,10 @@ every triangle comes from it.
 1 MB or 2 MB machine cannot run it.
 
 TOS 4.02.  NOT TOS 4.04: on 4.04 the
-DSP is never opened, no triangles are
-produced and the screen stays black.
-The renderer is fine, the DSP load
-path is what fails there.
+DSP is never opened and no triangles
+are produced.  The FPS field may still
+update on black.  The DSP load path is
+what fails there.
 
 RGB/TV or VGA.  Both are supported and
 both show all 224 rendered lines.
@@ -73,7 +73,8 @@ Nothing is written to disk.
 
 If TREX.LOD is missing, or another
 program is holding the DSP, the demo
-still runs but the screen stays empty.
+still runs.  The T-Rex stays absent;
+the FPS field still updates on black.
 
 
 WHAT YOU SEE

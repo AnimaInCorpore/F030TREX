@@ -47,9 +47,10 @@ hatari --machine falcon --tos /path/to/tos402.rom --dsp emu --memsize 4 \
 
 Use TOS 4.02, 4 MB of ST-RAM and DSP emulation enabled. **TOS 4.04 is not
 compatible with the current DSP load path**: the program reaches its
-video-mode setup, but the DSP remains closed, no triangle packets are
-produced and the display stays black. That is a TOS/DSP startup issue, not
-an empty framebuffer or a renderer timing failure.
+video-mode setup, but the DSP remains closed and no triangle packets are
+produced. The T-Rex stays absent, although the release-only FPS field can
+still update on the black framebuffer. That is a TOS/DSP startup issue, not a
+rasterizer failure.
 
 ## Required reading
 
@@ -86,7 +87,7 @@ release rather than claiming pixel-for-pixel equivalence with the PS1 demo.
 | Mesh | Original TMD model | Same full mesh: 1,376 vertices and 2,724 triangles |
 | Animation | Authored morph-target choreography | Extracted PS1 morph data rebuilt on the DSP: 46 full gait poses plus sparse targets 5–8; the port adds a post-source hold after frame 273 |
 | Transform and culling | Original console geometry pipeline | DSP56001 handles transform, perspective projection, near-plane, degenerate-area, back-face and screen culling |
-| Occlusion | Reference-scene behavior | Falcon addition: an armed DSP screen-space prepass builds a conservative triangle kill bitmap during the authored choreography |
+| Occlusion | Reference-scene behavior | Falcon addition: an armed DSP screen-space prepass builds a conservative triangle kill bitmap during the authored choreography and the continuing post-frame-273 hold |
 | Lighting | Original PS1 lighting | Textured Gouraud shading with three coloured lights and reddish ambient light; documented as not yet an exact PS1 lighting reproduction |
 | Textures | PS1 TIM pages and CLUT metadata | Extracted PS1 texture pages and CLUTs, sampled by the M68030 software rasterizer |
 | Rasterization | PS1 hardware GPU path | M68030 software rasterizer; the DSP supplies projected vertices and span setup, and the host links the Ordering Table |

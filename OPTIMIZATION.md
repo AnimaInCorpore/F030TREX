@@ -945,24 +945,6 @@ binary. No physical-Falcon run has been completed, so DSP-window occupancy,
 stock-hardware timing and FPS remain unmeasured. The framebuffer identity is a
 Hatari correctness result, not a physical-machine performance claim.
 
-For visual playback without per-frame host-disk traffic, build the release
-target `trex_release`. It emits `TREX.TOS`, retaining `TREX_PREPASS`,
-`TREX_FULL_MESH` and the armed culling path while defining `TREX_RUN`:
-framebuffer/stat diagnostics and the final diagnostic flush are disabled. The
-matching `TREX.LOD` is still read once at startup, so the mounted GEMDOS
-volume remains necessary.
-
-### 2.3f Full-mesh release package — implemented
-
-The release viewing package is `TREX.TOS`, built with
-`TREX_FULL_MESH`, `TREX_PREPASS` and `TREX_RUN`. It is the single supported
-full-mesh package: textured Gouraud shading, armed DSP occlusion through the
-authored choreography, and no per-frame diagnostic file writes. Build it with
-`make trex_release`; the matching `TREX.LOD` copy is placed beside the
-TOS so the release directory is self-contained. The DSP protocol, resident
-memory layout and `.LOD` contents are the validated production path described
-above; no separate presentation-mode variants are part of the release.
-
 ### 2.3f The prepass never actually culled -- four latent defects, the rewrite that fixed them, and the retired hold disarm
 
 Everything above in 2.3e describes a stage that, as later established with
@@ -1094,6 +1076,23 @@ resident index upload rewrites, executes index data as code, and reports
 zeros -- which produced one full round of self-contradictory measurements
 during this investigation before the extent check was applied to the
 diagnostic builds too.
+
+### 2.3g Full-mesh release package — implemented
+
+For visual playback without per-frame host-disk traffic, build the release
+target `trex_release`. It emits `TREX.TOS`, retaining `TREX_PREPASS`,
+`TREX_FULL_MESH` and the rewritten armed culling path from 2.3f while defining
+`TREX_RUN`: framebuffer/stat diagnostics and the final diagnostic flush are
+disabled. The matching `TREX.LOD` is still read once at startup, so the
+mounted GEMDOS volume remains necessary.
+
+This is the single supported full-mesh package: textured Gouraud shading,
+armed DSP occlusion through both the authored choreography and the frontend's
+post-frame-273 gait/turn hold, and no per-frame diagnostic file writes. Build
+it with `make trex_release`; the matching `TREX.LOD` copy is placed beside the
+TOS so the release directory is self-contained. The DSP protocol, resident
+memory layout and `.LOD` contents are the validated production path described
+above; no separate presentation-mode variants are part of the release.
 
 ### 2.4 The occlusion binary is not a timing source
 
@@ -1331,25 +1330,49 @@ Format and placement:
 - **Clamped at both ends.** A zero tick delta would divide by zero and a long
   stall would overflow `DIVU.W`'s 16-bit divisor; the first pegs the field at
   `99.99`, the second reads `00.00`. Neither can wrap into a plausible number.
-- Drawn between `gpu_rasterize_ot` and `gpu_present_frame`, outside both the
-  raster and present `TimeMark` brackets, so it is charged to neither stage in
-  `render_stats.res`.
+- **Independent of DSP availability.** The overlay is a release-side 68030
+  write and is deliberately not gated on `dsp_program_loaded`. If `TREX.LOD`
+  cannot be loaded, no T-Rex packets exist but the FPS field can still update
+  on the black framebuffer; that distinguishes a live frontend from geometry.
+- Drawn after `gpu_rasterize_ot` and before the page flip. The release replaces
+  its word-sized presenter call with a same-width call to `gpu_draw_fps`, which
+  tail-branches through `gpu_present_frame`; no second call is inserted ahead
+  of the hot rasterizer text. The no-FPS release comparison explicitly forces
+  the same word-sized BSR, while diagnostic targets keep their original short
+  direct presenter call and byte layout. The overlay is consequently inside
+  the release's present `TimeMark` bracket, but `TREX_RUN` disables
+  `render_stats.res` in that build.
 
 Cost and layout: plain CPU stores, no Blitter. The field is drawn 1:1 — 30x7
 pixels for the whole readout — so a set source pixel is one `MOVE.W #$ffdf,(a4)`
 straight into the framebuffer. Per frame that is a 30x7 wipe (105 longword
-stores) plus at most 175 tested source pixels, against a ~480 ms frame. On the
-wide 256-mode pixels a 5x7 glyph displays about 6.25x7 square-equivalent, which
-is near the readable limit on a 15 kHz monitor; `FPS_SCALE` carries the ratio
-through the derived geometry, but doubling it also needs the companion stores
-in the inner loop, which is written for 1:1. The wipe is
-unconditional because `delta_clear_enabled` is a byte patch applied to the
-built file: with the delta clear armed the frame clear only touches dirtied
-bands and last frame's digits would survive underneath. The font (11 cells x 7
-bytes) sits at the end of the data section and the 10 bytes of state at the end
-of BSS, so no pinned buffer or measured cache phase moves. The added code and
-data fall inside the existing 4 KiB alignment pad: `text+data` is 1,183,744
-bytes with and without the flag, and only BSS grows, by 10 bytes.
+stores) plus at most 175 tested source pixels. That is an operation count, not
+an end-to-end timing claim: this renderer has repeatedly shown that small text
+movements can dominate the direct cost through instruction-cache phase.
+Accordingly the whole overlay routine now sits after every existing render and
+prepass routine, and the call-site substitution above is the same width with
+the flag on or off. Enabling `TREX_FPS` therefore cannot move
+`gpu_rasterize_ot`, `rasterize_packet`, `span_walk_half`, or the prepass host
+code. On the wide 256-mode pixels a 5x7 glyph displays about 6.25x7
+square-equivalent, which is near the readable limit on a 15 kHz monitor;
+`FPS_SCALE` carries the ratio through the derived geometry, but doubling it
+also needs the companion stores in the inner loop, which is written for 1:1.
+The wipe is unconditional because `delta_clear_enabled` is a byte patch
+applied to the built file: with the delta clear armed the frame clear only
+touches dirtied bands and last frame's digits would survive underneath. The
+font (11 cells x 7 bytes) sits at the end of the data section and the 10 bytes
+of state at the end of BSS. An otherwise identical release build without
+`TREX_FPS` was assembled and linked on 2026-08-12: the FPS build is 9,704 text
+plus 1,174,040 data = 1,183,744 bytes, against 9,448 + 1,170,200 = 1,179,648
+bytes without it. The actual growth is therefore exactly 4 KiB, not zero as
+the first integration note claimed; BSS grows separately by 10 bytes. The
+release/no-FPS listings put `gpu_rasterize_ot`, `rasterize_packet`,
+`span_walk_half` and `prepass_frame_call` at identical addresses, and all
+pinned BSS symbols retain identical section offsets. The text growth is 256
+bytes and the total loaded text+data growth is 4 KiB, so the documented
+256-byte instruction/data-cache phases and 4-KiB BSS anchors do not move.
+This is an assembler/link layout validation, not a measured performance
+result; physical-Falcon overlay cost remains unmeasured.
 
 Validation: Hatari, TOS 4.02, Falcon DSP emulation, 4 MB ST-RAM, the runtime
 `.lod` beside the executable. The field renders as specified and updates per
@@ -4118,80 +4141,39 @@ The open roadmap, in recommended order (expected effects from the section
     to the achieved render rate. A PS1-time mode should advance from VBL time
     and drop choreography records when rendering cannot keep up; it preserves
     shot duration but, at ~1.2 FPS, would display only a small subset of poses.
-19. DSP-side occlusion culling. **Implemented for the complete 2,724-triangle
-    mesh; build-verified and Hatari framebuffer gate passed.** The current `-DTREX_PREPASS`
-    DSP path classifies the full resident index list, sorts survivors by the
-    exact 2,048-bucket OT key, tests a 60x56 grid of 4x4 cells against sealed
-    coverage, stamps only qualified opaque triangles when all four cell
-    corners are inside, and makes BUILD skip the resulting global kill bits.
-    Modes 2 and 3 are fixed two-word run-now commands; mode 1 runs in the
-    existing FINISH window. The full-mesh stock layout uses 114 kill words and
-    leaves five safe P words (`P:$09BB-$09BF`) before the resident Y indices;
-    the DSP build currently ends at `P:$09BA` with zero assembler errors and
-    warnings.
-    The corrected full-mesh run, with the runtime DSP `.lod` mounted, produced
-    byte-identical frame-100 framebuffers in the arm-1 inline-prepass and arm-0
-    disarmed arms (`d89958b314c924ad...`). These are Hatari results only, and
-    no physical-Falcon timing or FPS is claimed.
-    The historical ordering-only measurements below remain useful baselines,
-    but do not describe this current culling binary.
-    **The ordering question is closed and both halves came out well.** The
-    restriction to strictly-nearer buckets costs 3.4% of the yield (2.3a), and
-    the pre-pass that establishes the order costs 15.2 ms of DSP time that
-    disappears completely into the cross-frame window — measured at -0.04 ms on
-    `t_packets` (2.3b). Neither was the obstacle.
-    **The ordering-only program-memory result is historical.** Its 12-word
-    margin and 166-word jump-encoding recovery describe the predecessor build;
-    the current full-mesh implementation spends the recovered space on the
-    conservative coverage test and ends at `P:$09BA`, leaving five words
-    before the resident-index ceiling.
-    Weigh it against roadmap items 11/15: the fresh full-mesh decomposition
-    puts the row walker at 303.9 ms, and the stock 3-FPS chain first needs the
-    complete span transport.  Occlusion is retained as a later DSP-producer
-    reduction only if its mask work and reduced SSI payload improve end-to-end
-    time; it must not serialize the already critical DSP stream.
-    The mask itself is well understood: 240 = 10x24 exactly, so a full-resolution
-    1-bit mask is 10 words per row and 2,240 words, a 2x2 cell minimum is 560,
-    and the DSP56001 idioms for it are worked out in the notes accompanying
-    this item — `mpy` as a word-crossing barrel shifter, a `$ffffff >> k` mask
-    table (25 entries, not 24: a span ending at bit 23 needs index 24), and
-    x/24 plus x mod 24 by fractional multiply with `$055556`, verified exact
-    over 0..239. Prior art on Falcon hardware: Cho Ren Sha 68k keeps a 1-bit
-    screen buffer in DSP memory and returns run-length data to the 68030.
+19. DSP-side occlusion culling. **Implemented and live for the complete
+    2,724-triangle mesh; build-verified and Hatari framebuffer gates passed.**
+    Section 2.3f is the current authority. `-DTREX_PREPASS` classifies the full
+    resident index list twice into 64 coarse depth classes (32 host OT buckets
+    each), scatters at most 1,335 survivors into one order list, and walks only
+    the 8x8-pixel cells overlapped by each survivor's clamped box. Two 56-word
+    masks hold sealed and current-class pending coverage. Qualified opaque
+    triangles stamp only when all four cell corners are inside; BUILD skips the
+    resulting 114-word global kill bitmap. Coarsening only delays sealing, so
+    it under-approximates the host's strictly-nearer order rather than making
+    an unsafe kill.
 
-    **Current implementation, stages 2 and 3: the occlusion path now reaches
-    the DSP.**
-    The mask policy that decides the whole result (`M_uv`, worth a factor of
-    twelve over the per-page rule) needs one bit per triangle on the DSP, and
-    the stock full mesh needs a 114-word resident bitmap: X ends at
-    `prepass_status`/`$3FFE` and Y is full to `$3FFE`.
-    The bit rides in the resident index list instead, at no memory cost.
-    Vertex indices stay below 1,376, so each of the three twelve-bit vertex
-    fields has a spare top bit; the qualification occupies bit 23 of word A
-    (the `v1` field's). The host ORs it in from `trex_opaque_triangle_data` --
-    the same sidecar and the same predicate as `OPAQUE_PACKET_BIT`, so no new
-    tooling and no new proof obligation -- and it is deliberately not gated on
-    `opaque_path_enabled`, which is a rasterizer A/B switch while sealing
-    soundness is not optional. Every vertex extraction on the DSP now masks
-    with `TRI_VERTEX_MASK` (eleven bits), including the two that come out of a
-    shift and never masked at all; normal indices keep `TRI_INDEX_MASK`.
+    Mode 1 runs in the existing FINISH window and stays armed through both the
+    274 authored records and the frontend's continuing gait/turn hold. Modes 2
+    and 3 remain fixed two-word run-now commands for measurement. The current
+    full-mesh program ends at `P:$0988`, leaving `$0989-$09BF` free before the
+    resident indices at `Y:$09C0`; the X overlay ends exactly at `X:$3FFF`, and
+    resident Y data ends at `Y:$3FFE`. No LOD-only relocation or alternate
+    hardware map is used.
 
-    The qualification-only experiment and its negative-control numbers above
-    are historical predecessor-build results, not measurements of the current
-    culling binary. The current implementation retains the sound design that
-    experiment established: 4x4-pixel cells, two masks (`seal` and `pend`),
-    four-corner stamping, and a global kill bitmap consumed by BUILD. It is
-    fitted to the stock full-mesh map, as recorded in section 2.3e; the
-    remaining gates are physical-Falcon yield and end-to-end timing.
+    The occluder qualification still rides in bit 23 of packed index word A,
+    sourced from the same opaque sidecar as `OPAQUE_PACKET_BIT`; all DSP vertex
+    extracts mask to eleven bits while normal indices retain twelve. The old
+    projected-vertex command and ordered-list streamer remain retired.
 
-    `command_get_vertices` remains retired because the span-setup record made
-    it dead on the normal path in 4.1c, and command 3 now answers
-    `ERR_BAD_COMMAND` so a stale host caller takes its shadow path instead of
-    hanging. The old mode-3 ordered-list dump and its streamer are also gone.
-    The complete geometry remains resident: indices begin at `Y:$09C0`, the
-    full mesh fills the Y window to `$3FFE`, and the current DSP program ends
-    at `P:$09BA`, leaving five words before the resident-index ceiling. No
-    LOD-only relocation or alternate hardware map is used.
+    Hatari/TOS 4.02 gates are byte-identical at frame 100 and hold frame 291
+    between armed and disarmed controls, with zero protocol failures or
+    capacity overruns, while cumulative raster writes fall when armed. Those
+    are emulator correctness results. The measured freestanding cost and yield
+    are recorded in 2.3f; physical-Falcon window occupancy, end-to-end timing,
+    culling yield and FPS remain unmeasured. Sections 2.3a-2.3e retain the
+    predecessor designs and measurements explicitly as history, not as the
+    current memory or algorithm contract.
 20. Delta clearing instead of the full-window clear. **Built, measured,
     REJECTED — see section 2.5.** It saves 8.0 ms in the clear and costs
     14.4 ms in bookkeeping, a net +6.1 ms, plus 13.5 ms of layout cost merely
