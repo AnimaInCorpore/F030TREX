@@ -11,3 +11,6 @@ TREX/m68030/TREX.LOD
 __pycache__/
 *.pyc
 .DS_Store
+
+# release archives (rebuildable: make trex_release + zip)
+*.zip

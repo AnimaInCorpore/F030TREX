@@ -47,7 +47,11 @@ every triangle comes from it.
 3 MB and lives in ST RAM only, so a
 1 MB or 2 MB machine cannot run it.
 
-TOS 4.0x.  Developed against 4.02.
+TOS 4.02.  NOT TOS 4.04: on 4.04 the
+DSP is never opened, no triangles are
+produced and the screen stays black.
+The renderer is fine, the DSP load
+path is what fails there.
 
 RGB/TV or VGA.  Both are supported and
 both show all 224 rendered lines.

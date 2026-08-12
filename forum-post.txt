@@ -82,7 +82,13 @@ readout means the same thing in every case. Two phases:
 HOW TO RUN IT
 
 Falcon030 with a working DSP, 4 MB RAM (it needs about 3 MB and lives in
-ST RAM only), TOS 4.0x, RGB/TV or VGA.
+ST RAM only), TOS 4.02, RGB/TV or VGA.
+
+One known limitation: TOS 4.04 does not work. The program gets as far as
+setting up the video mode, but the DSP is never opened, so no triangles
+are produced and the screen stays black. It is the DSP load path that
+fails there, not the renderer, and I have not tracked down why yet - if
+you know that corner of 4.04, I am interested.
 
 Unpack the archive and start TREX.TOS from its own folder - it loads
 TREX.LOD out of the current directory. Any key quits, the video mode is
