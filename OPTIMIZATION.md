@@ -1225,11 +1225,23 @@ the program-size change in words (negative frees words):
    frame-291 checkpoint.  Speed-neutral by construction: the instruction
    stream per channel is identical (one DO of setup traded against the
    duplicate block).
-7. **Lookup triples through pointers** [-25]. `make_triangle_area` and
-   `make_triangle_zkey` unroll three identical lookup blocks each over the
-   consecutive `triangle_i0..i2`, `tri_x0..`, `triangle_z0..z2` cells.
-   Pointer-walked `DO #3` loops are size wins and roughly speed-neutral
-   (loop setup against shorter bodies).
+7. **Lookup triples through pointers -- implemented.** `make_triangle_area`
+   and `make_triangle_zkey` unrolled three identical lookup blocks each
+   over the consecutive `triangle_i0..i2`, `tri_x0..`, `triangle_z0..z2`
+   cells.  Both are `DO #3` loops now: area walks R5 over the indices and
+   R6 over the interleaved x/y pairs with the three near-plane flag words
+   accumulating in B -- which retired the `tri_near_flags` cell (it had
+   no reader outside the routine) into `tri_x0`'s alignment pad -- and
+   zkey serves both sides with ONE cursor, the indexed `(r5+n5)` store
+   landing each z six cells up in `triangle_z0..z2` (N5 = 5 after the
+   read's post-increment), R6 then summing the triple.  R5/R6 are free in
+   every caller: BUILD's shade sets its own later, classify keeps nothing
+   there, and the sweep's r5-r7 lifetimes start inside `prepass_stamp`.
+   Result: **38 words freed**, above the estimated 25 (extent `$094B` to
+   `$0925`, 154 free), DOSBox 0/0, fresh frame-100 `fb.res` reproducing
+   `d89958b3…3d16` and the armed hold freshly reproducing the frame-291
+   checkpoint at 354 frames, zero failures.  Roughly speed-neutral as
+   audited; these run in BUILD, both classify passes and the sweep.
 8. **Cold receive paths** [-20]. LOAD_VERTICES/LOAD_TRIANGLES can receive
    count*3 words in a one-receive body; both SET_FRAME variants can walk
    the five consecutive projection cells through a pointer; the GET send
@@ -1240,10 +1252,10 @@ the program-size change in words (negative frees words):
    2.3d and defect 4 of 2.3f document.
 
 Together that is on the order of 120-180 words against the 51 free at the
-time of the audit.  Sites 1-6 have since landed: 105 words freed, 40 of
-them spent back on the two speed sites, the free window at 116, and the
+time of the audit.  Sites 1-7 have since landed: 143 words freed, 40 of
+them spent back on the two speed sites, the free window at 154, and the
 freestanding prepass measured 16.5 ms/frame cheaper -- the remaining size
-reserve rests in the still-open sites 7-9.
+reserve rests in the still-open sites 8 and 9.
 
 Three families are explicitly excluded because they change results, not
 schedules:
@@ -4379,16 +4391,16 @@ The open roadmap, in recommended order (expected effects from the section
     frames ago (Cho Ren Sha's `swap_sprite_infos` exists for exactly this); and
     a missed pixel leaves a ghost from two frames back, which is a silent
     visual defect, so `fb.res` byte identity is the mandatory gate.
-21. Harvest the DSP instruction-stream reserve. **Audited; sites 1-6
-    implemented** -- see section 2.3h: the four size sites (the
+21. Harvest the DSP instruction-stream reserve. **Audited; sites 1-7
+    implemented** -- see section 2.3h: the five size sites (the
     register-resident corner-normal rotation, the re-pipelined morph
     transform, the wire-ordered record copy, the merged Lambert channel
-    loop) freed 105 words, and sites 2 and 3 (O(1) kill-bit addressing,
-    the pass-2 classify cache) spent 40 of them back to take the
-    freestanding prepass from 76.76 to a measured **60.28 ms/frame** -- a
-    fifth of the stage -- leaving 116 words free to the ceiling.  Still
-    open are the size-only sites 7-9, roughly another 50+ words when a
-    feature needs the room.  The
+    loop, the pointer-walked lookup triples) freed 143 words, and sites 2
+    and 3 (O(1) kill-bit addressing, the pass-2 classify cache) spent 40
+    of them back to take the freestanding prepass from 76.76 to a
+    measured **60.28 ms/frame** -- a fifth of the stage -- leaving 154
+    words free to the ceiling.  Still open are the size-only sites 8 and
+    9, roughly another 60+ words when a feature needs the room.  The
     prepass cost is hidden by the FINISH window today, and every
     rasterizer improvement narrows that window, so the return is program
     words and margin for item 19's yield work, not frame rate: the BUILD

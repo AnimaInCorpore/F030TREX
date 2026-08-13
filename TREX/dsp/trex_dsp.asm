@@ -1336,19 +1336,23 @@ make_triangle_zkey
 	; Indexed lookup of the third word in each projected vertex record.
 	; The sum is deliberately left un-divided: the host can sort using the
 	; same monotonic key and avoids another DSP division.
-	move	y:triangle_i0,x0
+	; One cursor serves both sides: R5 reads triangle_i0..i2 while the
+	; indexed (r5+n5) store lands each z six cells up in triangle_z0..z2
+	; -- after the read's post-increment the gap is exactly five, hence
+	; N5.  R6 then sums the triple.  Both registers are free in every
+	; caller (BUILD and the classify passes).
+	move	#triangle_i0,r5
+	move	#5,n5
+	move	#triangle_z0,r6
+	do	#3,make_zkey_lookups
+	move	y:(r5)+,x0
 	jsr	<lookup_projected_z
-	move	x0,y:triangle_z0
-	move	y:triangle_i1,x0
-	jsr	<lookup_projected_z
-	move	x0,y:triangle_z1
-	move	y:triangle_i2,x0
-	jsr	<lookup_projected_z
-	move	x0,y:triangle_z2
+	move	x0,y:(r5+n5)
+make_zkey_lookups
 
-	move	y:triangle_z0,a
-	move	y:triangle_z1,x0
-	add	x0,a	y:triangle_z2,x0
+	move	y:(r6)+,a
+	move	y:(r6)+,x0
+	add	x0,a	y:(r6)+,x0
 	add	x0,a
 	move	a1,y:triangle_zkey
 
@@ -1669,36 +1673,26 @@ make_triangle_area
 	; Twice the signed screen-space area, left in A.  Screen coordinates are
 	; small integers, so the fractional MPY/MAC pair stays exact and only the
 	; zero test matters for culling.
-	clr	a
-	move	a1,y:tri_near_flags
-	move	y:triangle_i0,x0
+	; R5 walks the consecutive triangle_i0..i2, R6 the interleaved
+	; tri_x0/tri_y0.. pairs, and the three near-plane flag words
+	; accumulate in B across the loop -- lookup_projected_xy touches
+	; neither.  Both registers are free in every caller: BUILD sets its
+	; own r5/r6 later in the shade pass, the classify loop keeps nothing
+	; there, and the sweep's r5-r7 lifetimes start inside prepass_stamp.
+	clr	b
+	move	#triangle_i0,r5
+	move	#tri_x0,r6
+	do	#3,make_area_corners
+	move	y:(r5)+,x0
 	jsr	<lookup_projected_xy
-	move	x1,y:tri_x0
-	move	y1,y:tri_y0
-	move	y0,a
-	move	y:tri_near_flags,x0
-	add	x0,a
-	move	a1,y:tri_near_flags
-	move	y:triangle_i1,x0
-	jsr	<lookup_projected_xy
-	move	x1,y:tri_x1
-	move	y1,y:tri_y1
-	move	y0,a
-	move	y:tri_near_flags,x0
-	add	x0,a
-	move	a1,y:tri_near_flags
-	move	y:triangle_i2,x0
-	jsr	<lookup_projected_xy
-	move	x1,y:tri_x2
-	move	y1,y:tri_y2
-	move	y0,a
-	move	y:tri_near_flags,x0
-	add	x0,a
-	move	a1,y:tri_near_flags
+	move	x1,y:(r6)+
+	move	y1,y:(r6)+
+	add	y0,b
+make_area_corners
 
 	; Any vertex behind the near plane drops the whole triangle.  Returning a
 	; zero area routes it through the existing degenerate path.
-	tst	a
+	tst	b
 	jeq	<tri_near_ok
 	clr	a
 	rts
@@ -3320,8 +3314,6 @@ triangle_remaining
 	ds	1
 project_near_flag
 	ds	1
-tri_near_flags
-	ds	1
 triangle_index
 	ds	1
 triangle_base
@@ -3336,13 +3328,13 @@ shade_cy
 	ds	1
 shade_cz
 	ds	1
-; Seven pad words so tri_x0 sits at a multiple of eight: prepass_stamp walks
+; Eight pad words so tri_x0 sits at a multiple of eight: prepass_stamp walks
 ; the six projected-corner scalars below through R3 under a modulo-6 M3, and
 ; the DSP's modulo addressing requires the block's base aligned to the next
-; power of two.  Six of the seven are retired staging cells -- shade_nx..nz
-; and animation_vertex_x..z -- whose values are register-resident through
-; the shading rotation and the morph transform now.
-	ds	7
+; power of two.  Seven of the eight are retired cells -- the shade_nx..nz
+; and animation_vertex_x..z staging triples and the tri_near_flags
+; accumulator -- whose values are register-resident now.
+	ds	8
 tri_x0
 	ds	1
 tri_y0
@@ -3556,7 +3548,7 @@ prepass_tp_save
 ; the index upload and reports garbage, which cost this stage one full round
 ; of contradictory measurements once.
 ;
-; The current full-mesh program ends at P:$094B, leaving P:$094C-$09BF free
+; The current full-mesh program ends at P:$0925, leaving P:$0926-$09BF free
 ; before the resident indices.  Keep the "<" prefix on jumps and the short
 ; Y-scalar forms on any code added later, or the program will overwrite the
 ; first triangle indices without an assembler error.
