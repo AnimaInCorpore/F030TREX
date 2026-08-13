@@ -532,6 +532,16 @@ the 136.3 ms combined DSP/host-port stages, but it cannot hide the 445.0 ms
 rasterizer and the DSP still has no path to write the framebuffer directly
 (section 6.1).
 
+Read from the current full-mesh state, that closing lever list is obsolete:
+the reduced-mesh LOD was later removed entirely (section 2), the
+pixel/row-loop campaign ran to its measured end (sections 3.6-3.9c, with
+3.9a recording that further per-row whittling now measures slower), and
+cross-frame pipelining landed as item 12's stage 1 while its stage 2 was
+measured and rejected.  Section 8.2a carries the current accounting: the
+largest stage is the 185.7 ms readback/packet build, and the two levers
+with named mechanisms sit there and in item 19's yield -- not in the pixel
+loop.
+
 ### 2.3 Occlusion: how much of the transferred geometry is invisible
 
 Every triangle that survives the DSP's zero-area/back-face/near-plane/off-screen
@@ -1000,7 +1010,7 @@ The current implementation replaces the sweep and the sort:
   share one `prepass_unpack_indices` subroutine; the reload's base add and
   R2 store are split into two instructions (defect 4).
 
-Sizes: the full-mesh program now ends at `P:$0988` -- 50 words smaller than
+Sizes: after that compaction, the full-mesh program ended at `P:$0988` -- 50 words smaller than
 the `P:$09BA` recorded in 2.3e -- with `$0989-$09BF` free before the
 resident indices.  The order-entry format keeps its shape
 (`(triangle_index << 12) | class`, class in the low bits), so the host
@@ -1065,6 +1075,119 @@ it with `make trex_release`; the matching `TREX.LOD` copy is placed beside the
 TOS so the release directory is self-contained. The DSP protocol, resident
 memory layout and `.LOD` contents are the validated production path described
 above; no separate presentation-mode variants are part of the release.
+
+### 2.3h The DSP reserve, audited a third time -- sites and what they buy
+
+2.3c recovered 166 words from jump encoding, 2.3d counted the parallel-move
+reserve, and the light-cache revision (4.4c) has since harvested the densest
+block of those pairing sites. This section is the same audit run a third
+time, over the current source at `P:$098C` with 51 words free. It is an
+audit, not a result: word counts are read from the source, millisecond
+figures are cost models under 2.4a's caveats, and nothing in it is built.
+
+What DSP speed would even buy has to be bounded first, because it is not
+frame rate. The FINISH window hides the armed prepass -- 75.6 ms/frame
+freestanding in Hatari (2.3f) -- inside the ~244 ms of raster time in the
+8.2a split, and the chunk protocol hides BUILD compute behind the host's
+unpack of the previous chunk, with the genuine DSP wait measured at a few
+milliseconds per frame when item 12's stage 2 probed it in the LOD epoch.
+DSP cycles therefore buy margin: the armed hold's budget, and headroom
+against a window that every rasterizer improvement narrows. Program words
+buy item 19's next stage. Neither buys FPS directly.
+
+The sites, in recommended order. Bracketed figures are static estimates of
+the program-size change in words (negative frees words):
+
+1. **Corner-normal rotation X staging** [-20]. `make_triangle_shade` still
+   stages each corner normal into `y:shade_nx..nz`, and with the matrix
+   also Y-resident every MAC needs a standalone matrix load. Retargeting
+   the bank-split loader to three X cells directly above the 4.4c cache --
+   the same dead order-list tail, written only during BUILD, after the
+   sweep has consumed those entries -- lets every MAC pair its normal and
+   matrix loads in one XY move, and the three row blocks collapse into one
+   `DO #3` over the consecutive `shade_cx..cz`. Roughly a third of the
+   rotation's instruction stream per corner, three corners per survivor;
+   this is the completion of 4.4c's own idiom.
+2. **O(1) kill-bit addressing** [~0]. `prepass_kill_address` divides by 24
+   with repeated subtraction: up to ~113 iterations at the highest triangle
+   indices, paid per killed triangle inside 2.3f's 75.6 ms (the sweep's
+   per-survivor row split stays in its one-iteration range). One fractional
+   multiply by `$55556` computes floor(n/24) exactly for every n below
+   524,288 -- far past the 2,723 maximum -- and `REP x0`/`ASL` builds the
+   one-hot remainder mask; the zero-count guard keeps its existing shape.
+3. **Pass-2 classify cache** [+15]. The two classification passes dominate
+   the 75.6 ms and run the identical area/bbox/zkey chain twice. The kill
+   bitmap is dead storage until the sweep: pass 1 can mark survivors there,
+   pass 2 then tests one bit per triangle and, for survivors, re-runs only
+   the index unpack and `make_triangle_zkey` -- area and bbox exist in pass
+   2 purely as the survivor filter the bit now answers -- and two program
+   words re-clear the bitmap before the sweep. No X or Y cost.
+4. **`transform_animated_vertices` re-pipelined** [-25]. The in-place morph
+   transform stages every triple through three Y scalars: ~37 instructions
+   per vertex, many two-word. Holding the triple in x1/y1/x0 (all three are
+   legal multiplier pairings against y0) with the matrix streamed through
+   the static loop's own n4-rewind pattern gives ~21 single-word
+   instructions per vertex. In-place stays safe by construction: the three
+   reads of a vertex complete before its first write, and both cursors
+   advance three per vertex.
+5. **Survivor record write as a dual-move copy** [-22]. The record write
+   moves w5-w13 and w15-w17 one absolute load and one store at a time.
+   Reordering the span scalars so those source cells are contiguous turns
+   each run into a software-pipelined `move x0,x:(r1)+ y:(r4)+,x0` copy:
+   ~26 fewer memory instructions per survivor. The cells sit outside the
+   Y:$2A-$3E prepass alias window and above `tri_x0`, whose
+   multiple-of-eight anchor the reorder must not disturb.
+6. **Red/green channel merge** [-20]. Since 4.4c the two Lambert loops are
+   textually identical except for their accumulator cell, and their
+   clamp/depth-scale epilogues duplicate each other. One outer `DO #2`
+   walking the consecutive `shade_sum_r/g` keeps the instruction stream per
+   channel identical.
+7. **Lookup triples through pointers** [-25]. `make_triangle_area` and
+   `make_triangle_zkey` unroll three identical lookup blocks each over the
+   consecutive `triangle_i0..i2`, `tri_x0..`, `triangle_z0..z2` cells.
+   Pointer-walked `DO #3` loops are size wins and roughly speed-neutral
+   (loop setup against shorter bodies).
+8. **Cold receive paths** [-20]. LOAD_VERTICES/LOAD_TRIANGLES can receive
+   count*3 words in a one-receive body; both SET_FRAME variants can walk
+   the five consecutive projection cells through a pointer; the GET send
+   loop's five-instruction manual counter can be a hardware `DO` (the DSP
+   is host-paced there either way).
+9. **Residual 2.3d folds** [-40..-80]. The remaining eligible ALU/move
+   pairs, harvested site by site under the same source-read-at-start hazard
+   2.3d and defect 4 of 2.3f document.
+
+Together that is on the order of 120-180 words against the 51 free today,
+which moves the P ceiling from binding to comfortable for item 19's yield
+work before any of the speed value is counted.
+
+Three families are explicitly excluded because they change results, not
+schedules:
+
+- **Rotating the lights into object space** (the six-of-nine-MAC saving
+  section 5 priority 3 already declines) rounds different intermediates,
+  so quantized corner levels can move one step: an output change that
+  needs a geometric re-gate, not a byte-identical optimization. The
+  orthonormality caveat in the source comment stands besides.
+- **Reciprocal-multiply division replacements** in `span_div` or the
+  projection: the record fields are validated bit-for-bit against the
+  host's own arithmetic (4.1b); truncation semantics are the contract.
+- **Signed-MPY field extraction** replacing `REP`/`LSR`: packed word A
+  carries the occluder flag in bit 23 and words B/C reach bit 23 whenever
+  a corner-normal index is 2,048 or higher, so every use needs a pre-mask
+  that eats the saving.
+
+One data-memory note completes the audit. X and Y are exactly full by
+construction -- `PREPASS_MAX` absorbs the X slack, resident Y ends at
+`$3FFE` -- and the one untapped block is **Y:$0100-$01FF**: 256 words whose
+mapping the sources contradict each other about (the layout note in
+`trex_dsp.asm`). An empirical probe -- write, read back, verify the program
+unharmed, in Hatari first and on hardware before trusting it -- would
+either close the question or recover the largest free data block left. The
+arithmetic that makes it interesting: 4x4 occlusion cells need a 336-word
+mask pair against today's 112, and one 168-word mask fits this block whole,
+with the other paid by the freed 112 plus a 56-word `PREPASS_MAX` trim to
+1,279 -- still above the 1,194 measured survivor maximum, at 2.3b-style
+thin headroom.
 
 ### 2.4 The occlusion binary is not a timing source
 
@@ -2614,6 +2737,48 @@ remaining, source-exact per-pixel tier would cost. The single-normal-per-face
 path above remains selectable for direct comparison and regression
 (`gouraud_enabled=0`, 520.4 ms / 1.92 FPS on the same binary — section 2).
 
+#### 4.4c Direct-light X cache and paired dot pipeline — implemented
+
+The 18 direct-light words remain in their canonical compact Y-memory packet
+block (`light_direction`): this change does not alter the host protocol,
+light order, fixed-point values, or span-record format. Once per completed
+frame, `cache_light_directions_x` copies those words to the phase-local
+`X:$3C5F-$3C70` cache. For an armed frame the copy is deliberately after
+`prepass_run`, because the location is the no-longer-needed tail of
+`prepass_order`; for the no-prepass `SET_FRAME` path it follows projection.
+The diagnostic `CMD_PREPASS` run-now path performs that same post-prepass
+refresh before acknowledging the command.
+It is above the maximum `triangle_out` extent and below `prepass_scratch`, so
+it does not change the allocation or ownership of the kill bitmap/status
+window.
+
+`make_triangle_shade` now reads each light component through R0/X into X0 and
+the matching camera-normal component through R4/Y into Y0 in one parallel XY
+move on each multiply/accumulate. The dot product is unchanged because the
+two fractional operands are commutative; its existing rounding and per-light
+clamp remain in the same order. This is an instruction-scheduling change, not
+a measured frame-time result: no Hatari or physical-Falcon timing is recorded
+for it yet.
+
+Assembly verification for this revision is 0 errors and 0 warnings. The
+assembled P extent is `P:$098C` (2,381 words from `$0040`), leaving
+`P:$098D-$09BF` (51 words) before the resident Y indices. That is an
+assembled-layout result, not a speed measurement.
+
+A Hatari 2.6.1/TOS 4.02 smoke run on 2026-08-13 used the rebuilt
+`trex_prepass.tos`, DSP emulation and 4 MB ST-RAM for 1,800 VBLs. It completed
+28 frames with the DSP open and stream-ready, normal data loaded, 1,071 DSP
+packets/OT primitives and 154,396 raster pixels; the prepass protocol-failure
+counter was zero. Arm mode 1 runs the prepass inside `FINISH`, so its separate
+host-timed run counter and time are expected to remain zero in this capture.
+
+A second, temporary arm-mode-2 copy of the same host binary exercised the
+explicit `CMD_PREPASS` run-now path for 1,800 VBLs: 24 frames made 24 runs,
+with 1,097 last/1,100 maximum survivors, zero overflow and zero protocol
+failures. This directly covers the post-run cache refresh. These are
+control-path smoke tests only, not framebuffer-equivalence checks or timing
+results.
+
 The raw TMD and setup routine `0x80127764` establish a different source
 contract:
 
@@ -2948,6 +3113,17 @@ Remaining work in this area:
 - more than one light source or a specular term,
 - coloured light, which the preshaded-CLUT approach supports at the cost of one
   bank set per light colour.
+
+Since that list was written the area has moved past all three bullets:
+section 4.4 implements the source light model -- three per-light-clamped
+directional lights, the ambient term and a two-bit tint class -- section
+4.4a recovers all 3,610 PS1 corner normals offline so the O3D
+one-normal-per-polygon limit no longer binds, item 13 ships span-level
+Gouraud from those corners, and coloured light rides the 64 preshaded CLUT
+banks per page. 4.4c pairs the dot pipeline's loads through an X-side light
+cache. Open in this area are only the per-pixel RGB fidelity tier section
+4.4b costs and the instruction-stream reserve section 2.3h audits; a
+specular term has no counterpart in the source model.
 
 ### Priority 3a: Why shading is free in the pixel loop
 
@@ -3694,7 +3870,13 @@ occlusion stage of item 19 are the only two levers with a named mechanism.
 Occlusion at the DSP-buildable variant culls 10.5% of survivors and 11.24% of
 writes (2.3a), which against the split above is roughly 14 ms of packet stage,
 7 ms of per-packet setup and 20 ms of row/pixel work -- about **41 ms**, and
-less than that at the 4x4 cells item 19 would have to fall back to.  Both
+less than that at the 4x4 cells item 19 would have to fall back to.  The
+prepass as shipped sits far below either figure: 2.3f's deliberately
+conservative 8x8-cell, 64-class configuration kills tens of triangles per
+frame -- about half a percent of writes -- so the 41 ms is conditional on
+item 19's yield work (finer classes and larger masks; section 2.3h's
+data-memory note is where the mask words would come from), none of which is
+built.  Both
 together are about 66 ms of the 126.7 needed, landing near **395 ms / 2.53
 FPS**.  **Three FPS on the full mesh therefore does not follow from any
 optimization currently identified**, and the residual ~60 ms has no mechanism
@@ -4064,7 +4246,7 @@ The open roadmap, in recommended order (expected effects from the section
     Mode 1 runs in the existing FINISH window and stays armed through both the
     274 authored records and the frontend's continuing gait/turn hold. Modes 2
     and 3 remain fixed two-word run-now commands for measurement. The current
-    full-mesh program ends at `P:$0988`, leaving `$0989-$09BF` free before the
+    full-mesh program ends at `P:$098C`, leaving `$098D-$09BF` free before the
     resident indices at `Y:$09C0`; the X overlay ends exactly at `X:$3FFF`, and
     resident Y data ends at `Y:$3FFE`. No LOD-only relocation or alternate
     hardware map is used.
@@ -4112,6 +4294,18 @@ The open roadmap, in recommended order (expected effects from the section
     frames ago (Cho Ren Sha's `swap_sprite_infos` exists for exactly this); and
     a missed pixel leaves a ghost from two frames back, which is a silent
     visual defect, so `fb.res` byte identity is the mandatory gate.
+21. Harvest the DSP instruction-stream reserve. **Audited, unbuilt** -- see
+    section 2.3h: roughly 120-180 recoverable program words against the 51
+    free, plus three cycle sites with a measured anchor -- the corner-normal
+    X staging that completes 4.4c's pairing idiom, the O(1) kill-bit
+    addressing and the pass-2 classify cache, the latter two attacking the
+    75.6 ms freestanding prepass cost 2.3f recorded.  That cost is hidden by
+    the FINISH window today, and every rasterizer improvement narrows that
+    window, so the return is program words and margin for item 19's yield
+    work, not frame rate: the BUILD path's wall-clock ceiling is the
+    few-milliseconds genuine DSP wait item 12's stage 2 bounded.  Gates as
+    always: DOSBox assembly clean, P extent at or below `$09BF`,
+    byte-identical frame-100 `fb.res` against the recorded checkpoint.
 
 ## 11. References
 

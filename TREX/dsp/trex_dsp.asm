@@ -536,6 +536,7 @@ set_light_loop
 	jsr	<apply_animation_bias
 	jsr	<transform_vertices
 	jsr	<project_vertices
+	jsr	<cache_light_directions_x
 
 	move	#ACK_FRAME,x0
 	jsr	<send_word
@@ -706,6 +707,10 @@ command_finish_animated_frame
 	jeq	<finish_no_prepass
 	jsr	<prepass_run
 finish_no_prepass
+	; The lighting loop consumes this phase-local X copy while BUILD chunks
+	; stream their normal components from Y.  It must follow prepass_run:
+	; that pass owns the same overlay until it has consumed prepass_order.
+	jsr	<cache_light_directions_x
 
 	move	#ACK_FRAME,x0
 	jsr	<send_word
@@ -1105,6 +1110,24 @@ apply_animation_bias
 	move	a1,x:object_translation+2
 	rts
 
+cache_light_directions_x
+	; Keep the host-facing light payload in its compact, contiguous Y block,
+	; then copy just the 18 direct-light words once per finished frame into
+	; phase_light_directions_x.  The per-corner dot loop can then issue its
+	; Y normal-component load and X light-component load in the same MPY/MAC.
+	;
+	; The target lies in the tail of prepass_order that is dead after the
+	; prepass completes and above the maximum BUILD UV/output allocation.  It
+	; is also safe for the no-prepass SET_FRAME test path: no BUILD command
+	; can arrive until this routine has returned its frame acknowledgement.
+	move	#light_direction,r0
+	move	#phase_light_directions_x,r1
+	do	#LIGHT_COUNT*6,cache_light_direction_loop
+	move	y:(r0)+,x0
+	move	x0,x:(r1)+
+cache_light_direction_loop
+	rts
+
 transform_vertices
 	; This is the MAC pipeline from src/3d.asm:rotate_translate, with the
 	; static T-Rex base mesh preserved and a separate camera-space output.
@@ -1353,7 +1376,7 @@ make_triangle_shade
 	; is the same expression transform_vertices already uses and stays
 	; correct if the frame matrix ever carries more than a rotation.
 	;
-	; Clobbers a, b, x0, x1, y0, y1, r0, r4, r5 and r6.  r1 and r2 belong
+	; Clobbers a, b, x0, x1, y0, y1, r0, r4, r5, r6 and n4.  r1 and r2 belong
 	; to the caller's chunk loop and are not touched.
 	;
 	; Gouraud corner pass: the loop below runs the rotation and the two
@@ -1474,19 +1497,20 @@ shade_corner_loaded
 	; cannot exceed 1.0 for any normal; the clamp below is the guard for
 	; rounding, not for the model.
 	; Red channel, then green: the same clamped-dot sum over the two scaled
-	; vector sets.  R4 walks straight from the last red vector into the first
-	; green one, which is why they are stored as one block.
+	; vector sets.  cache_light_directions_x has copied the direct vectors to
+	; X after projection/prepass, so each MPY/MAC simultaneously fetches the
+	; next Y-resident normal component and X-resident light component.  The
+	; DSP's XY move form assigns R0 to the X bus and R4 to the Y bus here.
 	clr	b
-	move	#light_direction,r4
+	move	#phase_light_directions_x,r0
+	move	#shade_cx,r4
+	move	#>-3,n4
 	do	#LIGHT_COUNT,shade_red_loop
-	move	y:shade_cx,x0
-	move	y:(r4)+,y0
-	mpy	x0,y0,a	y:shade_cy,x0
-	move	y:(r4)+,y0
-	mac	x0,y0,a	y:shade_cz,x0
-	move	y:(r4)+,y0
+	tfr	b,a	x:(r0)+,x0	y:(r4)+,y0
+	mpy	x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
+	mac	x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
 	mac	x0,y0,a
-	rnd	a
+	rnd	a	(r4)+n4
 	tst	a
 	jle	<shade_red_none
 	add	a,b
@@ -1502,14 +1526,11 @@ shade_red_loop
 
 	clr	b
 	do	#LIGHT_COUNT,shade_green_loop
-	move	y:shade_cx,x0
-	move	y:(r4)+,y0
-	mpy	x0,y0,a	y:shade_cy,x0
-	move	y:(r4)+,y0
-	mac	x0,y0,a	y:shade_cz,x0
-	move	y:(r4)+,y0
+	tfr	b,a	x:(r0)+,x0	y:(r4)+,y0
+	mpy	x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
+	mac	x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
 	mac	x0,y0,a
-	rnd	a
+	rnd	a	(r4)+n4
 	tst	a
 	jle	<shade_green_none
 	add	a,b
@@ -2373,6 +2394,10 @@ prepass_arm
 
 prepass_run_now
 	jsr	<prepass_run
+	; A standalone run-now pass uses prepass_order too. Refresh the X cache
+	; before acknowledging it so a diagnostic mode-2/3 run followed by BUILD
+	; cannot leave the Lambert loop reading its consumed order-list contents.
+	jsr	<cache_light_directions_x
 prepass_ack_exit
 	move	#ACK_PREPASS,x0
 	jsr	<send_word
@@ -3076,6 +3101,13 @@ chunk_uvs
 triangle_out
 	ds	MAX_CHUNK*SPAN_RECORD_WORDS
 
+; This phase-local cache starts immediately above the maximum BUILD output.
+; The prepass order list covers it while FINISH is culling, but its tail is
+; dead by the time BUILD_TRIANGLES calls make_triangle_shade.  Eighteen words
+; are enough for the six RGB/green light vectors; prepass_scratch begins well
+; above it, so the kill bitmap and its cursor remain untouched.
+phase_light_directions_x	=	triangle_out+MAX_CHUNK*SPAN_RECORD_WORDS
+
 ; -----------------------------------------------------------------------------
 ; Occlusion prepass working set
 ;
@@ -3481,7 +3513,7 @@ prepass_tp_save
 ; the index upload and reports garbage, which cost this stage one full round
 ; of contradictory measurements once.
 ;
-; The current full-mesh program ends at P:$0988, leaving P:$0989-$09BF free
+; The current full-mesh program ends at P:$098C, leaving P:$098D-$09BF free
 ; before the resident indices.  Keep the "<" prefix on jumps and the short
 ; Y-scalar forms on any code added later, or the program will overwrite the
 ; first triangle indices without an assembler error.

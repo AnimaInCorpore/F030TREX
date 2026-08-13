@@ -71,6 +71,7 @@ the program.
 | `X:$25E4-$39DE` | 5,115 | X half of the corner-normal table (`corner_normals_x`) |
 | `X:$39DF-$3A1E` | 64 | one BUILD chunk's UV pairs (`chunk_uvs`) |
 | `X:$3A1F-$3C5E` | 576 | 32 packed span records at 18 words each |
+| `X:$3C5F-$3C70` | 18 | phase-local direct-light cache after the prepass |
 | `Y:$09C0-$29AB` | 8,172 | packed resident triangle indices |
 | `Y:$29AC-$3FFE` | 5,715 | Y half of the corner-normal table (`corner_normals_y`) |
 
@@ -87,6 +88,16 @@ to the top of physical X memory exactly. The order list overlays the dead
 UV/output window deliberately: the occlusion sweep consumes it before the
 first BUILD chunk, so no sorted-list storage is needed after that point.
 This is the stock-hardware-safe lifetime boundary.
+
+`phase_light_directions_x` aliases `X:$3C5F-$3C70`, the tail of that order
+list above the maximum BUILD output. `cache_light_directions_x` copies the 18
+direct-light words from their canonical Y packet block only after the prepass
+has consumed the list (or after projection in the no-prepass test path); the
+explicit `CMD_PREPASS` run-now path refreshes it after the same overlay use.
+BUILD's Lambert loop then pairs each X light-component fetch with the
+corresponding Y normal-component fetch. The cache must remain after the
+prepass lifetime boundary and below `prepass_scratch`; it is not a persistent
+third copy of the host protocol payload.
 
 The order is produced by a two-pass counting sort into 64 depth classes of
 32 OT buckets each: classification runs once to count and once to scatter,
@@ -110,8 +121,8 @@ disarmed captures are byte-identical at frame 100 and at hold frame 291,
 with zero prepass protocol failures or capacity overruns across the hold.
 
 The frontend reserves `X:$0000-$3DFF` and `Y:$0000-$3EF7`. The full-mesh
-program occupies P from `$0040` and ends at `$0988`, leaving the words at
-`$0989-$09BF` free before the Y indices begin at `$09C0`. This bound has to
+program occupies P from `$0040` and ends at `$098C`, leaving the words at
+`$098D-$09BF` free before the Y indices begin at `$09C0`. This bound has to
 be checked after every DSP change, because an overflow overwrites the index
 list without an assembler error -- recompute it from the assembled `.lod`
 rather than trusting this figure, with the check command in the end-of-file
