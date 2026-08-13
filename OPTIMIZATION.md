@@ -1193,11 +1193,21 @@ the program-size change in words (negative frees words):
    `fb.res` reproducing `d89958b3…3d16` and the armed hold reproducing
    the frame-291 checkpoint.  Cycle effect unmeasured (2.4a); the path is
    pipelined behind host unpack either way.
-6. **Red/green channel merge** [-20]. Since 4.4c the two Lambert loops are
-   textually identical except for their accumulator cell, and their
-   clamp/depth-scale epilogues duplicate each other. One outer `DO #2`
-   walking the consecutive `shade_sum_r/g` keeps the instruction stream per
-   channel identical.
+6. **Red/green channel merge -- implemented.** Since 4.4c the two Lambert
+   loops were textually identical except for their accumulator cell, and
+   their clamp/depth-scale epilogues duplicated each other.  One outer
+   `DO #2` now runs the shared loop body and epilogue with R3 walking the
+   consecutive `shade_sum_r/g` result cells; R0 streams from the last red
+   vector into the first green one exactly as before, `(r4)+n4` still
+   rewinds the normal per light, and the inner loop keeps the shipped
+   shape to the instruction, `jle`-to-LA included.  R3 joins
+   `make_triangle_shade`'s clobber list (it was free: BUILD, the only
+   caller, keeps nothing in it).  Result: **14 words freed** (extent
+   `$0972` to `$0964`, 91 free), DOSBox 0/0, frame-100 `fb.res`
+   reproducing `d89958b3…3d16` and the armed hold reproducing the
+   frame-291 checkpoint.  Speed-neutral by construction: the instruction
+   stream per channel is identical (one DO of setup traded against the
+   duplicate block).
 7. **Lookup triples through pointers** [-25]. `make_triangle_area` and
    `make_triangle_zkey` unroll three identical lookup blocks each over the
    consecutive `triangle_i0..i2`, `tri_x0..`, `triangle_z0..z2` cells.
@@ -1213,10 +1223,10 @@ the program-size change in words (negative frees words):
    2.3d and defect 4 of 2.3f document.
 
 Together that is on the order of 120-180 words against the 51 free at the
-time of the audit.  Sites 1-3 and 5 have since landed: 66 words freed, 40
-of them spent back on the two speed sites, the free window at 77, and the
-freestanding prepass measured 16.5 ms/frame cheaper -- the remaining size
-reserve rests in the still-open sites 4 and 6-9.
+time of the audit.  Sites 1-3, 5 and 6 have since landed: 80 words freed,
+40 of them spent back on the two speed sites, the free window at 91, and
+the freestanding prepass measured 16.5 ms/frame cheaper -- the remaining
+size reserve rests in the still-open sites 4 and 7-9.
 
 Three families are explicitly excluded because they change results, not
 schedules:
@@ -4352,15 +4362,15 @@ The open roadmap, in recommended order (expected effects from the section
     frames ago (Cho Ren Sha's `swap_sprite_infos` exists for exactly this); and
     a missed pixel leaves a ghost from two frames back, which is a silent
     visual defect, so `fb.res` byte identity is the mandatory gate.
-21. Harvest the DSP instruction-stream reserve. **Audited; sites 1-3 and
-    5 implemented** -- see section 2.3h: sites 1 and 5 (the
+21. Harvest the DSP instruction-stream reserve. **Audited; sites 1-3, 5
+    and 6 implemented** -- see section 2.3h: sites 1, 5 and 6 (the
     register-resident corner-normal rotation, the wire-ordered record
-    copy) freed 66 words, and sites 2 and 3 (O(1) kill-bit addressing,
-    the pass-2 classify cache) spent 40 of them back to take the
-    freestanding prepass from 76.76 to a measured **60.28 ms/frame** -- a
-    fifth of the stage -- leaving 77 words free to the ceiling.  Still
-    open are the size-only sites 4 and 6-9, roughly another 90+ words
-    when a feature needs the room.  The
+    copy, the merged Lambert channel loop) freed 80 words, and sites 2
+    and 3 (O(1) kill-bit addressing, the pass-2 classify cache) spent 40
+    of them back to take the freestanding prepass from 76.76 to a
+    measured **60.28 ms/frame** -- a fifth of the stage -- leaving 91
+    words free to the ceiling.  Still open are the size-only sites 4 and
+    7-9, roughly another 70+ words when a feature needs the room.  The
     prepass cost is hidden by the FINISH window today, and every
     rasterizer improvement narrows that window, so the return is program
     words and margin for item 19's yield work, not frame rate: the BUILD

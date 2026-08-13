@@ -1372,8 +1372,8 @@ make_triangle_shade
 	; is the same expression transform_vertices already uses and stays
 	; correct if the frame matrix ever carries more than a rotation.
 	;
-	; Clobbers a, b, x0, x1, y0, y1, r0, r4, r5, r6 and n4.  r1 and r2 belong
-	; to the caller's chunk loop and are not touched.
+	; Clobbers a, b, x0, x1, y0, y1, r0, r3, r4, r5, r6 and n4.  r1 and r2
+	; belong to the caller's chunk loop and are not touched.
 	;
 	; Gouraud corner pass: the loop below runs the rotation and the two
 	; clamped light sums once per CORNER normal (bank-split load, see
@@ -1470,53 +1470,40 @@ shade_rotate_row
 	; per-light clamp does.  The host pre-scaled the vectors so the total
 	; cannot exceed 1.0 for any normal; the clamp below is the guard for
 	; rounding, not for the model.
-	; Red channel, then green: the same clamped-dot sum over the two scaled
-	; vector sets.  cache_light_directions_x has copied the direct vectors to
-	; X after projection/prepass, so each MPY/MAC simultaneously fetches the
-	; next Y-resident normal component and X-resident light component.  The
-	; DSP's XY move form assigns R0 to the X bus and R4 to the Y bus here.
-	clr	b
+	; One outer pass per channel -- red then green, the same clamped-dot
+	; sum over the two scaled vector sets, R3 walking the consecutive
+	; shade_sum_r/g result cells.  R0 streams straight from the last red
+	; vector into the first green one, and (r4)+n4 rewinds the camera-space
+	; normal for every light.  cache_light_directions_x has copied the
+	; direct vectors to X after projection/prepass, so each MPY/MAC
+	; simultaneously fetches the next Y-resident normal component and
+	; X-resident light component.  The DSP's XY move form assigns R0 to
+	; the X bus and R4 to the Y bus here.
 	move	#phase_light_directions_x,r0
 	move	#shade_cx,r4
 	move	#>-3,n4
-	do	#LIGHT_COUNT,shade_red_loop
-	tfr	b,a	x:(r0)+,x0	y:(r4)+,y0
-	mpy	x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
-	mac	x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
-	mac	x0,y0,a
-	rnd	a	(r4)+n4
-	tst	a
-	jle	<shade_red_none
-	add	a,b
-shade_red_none
-	nop
-shade_red_loop
-	jsr	<shade_clamp_sum
-	move	a1,x0
-	move	y:<shade_depth_scale,y0
-	mpy	x0,y0,a
-	rnd	a
-	move	a1,y:<shade_sum_r
-
+	move	#shade_sum_r,r3
+	do	#2,shade_channel_loop
 	clr	b
-	do	#LIGHT_COUNT,shade_green_loop
+	do	#LIGHT_COUNT,shade_light_loop
 	tfr	b,a	x:(r0)+,x0	y:(r4)+,y0
 	mpy	x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
 	mac	x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
 	mac	x0,y0,a
 	rnd	a	(r4)+n4
 	tst	a
-	jle	<shade_green_none
+	jle	<shade_light_none
 	add	a,b
-shade_green_none
+shade_light_none
 	nop
-shade_green_loop
+shade_light_loop
 	jsr	<shade_clamp_sum
 	move	a1,x0
 	move	y:<shade_depth_scale,y0
 	mpy	x0,y0,a
 	rnd	a
-	move	a1,y:<shade_sum_g
+	move	a1,y:(r3)+
+shade_channel_loop
 
 	; This corner's own level from its two sums, then accumulate ONE THIRD
 	; of each sum: a corner sum reaches 1.09 (see shade_clamp_sum), so the
@@ -3573,7 +3560,7 @@ prepass_tp_save
 ; the index upload and reports garbage, which cost this stage one full round
 ; of contradictory measurements once.
 ;
-; The current full-mesh program ends at P:$0972, leaving P:$0973-$09BF free
+; The current full-mesh program ends at P:$0964, leaving P:$0965-$09BF free
 ; before the resident indices.  Keep the "<" prefix on jumps and the short
 ; Y-scalar forms on any code added later, or the program will overwrite the
 ; first triangle indices without an assembler error.
