@@ -63,6 +63,10 @@ produced. The T-Rex stays absent, although the release-only FPS field can
 still update on the black framebuffer. That is a TOS/DSP startup issue, not a
 rasterizer failure.
 
+### Hatari capture
+
+![Side-leaning T-Rex head running under Hatari](docs/screenshots/trex-hatari-side-lean.png)
+
 ## Required reading
 
 [AGENTS.md](AGENTS.md) and [OPTIMIZATION.md](OPTIMIZATION.md) are part of the
