@@ -121,8 +121,8 @@ disarmed captures are byte-identical at frame 100 and at hold frame 291,
 with zero prepass protocol failures or capacity overruns across the hold.
 
 The frontend reserves `X:$0000-$3DFF` and `Y:$0000-$3EF7`. The full-mesh
-program occupies P from `$0040` and ends at `$0963`, leaving the words at
-`$0964-$09BF` free before the Y indices begin at `$09C0`. This bound has to
+program occupies P from `$0040` and ends at `$0967`, leaving the words at
+`$0968-$09BF` free before the Y indices begin at `$09C0`. This bound has to
 be checked after every DSP change, because an overflow overwrites the index
 list without an assembler error -- recompute it from the assembled `.lod`
 rather than trusting this figure, with the check command in the end-of-file

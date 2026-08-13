@@ -2819,36 +2819,47 @@ prepass_load_done
 	rts
 
 ; Convert triangle_count (a global triangle number) to a kill-word pointer
-; and one-hot bit.  Repeated subtraction is only paid for a kill and for one
-; row-start decompose per sweep entry, and keeps the common BUILD test small
-; without another resident table.
+; and one-hot bit, in constant time.  The old repeated-subtraction walk paid
+; up to ~113 iterations for the highest triangle indices, per killed
+; triangle; floor(n/24) is one fractional multiply instead: with
+; c = $55556 = ceil(2^23/24), A1 = 2*n*c >> 24 = floor(n*c/2^23) equals
+; floor(n/24) exactly for every n below 524,288 -- the combined error term
+; (n mod 24)/24 + 2n/(3*2^23) stays under 1 there -- and the kill bitmap's
+; bit numbers stop at 2,723.  The remainder uses the doubled-integer idiom
+; the stamp documents: 2*(24q) sits entirely in A0 after one ASR, since
+; 48q < 2^24 for every reachable q.
 ;
 ; prepass_bit_address is the base-parameterized entry: A = bit number,
 ; B = word base; out come R0 = base + bit/24 and X1 = one-hot(bit mod 24).
 ; The sweep calls it with B = 0 to split a cell column into its mask word
-; and start bit.
+; and start bit.  Y0 is deliberately untouched -- that caller keeps its row
+; coordinate there across the call -- while Y1 is clobbered now; neither
+; caller holds a live value in Y1.
 prepass_kill_address
 	move	#>prepass_kill,b
 prepass_bit_address
-	move	#>24,x0
-	move	#>1,x1
-prepass_kill_word_loop
-	cmp	x0,a
-	jlt	<prepass_kill_word_done
-	sub	x0,a
+	move	a1,x0
+	move	#>$55556,y1
+	mpy	x0,y1,a
+	move	a1,x1
 	add	x1,b
-	jmp	<prepass_kill_word_loop
-prepass_kill_word_done
 	move	b1,r0
+	move	#>24,y1
+	mpy	x1,y1,a
+	asr	a
+	move	a0,x1
+	move	x0,a
+	sub	x1,a
+	; One-hot(bit mod 24) by REP: that many ASLs from 1.  Zero must skip
+	; -- a zero REP count repeats 65,536 times -- and keeps the preload.
+	move	#>1,x1
 	move	a1,x0
 	tst	a
 	jeq	<prepass_kill_bit_done
-	do	x0,prepass_kill_bit_end
 	move	x1,a
+	rep	x0
 	asl	a
 	move	a1,x1
-	nop
-prepass_kill_bit_end
 prepass_kill_bit_done
 	rts
 
@@ -3486,7 +3497,7 @@ prepass_tp_save
 ; the index upload and reports garbage, which cost this stage one full round
 ; of contradictory measurements once.
 ;
-; The current full-mesh program ends at P:$0963, leaving P:$0964-$09BF free
+; The current full-mesh program ends at P:$0967, leaving P:$0968-$09BF free
 ; before the resident indices.  Keep the "<" prefix on jumps and the short
 ; Y-scalar forms on any code added later, or the program will overwrite the
 ; first triangle indices without an assembler error.

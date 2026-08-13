@@ -1115,13 +1115,27 @@ the program-size change in words (negative frees words):
    errors/0 warnings, and the 4,000-VBL Hatari run reproduces the
    recorded frame-100 full-mesh `fb.res` checkpoint `d89958b3…3d16`
    byte-identically. The cycle effect is unmeasured (2.4a).
-2. **O(1) kill-bit addressing** [~0]. `prepass_kill_address` divides by 24
-   with repeated subtraction: up to ~113 iterations at the highest triangle
-   indices, paid per killed triangle inside 2.3f's 75.6 ms (the sweep's
-   per-survivor row split stays in its one-iteration range). One fractional
-   multiply by `$55556` computes floor(n/24) exactly for every n below
-   524,288 -- far past the 2,723 maximum -- and `REP x0`/`ASL` builds the
-   one-hot remainder mask; the zero-count guard keeps its existing shape.
+2. **O(1) kill-bit addressing -- implemented.** `prepass_kill_address`
+   divided by 24 with repeated subtraction: up to ~113 iterations at the
+   highest triangle indices, per killed triangle, plus one call per sweep
+   entry.  One fractional multiply by `$55556` now computes floor(n/24)
+   exactly for every n below 524,288 -- far past the 2,723 maximum -- and
+   `REP x0`/`ASL` builds the one-hot remainder mask with the zero-count
+   guard keeping its existing shape; Y0 stays untouched for the sweep's
+   row coordinate, and Y1 is the new scratch (dead at both callers).
+   Cost: 4 program words (extent `$0963` to `$0967`, 88 free).  Gates:
+   DOSBox 0/0; plain and arm-2 frame-100 `fb.res` reproduce
+   `d89958b3…3d16`; the armed hold run reproduces the frame-291
+   checkpoint `e66d4d43…b00486` byte-identically against its disarmed
+   control -- kills still land on exactly the right triangles -- with
+   zero protocol failures and 62,920 fewer cumulative armed pixel writes
+   (353/354 frames completed), consistent with 2.3f's recorded 61,697.
+   Measured cost effect: the arm-2 freestanding prepass drops from 76.76
+   to 75.98 ms/frame -- 11,500-VBL runs of 309/310 frames including the
+   hold, one `.lod` swapped under one host binary (2.3f's recorded 75.6
+   was 65 early frames, a different mix).  About -0.8 ms/frame, 1%: real
+   but small, because the two classification passes dominate the stage --
+   which is site 3's target.
 3. **Pass-2 classify cache** [+15]. The two classification passes dominate
    the 75.6 ms and run the identical area/bbox/zkey chain twice. The kill
    bitmap is dead storage until the sweep: pass 1 can mark survivors there,
@@ -1164,9 +1178,10 @@ the program-size change in words (negative frees words):
    2.3d and defect 4 of 2.3f document.
 
 Together that is on the order of 120-180 words against the 51 free at the
-time of the audit -- site 1 has since delivered 41 of them, putting the
-free window at 92 -- which moves the P ceiling from binding to comfortable
-for item 19's yield work before any of the speed value is counted.
+time of the audit -- sites 1 and 2 have since netted 37 (41 freed, 4
+spent), putting the free window at 88 -- which moves the P ceiling from
+binding to comfortable for item 19's yield work before any of the speed
+value is counted.
 
 Three families are explicitly excluded because they change results, not
 schedules:
@@ -4302,13 +4317,14 @@ The open roadmap, in recommended order (expected effects from the section
     frames ago (Cho Ren Sha's `swap_sprite_infos` exists for exactly this); and
     a missed pixel leaves a ghost from two frames back, which is a silent
     visual defect, so `fb.res` byte identity is the mandatory gate.
-21. Harvest the DSP instruction-stream reserve. **Audited; site 1
+21. Harvest the DSP instruction-stream reserve. **Audited; sites 1 and 2
     implemented** -- see section 2.3h: roughly 120-180 recoverable program
     words, of which site 1 (the corner-normal rotation, built
-    register-resident rather than X-staged) has delivered 41 at a
-    byte-identical frame-100 gate, leaving 92 free to the ceiling.  Still
-    open are the O(1) kill-bit addressing and the pass-2 classify cache,
-    the two cycle sites attacking the
+    register-resident rather than X-staged) delivered 41 and site 2 (the
+    O(1) kill-bit addressing) spent 4 back at a measured -0.8 ms/frame on
+    the freestanding prepass, leaving 88 free to the ceiling.  Still
+    open is the pass-2 classify cache, the cycle site attacking the
+    classification share that dominates the
     75.6 ms freestanding prepass cost 2.3f recorded.  That cost is hidden by
     the FINISH window today, and every rasterizer improvement narrows that
     window, so the return is program words and margin for item 19's yield
