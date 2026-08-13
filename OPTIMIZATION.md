@@ -1261,15 +1261,33 @@ the program-size change in words (negative frees words):
    the same status as 3.9c's transplant-verified flat arm.  The
    race-sensitive per-word GAIT/TARGET loops (2.1) were deliberately not
    touched.
-9. **Residual 2.3d folds** [-40..-80]. The remaining eligible ALU/move
-   pairs, harvested site by site under the same source-read-at-start hazard
-   2.3d and defect 4 of 2.3f document.
+9. **Residual 2.3d folds -- implemented, and the reserve is spent.** Ten
+   fold groups survived the hazard check: store-previous-on-TFR in both
+   index unpacks and the armed kill cursor (the parallel slot reads A1 at
+   the start of the instruction, so a TFR carries the PREVIOUS result's
+   store -- read-at-start working for us, where defect 4 of 2.3f is the
+   same rule working against the careless), store-preNEG-value on both
+   span half-height negations, the shared-constant dual-counter
+   triangle_advance, the R6-walked area delta stores (the corner loop
+   parks R6 exactly on tri_dx01), paired temp stores on the projection
+   head's TFR/SUB, one load fold each in the classify count branch and
+   span_div, and the B1-to-R0 parallel in prepass_bit_address.  The
+   race-sensitive GAIT/TARGET loops were deliberately excluded.  Result:
+   **24 words freed** against the audited 40-80 -- the loop restructures
+   of sites 1-8 had already consumed most of what 2.3d counted -- for an
+   extent of `$0919` to `$0901`, 190 free.  DOSBox 0/0; fresh frame-100
+   `fb.res` reproducing `d89958b3…3d16`; the armed hold freshly
+   reproducing the frame-291 checkpoint at 356 frames, zero failures.
 
-Together that is on the order of 120-180 words against the 51 free at the
-time of the audit.  Sites 1-8 have since landed: 155 words freed, 40 of
-them spent back on the two speed sites, the free window at 166, and the
-freestanding prepass measured 16.5 ms/frame cheaper -- the remaining size
-reserve is site 9's residual fold pass alone.
+The audit estimated 120-180 recoverable words against the 51 free at its
+time.  All nine sites have since landed: **179 words freed, 40 of them
+spent back on the two speed sites, the free window at 190, and the
+freestanding prepass measured 16.5 ms/frame (21.5%) cheaper** -- every
+step at byte-identical output against the recorded checkpoints.  The
+harvest is complete; program memory is no longer a constraint on item
+19's yield work, and further P recovery would have to come from
+structural changes (the chain-slope table-driving the audit deferred),
+not from the instruction stream.
 
 Three families are explicitly excluded because they change results, not
 schedules:
@@ -4405,17 +4423,14 @@ The open roadmap, in recommended order (expected effects from the section
     frames ago (Cho Ren Sha's `swap_sprite_infos` exists for exactly this); and
     a missed pixel leaves a ghost from two frames back, which is a silent
     visual defect, so `fb.res` byte identity is the mandatory gate.
-21. Harvest the DSP instruction-stream reserve. **Audited; sites 1-8
-    implemented** -- see section 2.3h: the six size sites (the
-    register-resident corner-normal rotation, the re-pipelined morph
-    transform, the wire-ordered record copy, the merged Lambert channel
-    loop, the pointer-walked lookup triples, the cold receive paths)
-    freed 155 words, and sites 2 and 3 (O(1) kill-bit addressing, the
-    pass-2 classify cache) spent 40 of them back to take the
-    freestanding prepass from 76.76 to a measured **60.28 ms/frame** --
-    a fifth of the stage -- leaving 166 words free to the ceiling.
-    Still open is site 9 alone, the residual ALU/move fold pass,
-    40-80 words site by site when a feature needs the room.  The
+21. Harvest the DSP instruction-stream reserve. **Complete -- all nine
+    sites implemented**; see section 2.3h.  The seven size sites freed
+    179 words, and sites 2 and 3 (O(1) kill-bit addressing, the pass-2
+    classify cache) spent 40 of them back to take the freestanding
+    prepass from 76.76 to a measured **60.28 ms/frame** -- a fifth of
+    the stage -- leaving **190 words free** to the `$09BF` ceiling
+    against 51 when the audit began, at byte-identical output
+    throughout.  The
     prepass cost is hidden by the FINISH window today, and every
     rasterizer improvement narrows that window, so the return is program
     words and margin for item 19's yield work, not frame rate: the BUILD

@@ -805,18 +805,18 @@ triangle_count_loop
 	move	#>TRI_VERTEX_MASK,x0
 	tfr	x1,a
 	and	x0,a
-	move	a1,y:triangle_i0
-	tfr	x1,a
+	; Each TFR's parallel slot stores the PREVIOUS field: the parallel
+	; move reads A1 at the start of the instruction, before the transfer
+	; lands -- the read-at-start rule working for us here.
+	tfr	x1,a	a1,y:triangle_i0
 	rep	#TRI_INDEX_BITS
 	lsr	a
 	; The occluder bit lands in bit 11 after this shift; mask it off or the
 	; vertex lookup reads 2,048 entries past v1.
 	and	x0,a
-	move	a1,y:triangle_i1
-	tfr	y1,a
+	tfr	y1,a	a1,y:triangle_i1
 	and	x0,a
-	move	a1,y:triangle_i2
-	tfr	y1,a
+	tfr	y1,a	a1,y:triangle_i2
 	rep	#TRI_INDEX_BITS
 	lsr	a
 	move	a1,y:triangle_n0
@@ -824,8 +824,7 @@ triangle_count_loop
 	move	#>TRI_INDEX_MASK,x0
 	tfr	y1,a
 	and	x0,a
-	move	a1,y:triangle_n1
-	tfr	y1,a
+	tfr	y1,a	a1,y:triangle_n1
 	rep	#TRI_INDEX_BITS
 	lsr	a
 	move	a1,y:triangle_n2
@@ -842,14 +841,15 @@ triangle_count_loop
 	move	x:prepass_status+1,x1
 	move	x:(r0),a
 	and	x1,a
-	move	a1,y:span_flip
 	; Advance the streaming bit cursor inline.  This is on every armed
 	; triangle, so the call/return pair costs more than the small body.
+	; The TFR's parallel slot stores the PRE-transfer A1 -- the AND
+	; result -- read-at-start working for us rather than against us.
 	; The wrap test reads A2 bit 0 -- the bit ASL just carried out of A1.
 	; The old full-accumulator TST read the SIGN EXTENSION of a bit-23
 	; one-hot as "still inside the word", zeroed the cursor and silently
 	; stopped consuming kills at the 24th triangle of every armed frame.
-	move	x1,a
+	tfr	x1,a	a1,y:span_flip
 	asl	a
 	move	a1,x1
 	jclr	#0,a2,build_prepass_kill_advance_store
@@ -971,16 +971,15 @@ triangle_culled
 	; The chunk-local index inside the survivor key is what lets the host
 	; re-associate each record with its source triangle.
 triangle_advance
+	; One shared #>1 serves both counters; the ADD's parallel slot
+	; fetches the countdown into B while A carries the index.
 	move	y:triangle_index,a
 	move	#>1,x0
-	add	x0,a
+	add	x0,a	y:triangle_remaining,b
 	move	a1,y:triangle_index
-
-	move	y:triangle_remaining,a
-	move	#>1,x0
-	sub	x0,a
-	move	a1,y:triangle_remaining
-	tst	a
+	sub	x0,b
+	move	b1,y:triangle_remaining
+	tst	b
 	jne	<triangle_count_loop
 
 triangle_reply
@@ -1263,16 +1262,15 @@ project_vertices
 	move	x:(r0)+,x1
 	move	x:(r0)+,y0
 	move	x:(r0)+n0,x0
-	move	x1,y:<project_temp_x
-	move	y0,y:<project_temp_y
 
 	; Near-plane test.  There is no triangle clipping here: a vertex closer
 	; than projection_near has its divisor clamped so the division stays
 	; well-defined, and is marked in the record's flags word.  The triangle
-	; builder drops every triangle touching such a vertex.
+	; builder drops every triangle touching such a vertex.  The TFR and
+	; SUB carry the two temp stores in their parallel slots.
 	move	y:<projection_near,y1
-	move	x0,a
-	sub	y1,a
+	tfr	x0,a	x1,y:<project_temp_x
+	sub	y1,a	y0,y:<project_temp_y
 	jge	<project_z_ok
 	move	y1,x0
 	move	#>1,a
@@ -1696,22 +1694,22 @@ tri_near_ok
 	; all-beyond-one-edge case.  The box runs after the cheaper area cull,
 	; so it only costs work for the ~27% of triangles that survive it.
 
+	; The delta stores continue through R6, which the corner loop left
+	; parked exactly on tri_dx01, and each SUB's parallel slot fetches the
+	; next pair's first operand into the other accumulator.
 	move	y:tri_x1,a
 	move	y:tri_x0,x0
-	sub	x0,a
-	move	a1,y:tri_dx01
-	move	y:tri_y1,a
+	sub	x0,a	y:tri_y1,b
+	move	a1,y:(r6)+
 	move	y:tri_y0,x0
-	sub	x0,a
-	move	a1,y:tri_dy01
-	move	y:tri_x2,a
+	sub	x0,b	y:tri_x2,a
+	move	b1,y:(r6)+
 	move	y:tri_x0,x0
-	sub	x0,a
-	move	a1,y:tri_dx02
-	move	y:tri_y2,a
+	sub	x0,a	y:tri_y2,b
+	move	a1,y:(r6)+
 	move	y:tri_y0,x0
-	sub	x0,a
-	move	a1,y:tri_dy02
+	sub	x0,b
+	move	b1,y:(r6)+
 
 	move	y:tri_dx01,x0
 	move	y:tri_dy02,y0
@@ -1898,17 +1896,17 @@ span_sort_done
 
 	; Half heights, and the opposite-edge dy factors the gradients reuse:
 	; k0 = sy1-sy2 = -rows_low, k1 = sy2-sy0 = dy_long, k2 = sy0-sy1.
+	; Each NEG's parallel slot stores the PRE-negation value -- the half
+	; height -- while the negation itself becomes the k factor.
 	move	y:span_sy1,a
 	move	y:span_sy0,x0
 	sub	x0,a
-	move	a1,y:span_rows_up
-	neg	a
+	neg	a	a1,y:span_rows_up
 	move	a1,y:span_k2
 	move	y:span_sy2,a
 	move	y:span_sy1,x0
 	sub	x0,a
-	move	a1,y:span_rows_low
-	neg	a
+	neg	a	a1,y:span_rows_low
 	move	a1,y:span_k0
 	move	y:span_rows_up,a
 	move	y:span_rows_low,x0
@@ -2201,8 +2199,7 @@ span_div
 	; the validation frames caught on first contact.
 	; Returns the quotient in A1.  Clobbers B, X1 and Y0.
 	clr	b
-	move	b1,y:span_flip
-	tst	a
+	tst	a	b1,y:span_flip
 	jpl	<span_div_n_ok
 	neg	a
 	move	#>1,b
@@ -2560,11 +2557,10 @@ prepass_classify_key
 	move	a1,r0
 	move	#>1,x0
 	move	y:(r0),b
-	add	x0,b
+	add	x0,b	y:prepass_surv,a
 	move	b1,y:(r0)
-	move	y:prepass_surv,b
-	add	x0,b
-	move	b1,y:prepass_surv
+	add	x0,a
+	move	a1,y:prepass_surv
 	move	y:<prepass_cls_bit,x0
 	move	x:(r4),b
 	or	x0,b
@@ -2819,14 +2815,13 @@ prepass_unpack_indices
 	move	#>TRI_VERTEX_MASK,x0
 	tfr	x1,a
 	and	x0,a
-	move	a1,y:triangle_i0
-	tfr	x1,a
+	; The TFRs' parallel slots store the previous field -- read-at-start.
+	tfr	x1,a	a1,y:triangle_i0
 	rep	#TRI_INDEX_BITS
 	lsr	a
 	; Bit 11 here is the occluder qualification, not part of v1.
 	and	x0,a
-	move	a1,y:triangle_i1
-	tfr	y1,a
+	tfr	y1,a	a1,y:triangle_i1
 	and	x0,a
 	move	a1,y:triangle_i2
 	rts
@@ -2884,9 +2879,8 @@ prepass_bit_address
 	mpy	x0,y1,a
 	move	a1,x1
 	add	x1,b
-	move	b1,r0
 	move	#>24,y1
-	mpy	x1,y1,a
+	mpy	x1,y1,a	b1,r0
 	asr	a
 	move	a0,x1
 	move	x0,a
@@ -3542,7 +3536,7 @@ prepass_tp_save
 ; the index upload and reports garbage, which cost this stage one full round
 ; of contradictory measurements once.
 ;
-; The current full-mesh program ends at P:$0919, leaving P:$091A-$09BF free
+; The current full-mesh program ends at P:$0901, leaving P:$0902-$09BF free
 ; before the resident indices.  Keep the "<" prefix on jumps and the short
 ; Y-scalar forms on any code added later, or the program will overwrite the
 ; first triangle indices without an assembler error.
