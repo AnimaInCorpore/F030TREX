@@ -1242,20 +1242,34 @@ the program-size change in words (negative frees words):
    `d89958b3…3d16` and the armed hold freshly reproducing the frame-291
    checkpoint at 354 frames, zero failures.  Roughly speed-neutral as
    audited; these run in BUILD, both classify passes and the sweep.
-8. **Cold receive paths** [-20]. LOAD_VERTICES/LOAD_TRIANGLES can receive
-   count*3 words in a one-receive body; both SET_FRAME variants can walk
-   the five consecutive projection cells through a pointer; the GET send
-   loop's five-instruction manual counter can be a hardware `DO` (the DSP
-   is host-paced there either way).
+8. **Cold receive paths -- implemented, one sub-item withdrawn.** The
+   audit named three cuts; building them showed the first is a wash: a
+   count*3 single-receive body in LOAD_VERTICES/LOAD_TRIANGLES saves four
+   body words and costs exactly four premultiply words, so those loops
+   stay as they are.  The other two landed: both SET_FRAME variants walk
+   the consecutive projection cells through a pointer (the animated
+   variant's five words in one `DO #5`; the plain variant's shared focal
+   store then a `DO #3` over cx/cy/near), and the GET send loop's
+   five-instruction manual counter became a hardware `DO` -- with a NOP
+   as the loop's last word, since JSR may not close a hardware loop.
+   Result: **12 words freed** against the estimated 20 (extent `$0925`
+   to `$0919`, 166 free), DOSBox 0/0, fresh frame-100 `fb.res`
+   reproducing `d89958b3…3d16` and the armed hold freshly reproducing
+   the frame-291 checkpoint at 355 frames, zero failures.  One coverage
+   note: the plain SET_FRAME variant is the non-animated test path that
+   no gated run sends, so its three-word walk is review-verified only --
+   the same status as 3.9c's transplant-verified flat arm.  The
+   race-sensitive per-word GAIT/TARGET loops (2.1) were deliberately not
+   touched.
 9. **Residual 2.3d folds** [-40..-80]. The remaining eligible ALU/move
    pairs, harvested site by site under the same source-read-at-start hazard
    2.3d and defect 4 of 2.3f document.
 
 Together that is on the order of 120-180 words against the 51 free at the
-time of the audit.  Sites 1-7 have since landed: 143 words freed, 40 of
-them spent back on the two speed sites, the free window at 154, and the
+time of the audit.  Sites 1-8 have since landed: 155 words freed, 40 of
+them spent back on the two speed sites, the free window at 166, and the
 freestanding prepass measured 16.5 ms/frame cheaper -- the remaining size
-reserve rests in the still-open sites 8 and 9.
+reserve is site 9's residual fold pass alone.
 
 Three families are explicitly excluded because they change results, not
 schedules:
@@ -4391,16 +4405,17 @@ The open roadmap, in recommended order (expected effects from the section
     frames ago (Cho Ren Sha's `swap_sprite_infos` exists for exactly this); and
     a missed pixel leaves a ghost from two frames back, which is a silent
     visual defect, so `fb.res` byte identity is the mandatory gate.
-21. Harvest the DSP instruction-stream reserve. **Audited; sites 1-7
-    implemented** -- see section 2.3h: the five size sites (the
+21. Harvest the DSP instruction-stream reserve. **Audited; sites 1-8
+    implemented** -- see section 2.3h: the six size sites (the
     register-resident corner-normal rotation, the re-pipelined morph
     transform, the wire-ordered record copy, the merged Lambert channel
-    loop, the pointer-walked lookup triples) freed 143 words, and sites 2
-    and 3 (O(1) kill-bit addressing, the pass-2 classify cache) spent 40
-    of them back to take the freestanding prepass from 76.76 to a
-    measured **60.28 ms/frame** -- a fifth of the stage -- leaving 154
-    words free to the ceiling.  Still open are the size-only sites 8 and
-    9, roughly another 60+ words when a feature needs the room.  The
+    loop, the pointer-walked lookup triples, the cold receive paths)
+    freed 155 words, and sites 2 and 3 (O(1) kill-bit addressing, the
+    pass-2 classify cache) spent 40 of them back to take the
+    freestanding prepass from 76.76 to a measured **60.28 ms/frame** --
+    a fifth of the stage -- leaving 166 words free to the ceiling.
+    Still open is site 9 alone, the residual ALU/move fold pass,
+    40-80 words site by site when a feature needs the room.  The
     prepass cost is hidden by the FINISH window today, and every
     rasterizer improvement narrows that window, so the return is program
     words and margin for item 19's yield work, not frame rate: the BUILD

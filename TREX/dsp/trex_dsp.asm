@@ -514,15 +514,16 @@ set_translation_loop
 	move	x0,y:(r0)+
 set_bias_loop
 
+	; One focal word feeds both focal cells, then the remaining three
+	; projection words stream into the consecutive cx/cy/near cells.
 	jsr	<receive_word
 	move	x0,y:<projection_focal
 	move	x0,y:<projection_focal_y
+	move	#projection_cx,r0
+	do	#3,set_frame_projection_loop
 	jsr	<receive_word
-	move	x0,y:<projection_cx
-	jsr	<receive_word
-	move	x0,y:<projection_cy
-	jsr	<receive_word
-	move	x0,y:<projection_near
+	move	x0,y:(r0)+
+set_frame_projection_loop
 
 	; Light direction in CAMERA space, so the light stays put while the
 	; object turns.  The host sends a unit 1.23 vector pointing from the
@@ -561,16 +562,13 @@ set_animated_matrix_loop
 	move	x0,x:(r0)+
 set_animated_translation_loop
 
+	; The five projection words arrive in the exact order of the five
+	; consecutive projection cells, so one pointer walk receives them all.
+	move	#projection_focal,r0
+	do	#5,set_animated_projection_loop
 	jsr	<receive_word
-	move	x0,y:<projection_focal
-	jsr	<receive_word
-	move	x0,y:<projection_focal_y
-	jsr	<receive_word
-	move	x0,y:<projection_cx
-	jsr	<receive_word
-	move	x0,y:<projection_cy
-	jsr	<receive_word
-	move	x0,y:<projection_near
+	move	x0,y:(r0)+
+set_animated_projection_loop
 
 	move	#light_direction,r0
 	do	#LIGHT_COUNT*6+2,set_animated_light_loop
@@ -1017,18 +1015,14 @@ command_get_triangles
 	move	y:triangle_out_count,x0
 	add	x0,a
 	add	x0,a
-	move	a1,y:triangle_remaining
+	move	a1,x0
 	move	#triangle_out,r0
-	nop
-triangle_send_loop
+	do	x0,triangle_send_loop
 	move	x:(r0)+,x0
 	jsr	<send_word
-	move	y:triangle_remaining,a
-	move	#>1,x0
-	sub	x0,a
-	move	a1,y:triangle_remaining
-	tst	a
-	jne	<triangle_send_loop
+	; JSR may not close a hardware loop; the NOP is the loop's last word.
+	nop
+triangle_send_loop
 triangle_count_done
 	jmp	<main_loop
 
@@ -3548,7 +3542,7 @@ prepass_tp_save
 ; the index upload and reports garbage, which cost this stage one full round
 ; of contradictory measurements once.
 ;
-; The current full-mesh program ends at P:$0925, leaving P:$0926-$09BF free
+; The current full-mesh program ends at P:$0919, leaving P:$091A-$09BF free
 ; before the resident indices.  Keep the "<" prefix on jumps and the short
 ; Y-scalar forms on any code added later, or the program will overwrite the
 ; first triangle indices without an assembler error.
