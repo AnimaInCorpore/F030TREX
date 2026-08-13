@@ -5,6 +5,17 @@ Demo One (SCES-00048): a DSP56001 geometry/triangle-setup core paired with
 an M68030 software rasterizer, targeting a 240x224 render surface inside a
 256x224 Videl mode.
 
+## Download
+
+Prebuilt release archives are on the
+[releases page](https://github.com/AnimaInCorpore/F030TREX/releases):
+`TREX.ZIP` contains `TREX.TOS`, `TREX.LOD` and the 40-column `README.TXT`,
+ready to unpack and run on a stock Falcon030 or under Hatari.  The current
+release is
+[v1.1](https://github.com/AnimaInCorpore/F030TREX/releases/tag/v1.1) --
+the same image as v1.0 to the byte, with a leaner and faster DSP program
+underneath.
+
 ## Building
 
 Requirements: `node`, a C compiler/`make` for vasm and vlink
@@ -75,6 +86,13 @@ uses the 2,724-triangle model, DSP occlusion, and textured Gouraud shading;
 and its build assets have been removed. Performance figures in
 OPTIMIZATION.md are identified as Hatari/emulator results; physical Falcon030
 timing remains unmeasured.
+
+The DSP program is the post-harvest build of OPTIMIZATION.md section 2.3h:
+nine sites reworked for size and speed at byte-identical output, with the
+armed occlusion prepass measured 21.5% cheaper in Hatari and the freed
+program memory documented as the budget for future occlusion-yield work
+(section 2.3i records why finer coverage cells alone were measured out and
+what the actual binding constraint is).
 
 ## Feature comparison with the PS1 reference
 
