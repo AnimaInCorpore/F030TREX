@@ -71,8 +71,8 @@ commands you can run here.
 Atari Falcon030, 16 MHz, DSP56001. Render target 240x224 inside a 256x224
 Videl mode. The supported release is a single full-mesh package: `TREX.TOS`
 uses the 2,724-triangle model, DSP occlusion, and textured Gouraud shading;
-`TREX.LOD` is the matching DSP program. The older flat-shaded and reduced-mesh
-variants are not part of the release surface. Performance figures in
+`TREX.LOD` is the matching DSP program. The deprecated reduced-mesh variant
+and its build assets have been removed. Performance figures in
 OPTIMIZATION.md are identified as Hatari/emulator results; physical Falcon030
 timing remains unmeasured.
 

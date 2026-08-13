@@ -3080,8 +3080,7 @@ triangle_out
 ; Occlusion prepass working set
 ;
 ; Everything from chunk_uvs to the top of physical X memory, 1,569 words.
-; Deliberately NOT taken from the unused tail of triangle_indices (that only
-; exists in the LOD build and vanishes under -DTREX_FULL_MESH) and not from
+; Deliberately NOT taken from triangle_indices' allocation and not from
 ; Y:$0100-$01FF (whose mapping the sources contradict each other about).
 ;
 ; prepass_order is PHASE-LOCAL: it overlays chunk_uvs and triangle_out,
@@ -3469,9 +3468,9 @@ prepass_tp_save
 ;
 ; Anything that grows the program past P:$09BF silently corrupts the first
 ; triangle indices instead of failing to assemble.  Check the P extent in the
-; LOD after adding code (strtonum, not "0x" concatenation: plain awk reads a
-; concatenated hex string as 0 and the old one-liner therefore printed only
-; the word count):
+; assembled DSP program after adding code (strtonum, not "0x" concatenation:
+; plain awk reads a concatenated hex string as 0 and the old one-liner
+; therefore printed only the word count):
 ;
 ;   tr -d '\r' < TREX/dsp/trex_dsp.lod | awk '/^_DATA P/{s=strtonum("0x" $3); \
 ;     n=0;i=1;next} /^_/{if(i&&n)printf "last P = $%04X\n",s+n-1;i=0;next} \

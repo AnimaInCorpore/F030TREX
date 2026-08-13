@@ -113,17 +113,7 @@ DC_EMPTY		= $00f08000
 TREX_VERTICES		= 1376
 TREX_NORMALS		= 3610
 
-; The triangle count follows the mesh variant.  The LOD build (default)
-; takes it from the include tools/o3dlod.js generates next to the decimated
-; O3D; -DTREX_FULL_MESH restores the original 2,724-triangle assets.  The
-; vertex set -- and with it the TMD, the TANM animation stream and every
-; morph target -- is identical in both variants; only the polygon list and
-; its two per-triangle sidecars change.
-	ifd	TREX_FULL_MESH
 TREX_PRIMITIVES		= 2724
-	else
-	include	"TREX/model/trex_lod.inc"
-	endc
 
 ; 2048 buckets rather than 1024: with the shift below the sequence maximum
 ; is 250,002, which would leave only 4.5 % headroom in a 1024-entry table.
@@ -382,8 +372,8 @@ DSP_X_RESERVE		= 15872
 ; Two resident arrays share Y: the packed triangle index list (5448 words) and
 ; the face normals (8172), running $09C0..$3EF3.  Neither can start lower: the
 ; Falcon maps Y:$0200 upwards onto the same physical words as external P
-; memory, so anything below the program's end (P:$06BB today -- check the LOD
-; after DSP edits, limit P:$09BF) would overwrite the DSP program itself.  See
+; memory, so anything below the program's end (P:$06BB today -- check the DSP
+; program after edits; limit P:$09BF) would overwrite the program itself. See
 ; the Y-memory notes in TREX/dsp/trex_dsp.asm.  The Falcon reports 16127 free
 ; Y words.
 DSP_Y_RESERVE		= 16120
@@ -474,8 +464,7 @@ DSP_ANIMATION_WORDS	= 4+(DSP_ANIMATION_GAIT_CHUNK*3)
 DSP_TX_BUFFER_WORDS	= DSP_ANIMATION_WORDS
 ; One unit object-space face normal per triangle.
 ; The complete PS1 corner-normal table from the TMD, Q12 to 1.23-converted
-; at upload.  Its size is a property of the SOURCE mesh, not of the LOD:
-; both mesh variants upload all 3,610 entries and index into them.
+; at upload.  Its size is a property of the source TMD.
 TREX_TMD_NORMALS	= 3610
 ; File offset of the TMD normal block (object-table normal_top $150CC plus
 ; the 12-byte header), hard-coded like TMD_VERTEX_DATA_OFFSET above.
@@ -3673,9 +3662,8 @@ rasterize_packet
 
 .raster_packet_done
 	; Delta-clear bookkeeping, once per packet -- never per span row.  The
-	; original LOD campaign ran 9,043 rows against 600 packets per frame;
-	; the current full-mesh corpus is larger.  In either case a
-	; per-row min/max would cost about as much as the whole clear saves.
+	; full-mesh corpus is large enough that a per-row min/max would cost about
+	; as much as the whole clear saves.
 	; d7/a2/a3 are already on the stack and a5/a6 are finished with, so the
 	; call may clobber d0-d7 and a0-a4 freely.
 	tst.l	delta_clear_enabled
@@ -5124,11 +5112,7 @@ trex_tmd_data_end
 
 ; Big-endian host-side model representation used to build DSP input streams.
 trex_o3d_data
-	ifd	TREX_FULL_MESH
 	incbin	"TREX/model/trex.o3d"
-	else
-	incbin	"TREX/model/trex_lod.o3d"
-	endc
 trex_o3d_data_end
 
 	even
@@ -5138,11 +5122,7 @@ trex_o3d_data_end
 ; O3D by tools/o3d2facenormals.js, which is also where the winding convention
 ; is documented.
 trex_face_normal_data
-	ifd	TREX_FULL_MESH
 	incbin	"TREX/model/trex_facenormals.bin"
-	else
-	incbin	"TREX/model/trex_lod_facenormals.bin"
-	endc
 trex_face_normal_data_end
 
 	even
@@ -5151,25 +5131,17 @@ trex_face_normal_data_end
 ; The 136 untextured primitives are the eyes: 120 in the PS1's (255,230,110)
 ; and 16 in (35,30,0).
 trex_face_colour_data
-	ifd	TREX_FULL_MESH
 	incbin	"TREX/model/trex_facecolors.bin"
-	else
-	incbin	"TREX/model/trex_lod_facecolors.bin"
-	endc
 trex_face_colour_data_end
 
 	even
 
 ; Three big-endian TMD normal indices per polygon (Gouraud corner shading),
-; recovered offline by tools/tmd2cornernormals.js and inherited through the
-; LOD by o3dlod.js.  Packed into the triangle-index upload with the vertex
-; indices; the normals themselves go up straight from the TMD block.
+; recovered offline by tools/tmd2cornernormals.js.  Packed into the
+; triangle-index upload with the vertex indices; the normals themselves go up
+; straight from the TMD block.
 trex_corner_normal_data
-	ifd	TREX_FULL_MESH
 	incbin	"TREX/model/trex_cornernormals.bin"
-	else
-	incbin	"TREX/model/trex_lod_cornernormals.bin"
-	endc
 trex_corner_normal_data_end
 
 	even
@@ -5218,11 +5190,7 @@ trex_texture_page_30_end
 ; block's unpinned phase.  tools/o3d2opaque.js owns the proof and
 ; tools/opaque_selftest.py cross-checks recorded rasterizer drops.
 trex_opaque_triangle_data
-	ifd	TREX_FULL_MESH
 	incbin	"TREX/model/trex_opaque.bin"
-	else
-	incbin	"TREX/model/trex_lod_opaque.bin"
-	endc
 trex_opaque_triangle_data_end
 
 	even
@@ -5419,8 +5387,8 @@ raster_force_flat
 ; clear drops 14.6 -> 6.3 ms exactly as modelled, but delta_mark_packet still
 ; costs +14.7 ms of per-packet instruction fetch -- the walker sweeps far more
 ; than the 256-byte cache between two calls, so 3.9's loop work changed
-; nothing about THIS term -- for a net +6.2 ms on the LOD and +13.4 ms on the
-; full mesh.  The 2.5 verdict therefore stands.  A batched variant (spill
+	; nothing about THIS term -- for a net +13.4 ms on the full mesh. The 2.5
+	; verdict therefore stands. A batched variant (spill
 ; raster_xl/xr per packet, compute all hulls in one tight per-frame loop that
 ; stays cache-resident) is the open idea that could invert the sign.
 ; -DTREX_DELTA_ON (target trex_delta.tos) assembles the same dc.l sized 1,

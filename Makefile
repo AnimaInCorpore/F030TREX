@@ -2,7 +2,7 @@ DOSBOX=dosbox
 VASM=./tools/vasm/vasmm68k_mot
 VLINK=./tools/vlink/vlink
 
-.PHONY: all clean trex_m68030 trex_m68030_run trex_m68030_full trex_m68030_fullm trex_m68030_prepass trex_m68030_prepass_run trex_release trex_dsp create_dirs
+.PHONY: all clean trex_m68030 trex_m68030_run trex_m68030_prepass trex_m68030_prepass_run trex_release trex_dsp create_dirs
 
 all: create_dirs $(VASM) $(VLINK) ./TREX/m68030/TREX.TOS ./TREX/m68030/TREX.LOD
 
@@ -10,18 +10,11 @@ trex_m68030: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_m68030.tos ./TREX/m
 
 trex_m68030_run: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_run.tos ./TREX/m68030/trex_dsp.lod
 
-trex_m68030_full: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_full.tos ./TREX/m68030/trex_dsp.lod
-
-trex_m68030_fullm: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_fullm.tos ./TREX/m68030/trex_dsp.lod
-
-# Full-detail DSP occlusion-culling campaign binary.  Keep the complete
-# 2,724-triangle mesh explicit here: the stock DSP P/Y overlay is the binding
-# constraint this target validates, not the optional 1,600-triangle LOD.
+# DSP occlusion-culling campaign binary for the one supported full mesh.
 trex_m68030_prepass: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_prepass.tos ./TREX/m68030/trex_dsp.lod
 
-# Full-detail DSP occlusion-culling viewing binary.  TREX_RUN keeps the same
-# PREPASS/FULL_MESH code path and arm, but suppresses diagnostic GEMDOS writes
-# so the Hatari disk indicator is not hit once per frame.
+# DSP occlusion-culling viewing binary.  TREX_RUN suppresses diagnostic GEMDOS
+# writes so the Hatari disk indicator is not hit once per frame.
 trex_m68030_prepass_run: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_prepass_run.tos ./TREX/m68030/trex_dsp.lod
 
 trex_dsp: create_dirs ./TREX/dsp/trex_dsp.lod
@@ -62,36 +55,6 @@ $(VLINK): ./tools/vlink
 ./TREX/model/trex_cornernormals.bin: ./TREX/model/trex.o3d ./TREX/model/trex.tmd ./tools/tmd2cornernormals.js
 	node tools/tmd2cornernormals.js ./TREX/model/trex.o3d ./TREX/model/trex.tmd $@
 
-# Offline mesh LOD (see OPTIMIZATION.md section 10 item 10): half-edge
-# collapse onto existing vertices only, so the TMD vertex set and the TANM
-# animation stay byte-identical.  One tool run emits the decimated O3D, the
-# inherited face colours and the TREX_PRIMITIVES include the frontend
-# assembles in.  Override per build with make TREX_LOD_TRIANGLES=n (delete
-# TREX/model/trex_lod.o3d first -- the count is not a file dependency).
-TREX_LOD_TRIANGLES=1600
-
-# One node invocation writes all four files below.  They are listed together
-# as targets of the SAME rule (rather than one real target plus empty-recipe
-# secondaries) because GNU Make expands "targetA targetB: prereqs" into one
-# independent rule per target, each carrying its own copy of the recipe: if
-# any single one of the four goes missing while the others survive, asking
-# Make to rebuild it re-runs the real command instead of silently doing
-# nothing (verified -- an empty-recipe secondary target does not regenerate
-# when only it is missing, which is exactly how this rule used to be broken).
-# The one cost is that if two or more of the four are simultaneously stale,
-# the script may run more than once; it is deterministic and cheap enough
-# that this is wasted work, not wrong output. Do not build this target with
-# `make -j`: concurrent invocations would race on the same output files.
-./TREX/model/trex_lod.o3d ./TREX/model/trex_lod_facecolors.bin ./TREX/model/trex_lod_cornernormals.bin ./TREX/model/trex_lod.inc: ./TREX/model/trex.o3d ./TREX/model/trex_facecolors.bin ./TREX/model/trex_cornernormals.bin ./TREX/model/trex_animation.bin ./TREX/model/trex_animation.json ./tools/o3dlod.js
-	node tools/o3dlod.js ./TREX/model/trex.o3d ./TREX/model/trex_facecolors.bin \
-		./TREX/model/trex_cornernormals.bin \
-		./TREX/model/trex_animation.bin ./TREX/model/trex_animation.json \
-		$(TREX_LOD_TRIANGLES) ./TREX/model/trex_lod.o3d ./TREX/model/trex_lod_facecolors.bin \
-		./TREX/model/trex_lod_cornernormals.bin ./TREX/model/trex_lod.inc
-
-./TREX/model/trex_lod_facenormals.bin: ./TREX/model/trex_lod.o3d ./tools/o3d2facenormals.js
-	node tools/o3d2facenormals.js ./TREX/model/trex_lod.o3d $@
-
 TREX_TEXTURE_DEPS = ./TREX/textures/trex_texture_page_10.tim \
 	./TREX/textures/trex_texture_page_12.tim \
 	./TREX/textures/trex_texture_page_14.tim \
@@ -105,13 +68,8 @@ TREX_TEXTURE_DEPS = ./TREX/textures/trex_texture_page_10.tim \
 ./TREX/model/trex_opaque.bin: ./TREX/model/trex.o3d ./tools/o3d2opaque.js $(TREX_TEXTURE_DEPS)
 	node tools/o3d2opaque.js $< ./TREX/textures $@
 
-./TREX/model/trex_lod_opaque.bin: ./TREX/model/trex_lod.o3d ./tools/o3d2opaque.js $(TREX_TEXTURE_DEPS)
-	node tools/o3d2opaque.js $< ./TREX/textures $@
-
-TREX_MESH_DEPS = ./TREX/model/trex_lod.o3d ./TREX/model/trex_lod.inc \
-	./TREX/model/trex_lod_facenormals.bin ./TREX/model/trex_lod_facecolors.bin \
-	./TREX/model/trex_lod_opaque.bin ./TREX/model/trex.o3d \
-	./TREX/model/trex_facenormals.bin ./TREX/model/trex_facecolors.bin \
+TREX_MESH_DEPS = ./TREX/model/trex.o3d ./TREX/model/trex_facenormals.bin \
+	./TREX/model/trex_facecolors.bin ./TREX/model/trex_cornernormals.bin \
 	./TREX/model/trex_opaque.bin
 
 ./TREX/m68030/build/trex_m68030.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
@@ -131,34 +89,14 @@ TREX_MESH_DEPS = ./TREX/model/trex_lod.o3d ./TREX/model/trex_lod.inc \
 ./TREX/m68030/trex_run.tos: ./TREX/m68030/build/trex_run.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
-# Full-detail build: the original 2,724-triangle assets behind
-# -DTREX_FULL_MESH, combined with the no-write TREX_RUN flags -- for visual
-# comparison against the 1,600-triangle LOD mesh the renderer ships with.
-./TREX/m68030/build/trex_full.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) $< -quiet -Felf -m68030 -DTREX_RUN -DTREX_FULL_MESH -o $@ -L ./TREX/m68030/build/trex_full.lst
-
-./TREX/m68030/trex_full.tos: ./TREX/m68030/build/trex_full.o
-	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
-
-# Full mesh WITHOUT -DTREX_RUN, i.e. with the per-frame render_stats.res flush
-# still enabled.  trex_full.tos cannot be measured headlessly -- TREX_RUN zeroes
-# stats_flush_enabled, so a bounded run writes nothing until a keypress that
-# never comes -- and section 8.2's 3-FPS gate is defined on this mesh, so the
-# figure it is judged by needs a target of its own.
-./TREX/m68030/build/trex_fullm.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) $< -quiet -Felf -m68030 -DTREX_FULL_MESH -o $@ -L ./TREX/m68030/build/trex_fullm.lst
-
-./TREX/m68030/trex_fullm.tos: ./TREX/m68030/build/trex_fullm.o
-	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
-
 ./TREX/m68030/build/trex_prepass.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) $< -quiet -Felf -m68030 -DTREX_PREPASS -DTREX_FULL_MESH -o $@ -L ./TREX/m68030/build/trex_prepass.lst
+	$(VASM) $< -quiet -Felf -m68030 -DTREX_PREPASS -o $@ -L ./TREX/m68030/build/trex_prepass.lst
 
 ./TREX/m68030/trex_prepass.tos: ./TREX/m68030/build/trex_prepass.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 ./TREX/m68030/build/trex_prepass_run.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) $< -quiet -Felf -m68030 -DTREX_PREPASS -DTREX_FULL_MESH -DTREX_RUN -o $@ -L ./TREX/m68030/build/trex_prepass_run.lst
+	$(VASM) $< -quiet -Felf -m68030 -DTREX_PREPASS -DTREX_RUN -o $@ -L ./TREX/m68030/build/trex_prepass_run.lst
 
 ./TREX/m68030/trex_prepass_run.tos: ./TREX/m68030/build/trex_prepass_run.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
@@ -168,7 +106,7 @@ TREX_MESH_DEPS = ./TREX/model/trex_lod.o3d ./TREX/model/trex_lod.inc \
 # binary whose output is compared or dumped (trex_prepass*, the fb.res capture
 # path, the span validator) must stay without it.
 ./TREX/m68030/build/TREX.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) $< -quiet -Felf -m68030 -DTREX_RUN -DTREX_PREPASS -DTREX_FULL_MESH -DTREX_RELEASE -DTREX_FPS -o $@ -L ./TREX/m68030/build/TREX.lst
+	$(VASM) $< -quiet -Felf -m68030 -DTREX_RUN -DTREX_PREPASS -DTREX_RELEASE -DTREX_FPS -o $@ -L ./TREX/m68030/build/TREX.lst
 
 ./TREX/m68030/TREX.TOS: ./TREX/m68030/build/TREX.o ./TREX/m68030/TREX.LOD
 	$(VLINK) ./TREX/m68030/build/TREX.o -tos-fastload -b ataritos -s -e start -o $@
@@ -219,26 +157,14 @@ TREX_MESH_DEPS = ./TREX/model/trex_lod.o3d ./TREX/model/trex_lod.inc \
 # from that file by the build.
 clean:
 	rm -f ./TREX/model/trex_facenormals.bin
-	rm -f ./TREX/model/trex_lod.o3d
-	rm -f ./TREX/model/trex_lod.inc
-	rm -f ./TREX/model/trex_lod_facenormals.bin
-	rm -f ./TREX/model/trex_lod_facecolors.bin
 	rm -f ./TREX/model/trex_cornernormals.bin
-	rm -f ./TREX/model/trex_lod_cornernormals.bin
 	rm -f ./TREX/model/trex_opaque.bin
-	rm -f ./TREX/model/trex_lod_opaque.bin
 	rm -f ./TREX/m68030/trex_m68030.tos
 	rm -f ./TREX/m68030/build/trex_m68030.o
 	rm -f ./TREX/m68030/build/trex_m68030.lst
 	rm -f ./TREX/m68030/trex_run.tos
 	rm -f ./TREX/m68030/build/trex_run.o
 	rm -f ./TREX/m68030/build/trex_run.lst
-	rm -f ./TREX/m68030/trex_full.tos
-	rm -f ./TREX/m68030/build/trex_full.o
-	rm -f ./TREX/m68030/build/trex_full.lst
-	rm -f ./TREX/m68030/trex_fullm.tos
-	rm -f ./TREX/m68030/build/trex_fullm.o
-	rm -f ./TREX/m68030/build/trex_fullm.lst
 	rm -f ./TREX/m68030/trex_prepass.tos
 	rm -f ./TREX/m68030/build/trex_prepass.o
 	rm -f ./TREX/m68030/build/trex_prepass.lst

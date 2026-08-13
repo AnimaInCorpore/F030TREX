@@ -78,22 +78,22 @@ in [`TREX/m68030/trex_m68030.s`](TREX/m68030/trex_m68030.s).
 
 ## 2. Current measured baseline
 
-The current measurement is the first 264 frames (0-263) of the extracted
-274-frame automatic sequence, run in Hatari with the corrected TMD byte order,
-negative-area front-face rule, the 240x224 render target and its
-`focal_x=746`/`focal_y=933` projection (section 1),
-an Ordering Table that no longer saturates at the opening distance, the source
-light model with its per-face colour class (section 4.4), the span-start
-sub-pixel prestep, the shade floor that keeps a lit texel from being stored
-as pure black, and the jaw driven by the source vocalisation envelope
-(morph target 4). It is decoded by
-[`tools/decode_render_stats.py`](tools/decode_render_stats.py).  The run used a
-high VBL bound and was interrupted immediately after `render_stats.res`
-reported 264 completed frames; that file is flushed after every frame.  A
-fixed VBL bound can complete a different frame count after a performance
-change, so the reported prefix, not the bound, is the comparison authority.
-The measurement and post-fix checks used isolated temporary GEMDOS mounts so
-another Hatari instance could not overwrite their result files.
+The deprecated reduced-mesh LOD, its generator and its generated assets were
+removed in the full-mesh-only revision. The maintained frontend now always
+embeds the original 2,724-triangle O3D and its full sidecars; there is no mesh
+selection define or build target. References to LOD measurements later in this
+file are retained only as labelled historical results and must not be read as
+current build or release options.
+
+No new performance result is claimed for removing that selection code. The
+last reproducible full-mesh diagnostic measurement is the first 265 frames of
+the extracted 274-frame automatic sequence, run in Hatari with the corrected
+TMD byte order, negative-area front-face rule, the 240x224 render target and
+its `focal_x=746`/`focal_y=933` projection, the source light model, span-start
+sub-pixel prestep, shade floor and jaw vocalisation envelope. It is the former
+`trex_m68030_fullm` configuration; after this revision, `make trex_m68030`
+builds the same full-mesh diagnostic configuration. The release adds its
+prepass/FPS options, so this table is not a release timing claim.
 
 These are emulator timings, not a cycle-accurate benchmark and not a
 measurement on physical Falcon030 hardware. **Section 2.4a is the bound on how
@@ -105,34 +105,26 @@ Falcon.
 
 | Stage | Time per frame | Share of frame |
 |---|---:|---:|
-| DSP animation send (next frame's pose input) | 12.8 ms | 4.0% |
-| DSP triangle setup/readback, corner lighting, packet build | 109.8 ms | 34.3% |
-| Framebuffer clear (overlapping chunk-0 compute) | 14.6 ms | 4.6% |
-| Ordering Table insertion | 1.7 ms | 0.5% |
-| Software span rasterizer, Gouraud span level | 180.7 ms | 56.5% |
-| Present: Videl page flip | 0.0 ms | 0.0% |
-| Unaccounted timer rounding | 0.2 ms | 0.1% |
-| **Total** | **319.8 ms** | **100.0%** |
+| DSP triangle setup/readback and packet build | 185.7 ms | 40.4% |
+| Raster row/span walk | 113.4 ms | 24.7% |
+| Raster per-packet setup | 68.3 ms | 14.8% |
+| Raster pixel loops | 62.2 ms | 13.5% |
+| Set-frame send, clear, OT and rounding | 30.4 ms | 6.6% |
+| **Total** | **460.0 ms / 2.17 FPS** | **100.0%** |
 
-The measured rate is **3.13 FPS with Gouraud shading**, at 33,173 written
-pixels per frame and 644 packets in frame 263.
+The frame-100 framebuffer checkpoint was byte-identical to the recorded
+full-mesh hash `d89958b3…3d16`. This is an emulator result, not a physical
+Falcon030 timing. The former LOD shipping result, 319.8 ms / 3.13 FPS, is
+historical and no longer describes a buildable configuration.
 
-That table is the shipping tree after section 3.9's instruction-cache series.
-The build it replaces measured **517.3 ms / 1.93 FPS** over the identical
-prefix with a 376.8 ms rasterizer, and the difference is entirely instruction
-and operand fetch that the 68030's 256-byte instruction cache was thrashing:
-no arithmetic changed, the frame-100 dump is byte-identical, and the pixel and
-packet counters are equal to the last pixel. The full 2,724-triangle mesh
-moved the same way, **763.8 to 488.8 ms, 1.31 to 2.05 FPS**, which is what
-section 8.2's stock 3-FPS gate is now measured against.
+The full 2,724-triangle mesh moved from **763.8 to 488.8 ms** in section 3.9's
+instruction-cache series (1.31 to 2.05 FPS) at byte-identical output. Section
+8.2a then recorded the 460.0 ms diagnostic baseline above after 3.9b/3.9c.
 
-The 475.2 ms figure this table replaces was measured before the qualified
-opaque path of section 3.8 landed; re-measured on the shipping tree the same
-source is the 517.3 ms above. Section 3.8's own one-byte A/B is the authority
-on what the opaque path itself is worth (-8.1 ms on the LOD gate prefix,
--27.8 ms on the full mesh); the 42.1 ms between the two absolute numbers is
-the layout epoch this section keeps warning about, and section 3.9 is what it
-turned out to be made of.
+The following 475.2/517.3 ms discussion is retained as the historical
+reduced-mesh measurement timeline, not as a current baseline. Section 3.8's
+full-mesh one-byte A/B remains the authority on the opaque path's measured
+-27.8 ms effect; the retired LOD gate is no longer a supported comparison.
 
 Two changes separate this table from the 528.5 ms one it replaces, and only
 the second is in this document's usual sense an optimization:
@@ -204,31 +196,11 @@ gate prefix completely and 17 ms of the full prefix (roadmap item 16 --
 its suspect is CONFIRMED), the texture pages' phase is the measured-open
 remainder.  The flat path stays selectable (gouraud_enabled=0: 520.4 ms /
 1.92 FPS, same binary).  The previous epochs remain below for
-comparability; the full-mesh figures predate Gouraud.  This build is on the
-1,600-triangle LOD.  This mesh is the second visually gated revision: the
-first 1,050-triangle LOD (354.8 ms / 2.82 FPS, everything else identical)
-lost upper teeth, eye-socket shape and the claws to review; the feature
-locks that restored them then strip-mined the tail and legs, which the
-absorption brake closes again -- the side-profile preview is that gate.
-1,500 was the minimum that held the tail; 1,600 costs 3.9 ms more and
-lifts frame-100 coverage from 93.9% to 96.4%, so it is the default.  It
-writes 75,348 pixels per frame, 97.5% of the full mesh's 77,301, and the
-FPS distance to the 1,050 mesh is the accumulated price of the named
-features.  Everything runs with
-cross-frame pipelining stage 1 active (roadmap item 12): the next frame's
-animation is sent before rasterization and its FINISH ack is collected at
-the start of the next slot, so the DSP's 1,376-vertex morph/transform/
-projection runs inside the rasterization window.  The animation stage now
-measures only its send PIO — before the pipelining it was 21.5 ms and the
-frame 362.8 ms / 2.76 FPS at the identical image.  Roadmap item 10
-documents the decimation tool, its locks and the visual gates.  The full
-2,724-triangle build, selected with `-DTREX_FULL_MESH`, measured
-**601.6 ms / 1.66 FPS** over the identical prefix with stages
-21.9 / 114.4 / 17.8 / 2.2 / 445.0 ms.  The feature-gated mesh writes
-103.5% of the full mesh's sequence pixels (overdraw, not fidelity) at
-89.6% frame-100 coverage; its acceptance record is the zoomed teeth, eye
-and claw comparisons against the full render, not a pixel count.  Unlike
-every other optimization in this document, the LOD changes the image.  The present
+comparability; the full-mesh figures predate Gouraud. The detailed
+reduced-mesh experiment has been removed from the repository and is no longer
+a supported configuration. The contemporary full 2,724-triangle build
+measured **601.6 ms / 1.66 FPS** over the identical prefix with stages
+21.9 / 114.4 / 17.8 / 2.2 / 445.0 ms. The present
 stage reads 0.0 ms because there is nothing left to time: the renderer draws
 into the screen buffer that is not on display and the frame ends by writing
 three Videl base registers (section 6.5). The rasterizer
@@ -890,7 +862,7 @@ The reproducible build checks performed for this implementation are:
 | Full-mesh P extent | last instruction `P:$09BA`; `$09BB-$09BF` remain free |
 | Full-mesh X extent | `prepass_status` ends at `X:$3FFE` |
 | Resident Y extent | indices begin at `Y:$09C0`; normals end at `Y:$3FFE` |
-| Host full-mesh build | `make trex_m68030_fullm` passes |
+| Host full-mesh build | `make trex_m68030` passes |
 | Host prepass build | `make trex_m68030_prepass` passes |
 
 The first runtime pass exposed and fixed a correctness bug in the kill writer:
@@ -1080,9 +1052,9 @@ diagnostic builds too.
 ### 2.3g Full-mesh release package — implemented
 
 For visual playback without per-frame host-disk traffic, build the release
-target `trex_release`. It emits `TREX.TOS`, retaining `TREX_PREPASS`,
-`TREX_FULL_MESH` and the rewritten armed culling path from 2.3f while defining
-`TREX_RUN`: framebuffer/stat diagnostics and the final diagnostic flush are
+target `trex_release`. It emits `TREX.TOS`, retaining `TREX_PREPASS` and the
+rewritten armed culling path from 2.3f while defining `TREX_RUN`:
+framebuffer/stat diagnostics and the final diagnostic flush are
 disabled. The matching `TREX.LOD` is still read once at startup, so the
 mounted GEMDOS volume remains necessary.
 
@@ -1735,12 +1707,10 @@ without changing the DSP wire record or the potentially-transparent path:
   more than the old floating-point `M_uv` test.  The dilation is tied to the
   current 240x224 Q8.8 walker: a target, precision or sampling change requires
   regeneration and the recorded gate below.
-- The generated sidecars are one byte per source triangle:
-  `trex_lod_opaque.bin` is 1,600 bytes and qualifies **1,385/1,464 textured
-  triangles (94.60%)**; `trex_opaque.bin` is 2,724 bytes and qualifies
-  **2,491/2,588 (96.25%)**.  The 136 flat triangles remain on the flat path.
-  Page 10 contributes 396/475 and 671/768 respectively; every textured
-  triangle on pages 12/14/26/28/30 qualifies.
+- The generated full-mesh sidecar is one byte per source triangle:
+  `trex_opaque.bin` is 2,724 bytes and qualifies **2,491/2,588 (96.25%)**.
+  The 136 flat triangles remain on the flat path. Page 10 contributes
+  671/768; every textured triangle on pages 12/14/26/28/30 qualifies.
 - The packet builder already owns the source-triangle identity.  It maps a
   qualified normal textured triangle to spare host command bit 23
   (`OPAQUE_PACKET_BIT`) and explicitly clears the interpretation for flat or
@@ -1756,8 +1726,8 @@ without changing the DSP wire record or the potentially-transparent path:
   framebuffer store saves ST-RAM transfers.
 
 The soundness gate is executable, not inferred from the triangle count.
-[`tools/opaque_selftest.py`](tools/opaque_selftest.py) regenerates both tables
-byte-for-byte and, when given OCCL dumps from a baseline binary (opaque hint
+[`tools/opaque_selftest.py`](tools/opaque_selftest.py) regenerates the
+full-mesh table byte-for-byte and, when given OCCL dumps from a baseline binary (opaque hint
 disabled so bit-17 rejects remain observable), rejects any qualified packet
 with one invalid sample.  Across every available recorded frame for both
 assets it found no false positive:
@@ -3653,9 +3623,9 @@ Revised verdict:
   gated on SSI/DMA.**  155.5 ms is a host-side optimization target of the
   size section 3.9 just met twice over; it was a transport-architecture
   problem when the gap was 430.4 ms.
-- **3 FPS on the shipping 1,600-triangle LOD: reached.**  319.8 ms /
-  3.13 FPS over the same prefix, at byte-identical output (section 3.9).
-  This is the build the renderer ships and the one `make run_trex` starts.
+- **The former 1,600-triangle LOD reached 3 FPS, but it is removed.** Its
+  319.8 ms / 3.13 FPS result remains a historical data point only; the
+  supported build is the full mesh and has no 3-FPS emulator result.
 - **U/V-only SSI: insufficient** even under its best arithmetic bound, and
   now by a wider margin, since the row walk it targets is 112.6 ms.
 - **Five FPS is deferred.**  No optimization may spend the margin needed to
@@ -3671,11 +3641,11 @@ instruction cache is 256 bytes and direct-mapped on the real chip too.
 
 #### 8.2a The gate re-measured after 3.9b/3.9c, and what is actually left
 
-The full mesh could not be measured headlessly at all until now: `trex_full.tos`
-carries `-DTREX_RUN`, which zeroes `stats_flush_enabled`, so a bounded run
-writes no `render_stats.res` and the mesh this gate is defined on had no target
-that could produce its own figure.  `make trex_m68030_fullm` is that target --
-same assets, without `TREX_RUN`.
+The full mesh could not be measured headlessly until the former
+`trex_m68030_fullm` diagnostic target was added: `trex_full.tos` carried
+`-DTREX_RUN`, which zeroed `stats_flush_enabled`, so a bounded run wrote no
+`render_stats.res`. After the LOD removal, the standard `make trex_m68030`
+target is the equivalent full-mesh diagnostic build, without `TREX_RUN`.
 
 Measured over 265 frames, frame-100 `fb.res` reproducing the recorded full-mesh
 checkpoint `d89958b3…3d16`, with the section 3.5 profile patches re-taken on
@@ -3730,8 +3700,7 @@ FPS**.  **Three FPS on the full mesh therefore does not follow from any
 optimization currently identified**, and the residual ~60 ms has no mechanism
 short of moving the record stream off host-port PIO entirely (item 15), which
 Hatari cannot validate and which section 7.4 shows is not a small piece of
-work.  The LOD reaches three FPS and the full mesh does not; that gap is now
-quantified rather than asserted.
+work. The retired LOD's 3-FPS result is not a supported-performance claim.
 
 ### Why this must be prototyped on hardware first
 
@@ -3920,71 +3889,10 @@ The open roadmap, in recommended order (expected effects from the section
 9. Replace the present copy with a Videl page flip. **Done** — see section
    6.5.  The full 30.3 ms was realised and nothing else moved: 820.2 to
    784.9 ms over the 0-263 prefix at a byte-identical image.
-10. Offline mesh LOD. **Done** — 1,050 triangles by
-   [`tools/o3dlod.js`](tools/o3dlod.js), measured over the identical 0-263
-   prefix against the full mesh on the same binary revision:
-
-   | Stage | Full 2,724 | LOD 1,050 | Delta |
-   |---|---:|---:|---:|
-   | DSP set_frame (animation) | 21.9 ms | 21.5 ms | -0.4 ms |
-   | DSP readback + packet build | 114.4 ms | 45.9 ms | **-68.5 ms** |
-   | Clear + OT + present | 20.3 ms | 19.1 ms | -1.2 ms |
-   | Software span rasterizer | 445.0 ms | 276.3 ms | **-168.7 ms** |
-   | **Total** | **601.6 ms** | **362.8 ms** | **-238.8 ms (-39.7%)** |
-
-   That is **1.66 to 2.76 FPS, +66%** — above the old +18..48% bracket
-   because that model assumed unchanged coverage: the decimated mesh writes
-   8.8% fewer pixels (91.2%), links 437 instead of 1,078 packets with
-   correspondingly less painter's overdraw, and the animation stage is
-   untouched because the vertex set is.
-
-   The decimation is a half-edge collapse onto EXISTING vertices only, so
-   the TMD and the TANM morph stream stay byte-identical.  Cost is
-   area-weighted quadric error with boundary-constraint planes, curvature
-   saliency and a morph premium from the TANM sparse deltas; winding flips
-   are rejected outright (the negative-area cull rule depends on winding).
-   What the visual gate forced, in order: curvature saliency alone left the
-   teeth collapsing (their quadrics are tiny), a UV-drift bound of 40 texels
-   on same-page UV donors keeps foreign texture off retargeted corners, and
-   the teeth and lip line only survived a **hard lock of the 204 vertices
-   with nonzero target-4/5 deltas** — the mouth is the scene's animated
-   centrepiece and a cost premium was not enough.  With the mouth locked,
-   800 triangles starved the body (83.8% frame-100 coverage, torn shoulder
-   silhouette); 1,050 holds 94.7% there and 95.7% on the distant frame 0.
-
-   Visual review of the 1,050 mesh then called out three named features --
-   missing UPPER teeth, deformed eye sockets, vanished claws -- and the
-   second locking generation answers each with data-derived regions, no
-   axis or coordinate guesses: the mouth lock dilates one triangle-adjacency
-   ring (upper teeth ride the skull, carry no jaw delta, but border the
-   locked lip line); a head sphere fitted to the target-4/5/7 morph
-   vertices' centroid and RMS spread applies a 6x cost premium that keeps
-   eye sockets and brow dense; saliency >= 0.55 marks free-standing tips
-   (the 24 outside the mouth are the claws) which lock outright, with
-   adjacency rings gated on saliency >= 0.22 so the lock follows the curved
-   digit shafts without flooding flat surroundings — the ungated dilation
-   locked 460 vertices and stranded the tool at 1,832 triangles, the gated
-   one needs 190; and a log-scaled artist-detail premium weights each
-   vertex by its smallest original triangle against the median.
-
-   The locks in turn left the tail and legs as the only cheap regions and
-   the greedy loop strip-mined them -- the tail collapsed to a stump with
-   its spike-locked tip floating detached.  Two answers close that: an
-   absorption brake (every collapse a vertex swallows makes its next one
-   0.5 more expensive, inherited transitively), and the side-profile
-   preview as an explicit silhouette gate -- at 1,400 the tail still tore
-   mid-length, at 1,500 it holds to the tip.  The default is 1,600: it
-   measures **428.1 ms / 2.34 FPS**, only 3.9 ms behind 1,500 while
-   lifting frame-100 coverage from 93.9% to 96.4%.  Against the 1,050
-   mesh's 354.8 ms / 2.82 FPS on the same binary revision that is the
-   accumulated price of teeth, eye sockets, claws, tail and legs — still
-   41% above the full mesh's 1.66 FPS.
-   `TREX_LOD_TRIANGLES` in the Makefile is the dial, the generated
-   `trex_lod.inc` keeps the frontend consistent with whatever count the
-   constraints actually reach, and a target equal to the input count
-   reproduces the O3D byte-identically (the tool's self-test).  Known
-   cosmetic deviation: one brighter belly patch from an inherited UV at
-   drift range, visible mainly in the distant shots.
+10. Offline mesh LOD. **Removed.** The decimation tool, generated mesh and
+    sidecars, selection include, build option and alternate binaries were
+    removed when the reduced mesh was deprecated. The original 2,724-triangle
+    O3D is now the only supported geometry.
 11. Reprofile and optimize the span rasterizer. **First pass done** -- see
    section 3.6: span-accumulated counters, word-mask texel addressing with
    scaled indexing, the one-muls prestep and register DDA state removed
