@@ -1081,9 +1081,10 @@ above; no separate presentation-mode variants are part of the release.
 2.3c recovered 166 words from jump encoding, 2.3d counted the parallel-move
 reserve, and the light-cache revision (4.4c) has since harvested the densest
 block of those pairing sites. This section is the same audit run a third
-time, over the current source at `P:$098C` with 51 words free. It is an
+time, over the source as it stood at `P:$098C` with 51 words free. It is an
 audit, not a result: word counts are read from the source, millisecond
-figures are cost models under 2.4a's caveats, and nothing in it is built.
+figures are cost models under 2.4a's caveats, and except where an item is
+marked implemented, nothing in it is built.
 
 What DSP speed would even buy has to be bounded first, because it is not
 frame rate. The FINISH window hides the armed prepass -- 75.6 ms/frame
@@ -1098,16 +1099,22 @@ buy item 19's next stage. Neither buys FPS directly.
 The sites, in recommended order. Bracketed figures are static estimates of
 the program-size change in words (negative frees words):
 
-1. **Corner-normal rotation X staging** [-20]. `make_triangle_shade` still
-   stages each corner normal into `y:shade_nx..nz`, and with the matrix
-   also Y-resident every MAC needs a standalone matrix load. Retargeting
-   the bank-split loader to three X cells directly above the 4.4c cache --
-   the same dead order-list tail, written only during BUILD, after the
-   sweep has consumed those entries -- lets every MAC pair its normal and
-   matrix loads in one XY move, and the three row blocks collapse into one
-   `DO #3` over the consecutive `shade_cx..cz`. Roughly a third of the
-   rotation's instruction stream per corner, three corners per survivor;
-   this is the completion of 4.4c's own idiom.
+1. **Corner-normal rotation staging -- implemented, register-resident.**
+   The audit planned three X staging cells beside the 4.4c cache so the
+   MACs could pair X normal loads with Y matrix loads [-20]. Built, the
+   staging turned out to be unnecessary: the bank-split loader drops the
+   corner normal straight into x1/y1/x0 -- x1*y0, y1*y0 and x0*y0 are all
+   legal multiplier pairings, and the rotation writes only A and Y0, so
+   the three components survive it in registers -- and the three unrolled
+   row blocks collapse into one `DO #3` streaming the matrix through Y0
+   into the consecutive `shade_cx..cz`. The retired `shade_nx..nz` cells
+   became alignment padding, so `tri_x0`'s multiple-of-eight anchor is
+   untouched, and no lifetime constraint lands on the order-list tail.
+   Result: **41 words freed** -- assembled extent `P:$098C` to `P:$0963`,
+   92 words now free to the `$09BF` ceiling -- at DOSBox assembly 0
+   errors/0 warnings, and the 4,000-VBL Hatari run reproduces the
+   recorded frame-100 full-mesh `fb.res` checkpoint `d89958b3…3d16`
+   byte-identically. The cycle effect is unmeasured (2.4a).
 2. **O(1) kill-bit addressing** [~0]. `prepass_kill_address` divides by 24
    with repeated subtraction: up to ~113 iterations at the highest triangle
    indices, paid per killed triangle inside 2.3f's 75.6 ms (the sweep's
@@ -1156,9 +1163,10 @@ the program-size change in words (negative frees words):
    pairs, harvested site by site under the same source-read-at-start hazard
    2.3d and defect 4 of 2.3f document.
 
-Together that is on the order of 120-180 words against the 51 free today,
-which moves the P ceiling from binding to comfortable for item 19's yield
-work before any of the speed value is counted.
+Together that is on the order of 120-180 words against the 51 free at the
+time of the audit -- site 1 has since delivered 41 of them, putting the
+free window at 92 -- which moves the P ceiling from binding to comfortable
+for item 19's yield work before any of the speed value is counted.
 
 Three families are explicitly excluded because they change results, not
 schedules:
@@ -4246,7 +4254,7 @@ The open roadmap, in recommended order (expected effects from the section
     Mode 1 runs in the existing FINISH window and stays armed through both the
     274 authored records and the frontend's continuing gait/turn hold. Modes 2
     and 3 remain fixed two-word run-now commands for measurement. The current
-    full-mesh program ends at `P:$098C`, leaving `$098D-$09BF` free before the
+    full-mesh program ends at `P:$0963`, leaving `$0964-$09BF` free before the
     resident indices at `Y:$09C0`; the X overlay ends exactly at `X:$3FFF`, and
     resident Y data ends at `Y:$3FFE`. No LOD-only relocation or alternate
     hardware map is used.
@@ -4294,11 +4302,13 @@ The open roadmap, in recommended order (expected effects from the section
     frames ago (Cho Ren Sha's `swap_sprite_infos` exists for exactly this); and
     a missed pixel leaves a ghost from two frames back, which is a silent
     visual defect, so `fb.res` byte identity is the mandatory gate.
-21. Harvest the DSP instruction-stream reserve. **Audited, unbuilt** -- see
-    section 2.3h: roughly 120-180 recoverable program words against the 51
-    free, plus three cycle sites with a measured anchor -- the corner-normal
-    X staging that completes 4.4c's pairing idiom, the O(1) kill-bit
-    addressing and the pass-2 classify cache, the latter two attacking the
+21. Harvest the DSP instruction-stream reserve. **Audited; site 1
+    implemented** -- see section 2.3h: roughly 120-180 recoverable program
+    words, of which site 1 (the corner-normal rotation, built
+    register-resident rather than X-staged) has delivered 41 at a
+    byte-identical frame-100 gate, leaving 92 free to the ceiling.  Still
+    open are the O(1) kill-bit addressing and the pass-2 classify cache,
+    the two cycle sites attacking the
     75.6 ms freestanding prepass cost 2.3f recorded.  That cost is hidden by
     the FINISH window today, and every rasterizer improvement narrows that
     window, so the return is program words and margin for item 19's yield

@@ -1420,7 +1420,9 @@ shade_depth_diff_clamped
 	do	#3,shade_corner_loop
 	; Bank-split load of this corner's normal: index below NORMAL_Y_COUNT
 	; reads the Y block behind the triangle indices, at or above it the X
-	; block that displaced the UV pairs.
+	; block that displaced the UV pairs.  The three components load
+	; straight into x1/y1/x0 and stay there through the whole rotation
+	; below, which writes only A and Y0 -- no staging cells, no reloads.
 	move	y:(r5)+,a
 	move	#>NORMAL_Y_COUNT,x0
 	cmp	x0,a
@@ -1433,11 +1435,8 @@ shade_depth_diff_clamped
 	move	a1,r0
 	nop
 	move	y:(r0)+,x1
-	move	x1,y:shade_nx
-	move	y:(r0)+,x1
-	move	x1,y:shade_ny
-	move	y:(r0),x1
-	move	x1,y:shade_nz
+	move	y:(r0)+,y1
+	move	y:(r0),x0
 	jmp	<shade_corner_loaded
 shade_corner_x_bank
 	sub	x0,a
@@ -1449,46 +1448,25 @@ shade_corner_x_bank
 	move	a1,r0
 	nop
 	move	x:(r0)+,x1
-	move	x1,y:shade_nx
-	move	x:(r0)+,x1
-	move	x1,y:shade_ny
-	move	x:(r0),x1
-	move	x1,y:shade_nz
+	move	x:(r0)+,y1
+	move	x:(r0),x0
 shade_corner_loaded
+	; Camera-space normal, one matrix row per pass into the consecutive
+	; shade_cx..shade_cz cells.  x1*y0, y1*y0 and x0*y0 are all legal
+	; multiplier pairings, so each row streams the matrix through Y0 and
+	; needs no other memory operand at all.  R0 is dead between the normal
+	; fetch above and the Lambert loops' own re-point below, so it carries
+	; the row cursor.
 	move	#frame_matrix,r4
-
-	; Camera-space normal, one matrix row at a time.  The normal lives in Y
-	; memory next to the matrix, so the operands are loaded separately
-	; instead of through the X/Y parallel moves transform_vertices uses.
-	move	y:shade_nx,x0
+	move	#shade_cx,r0
+	do	#3,shade_rotate_row
 	move	y:(r4)+,y0
-	mpy	x0,y0,a	y:shade_ny,x0
-	move	y:(r4)+,y0
-	mac	x0,y0,a	y:shade_nz,x0
-	move	y:(r4)+,y0
+	mpy	x1,y0,a	y:(r4)+,y0
+	mac	y1,y0,a	y:(r4)+,y0
 	mac	x0,y0,a
 	rnd	a
-	move	a1,y:shade_cx
-
-	move	y:shade_nx,x0
-	move	y:(r4)+,y0
-	mpy	x0,y0,a	y:shade_ny,x0
-	move	y:(r4)+,y0
-	mac	x0,y0,a	y:shade_nz,x0
-	move	y:(r4)+,y0
-	mac	x0,y0,a
-	rnd	a
-	move	a1,y:shade_cy
-
-	move	y:shade_nx,x0
-	move	y:(r4)+,y0
-	mpy	x0,y0,a	y:shade_ny,x0
-	move	y:(r4)+,y0
-	mac	x0,y0,a	y:shade_nz,x0
-	move	y:(r4)+,y0
-	mac	x0,y0,a
-	rnd	a
-	move	a1,y:shade_cz
+	move	a1,y:(r0)+
+shade_rotate_row
 
 	; Lambert sum over the three source lights.  Each contributes its own
 	; clamped cosine: a face turned away from one light simply gets nothing
@@ -3294,23 +3272,18 @@ triangle_shade
 	ds	1
 triangle_out_count
 	ds	1
-shade_nx
-	ds	1
-shade_ny
-	ds	1
-shade_nz
-	ds	1
 shade_cx
 	ds	1
 shade_cy
 	ds	1
 shade_cz
 	ds	1
-; One pad word so tri_x0 sits at a multiple of eight: prepass_stamp walks the
-; six projected-corner scalars below through R3 under a modulo-6 M3, and the
-; DSP's modulo addressing requires the block's base aligned to the next power
-; of two.
-	ds	1
+; Four pad words so tri_x0 sits at a multiple of eight: prepass_stamp walks
+; the six projected-corner scalars below through R3 under a modulo-6 M3, and
+; the DSP's modulo addressing requires the block's base aligned to the next
+; power of two.  Three of the four are the retired shade_nx..shade_nz staging
+; cells; the corner normal is register-resident through the rotation now.
+	ds	4
 tri_x0
 	ds	1
 tri_y0
@@ -3513,7 +3486,7 @@ prepass_tp_save
 ; the index upload and reports garbage, which cost this stage one full round
 ; of contradictory measurements once.
 ;
-; The current full-mesh program ends at P:$098C, leaving P:$098D-$09BF free
+; The current full-mesh program ends at P:$0963, leaving P:$0964-$09BF free
 ; before the resident indices.  Keep the "<" prefix on jumps and the short
 ; Y-scalar forms on any code added later, or the program will overwrite the
 ; first triangle indices without an assembler error.
@@ -3524,14 +3497,15 @@ prepass_tp_save
 ; silent -- keep it on new references to those cells, and note the range is
 ; addresses 0..63 only.
 ;
-; Four later movements: the eleven-bit vertex masking the occluder
+; Five later movements: the eleven-bit vertex masking the occluder
 ; qualification bit needs cost four words, retiring command_get_vertices for
-; the occlusion stage returned eighteen, and folding twenty-seven standalone
+; the occlusion stage returned eighteen, folding twenty-seven standalone
 ; memory loads into the ALU operation in front of them returned twenty-seven
-; more, and forcing absolute-short data addressing returned 103 -- see
-; OPTIMIZATION.md 2.3d.  A parallel move reads its source at the
-; start of the instruction, so only loads whose source the ALU op does not
-; write may be folded, and a rep/do target must stay one word.
+; more, forcing absolute-short data addressing returned 103 (OPTIMIZATION.md
+; 2.3d), and keeping the corner normal register-resident through the shading
+; rotation returned 41 more (2.3h site 1).  A parallel move reads its source
+; at the start of the instruction, so only loads whose source the ALU op does
+; not write may be folded, and a rep/do target must stay one word.
 ; -----------------------------------------------------------------------------
 
 	org	y:$09c0
