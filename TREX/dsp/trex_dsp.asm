@@ -2402,20 +2402,20 @@ prepass_run
 	nop
 	rep	#PREPASS_CNT_COUNT
 	move	a1,y:(r0)+
-	move	#prepass_kill,r0
-	nop
-	rep	#PREPASS_KILL_WORDS
-	move	a1,x:(r0)+
+	jsr	<prepass_clear_kill
 
 	; -------------------------------------------------------------------
 	; Phase 0/1 -- two-pass counting sort into depth classes.  The first
-	; classification pass only counts survivors per class; an exclusive
+	; classification pass counts survivors per class and caches each
+	; survivor as one bit in the still-unused kill bitmap; an exclusive
 	; prefix over the 64 counters turns them into write cursors, and the
-	; second pass runs the identical classification again, scattering each
-	; survivor directly to its class cursor.  Classifying twice costs one
-	; more sweep of geometry arithmetic; what it buys is the second list
-	; the radix sort ping-ponged through, and that list is the difference
-	; between 723 entries and the ~1,150 the full mesh actually needs.
+	; second pass scatters straight from that cache -- the bit answers
+	; area+bbox outright, so pass 2 re-runs only the index unpack and the
+	; key for survivors.  What two passes buy is the second list the radix
+	; sort ping-ponged through: the difference between 723 entries and the
+	; ~1,150 the full mesh actually needs.  The cache also makes the two
+	; survivor sets equal by construction rather than by bit-identical
+	; re-derivation, so the scatter can never disagree with the counts.
 	; -------------------------------------------------------------------
 	clr	a
 	move	a1,y:<prepass_occl_mode
@@ -2434,6 +2434,10 @@ prepass_run
 	move	#>$ffffff,a
 	move	a1,y:prepass_surv
 	move	x0,y:prepass_flow
+	; Pass 1 filled the bitmap with the survivor cache.  BUILD must never
+	; read survivor bits as kills, so the overflow exit clears them and
+	; leaves the frame unculled exactly as before.
+	jsr	<prepass_clear_kill
 	jmp	<prepass_restore
 prepass_capacity_ok
 
@@ -2452,6 +2456,10 @@ prepass_prefix_end
 	move	a1,y:<prepass_occl_mode
 	jsr	<prepass_classify
 
+	; The cache is spent; the sweep and BUILD need the bitmap empty before
+	; the first real kill lands in it.
+	jsr	<prepass_clear_kill
+
 	; The list ascends in depth class, which is near to far: class 0 is
 	; the closest.  The host walks its Ordering Table from 2047 downwards
 	; and therefore draws this list back to front, as painter's algorithm
@@ -2466,26 +2474,55 @@ prepass_restore
 	move	a1,y:<triangles_processed
 	rts
 
-; One full classification pass over the resident index list.  The mode cell
-; selects the survivor action: 0 counts into the class counters, 1 writes the
-; packed entry at the class cursor.  Everything else -- the survivor tests,
-; the bucket rule, the class shift -- is bit-identical between the passes,
-; which is what entitles pass 2 to trust pass 1's counts.
+; One classification pass over the resident index list.  The mode cell
+; selects the pass: 0 runs the full survivor test, counts into the class
+; counters and sets the survivor's bit in the still-unused kill bitmap; 1
+; walks those cached bits and scatters the packed entry at the class cursor,
+; re-running only the index unpack and the key -- the bit already answers
+; area+bbox.  The bucket rule and the class shift are one shared code path,
+; and both passes see the same survivor set by construction, which is what
+; entitles pass 2 to trust pass 1's counts.
 ;
 ; R3 carries the triangle index instead of a Y cell.  Every absolute Y access
 ; on this DSP is a two-word instruction, and the index is touched on all
 ; three exits of the loop body, so an address register that survives the
-; three JSRs is worth six program words here.
+; three JSRs is worth six program words here.  R4 and the short cell
+; prepass_cls_bit carry the cache's streaming word/bit cursor the same way;
+; nothing the loop calls touches R4.
 prepass_classify
 	move	#0,r3
 	move	#triangle_indices,r2
 	move	#2,n2
+	move	#prepass_kill,r4
+	move	#>1,a
+	move	a1,y:<prepass_cls_bit
 	move	y:<triangle_list_count,a
 	tst	a
 	jeq	<prepass_classify_done
 	move	a1,x0
 	do	x0,prepass_classify_end
 
+	; Pass 2 asks the cache instead of the geometry.  A cached reject
+	; still owes the walk two things every processed triangle pays
+	; elsewhere: R2 must step past the triangle's three resident words
+	; (unpack normally does that), and the shared cursor advance at
+	; prepass_classify_next.
+	move	y:<prepass_occl_mode,b
+	tst	b
+	jeq	<prepass_classify_full
+	move	y:<prepass_cls_bit,x0
+	move	x:(r4),a
+	and	x0,a
+	jne	<prepass_classify_hit
+	move	(r2)+
+	move	(r2)+n2
+	jmp	<prepass_classify_next
+prepass_classify_hit
+	jsr	<prepass_unpack_indices
+	jsr	<make_triangle_zkey
+	jmp	<prepass_classify_key
+
+prepass_classify_full
 	; Only the three VERTEX indices matter here; the corner-normal fields
 	; feed shading, which the prepass never reaches.  Word C is therefore
 	; never read at all -- the +N2 post-increment steps over it while word
@@ -2503,6 +2540,7 @@ prepass_classify
 	tst	a
 	jeq	<prepass_classify_next
 	jsr	<make_triangle_zkey
+prepass_classify_key
 
 	; The host's bucket rule, reproduced bit for bit: shift right by
 	; OT_KEY_SHIFT, saturate at OT_LENGTH-1.  The key is treated as an
@@ -2541,7 +2579,10 @@ prepass_classify
 	tst	b
 	jne	<prepass_classify_write
 
-	; Count pass: one class counter and the survivor total.
+	; Count pass: one class counter, the survivor total, and the
+	; survivor's cache bit.  The bitmap is dead storage until the sweep,
+	; and prepass_run clears it again on every path that follows pass 1,
+	; overflow included, so BUILD only ever sees real kills in it.
 	move	#>prepass_cnt_lo,x0
 	add	x0,a
 	move	a1,r0
@@ -2552,6 +2593,10 @@ prepass_classify
 	move	y:prepass_surv,b
 	add	x0,b
 	move	b1,y:prepass_surv
+	move	y:<prepass_cls_bit,x0
+	move	x:(r4),b
+	or	x0,b
+	move	b1,x:(r4)
 	jmp	<prepass_classify_next
 
 prepass_classify_write
@@ -2580,15 +2625,39 @@ prepass_classify_write
 	move	a1,x:(r1)
 
 prepass_classify_next
+	; Advance the shared cache cursor -- every triangle, both passes, all
+	; exits.  The wrap reads the carried-out bit from A2 bit 0, the same
+	; idiom BUILD's kill consumer uses; a full-accumulator TST here is
+	; 2.3f defect 2.
+	move	y:<prepass_cls_bit,a
+	asl	a
+	move	a1,y:<prepass_cls_bit
+	jclr	#0,a2,prepass_classify_nowrap
+	move	(r4)+
+	move	#>1,a
+	move	a1,y:<prepass_cls_bit
+prepass_classify_nowrap
 	move	(r3)+
-	; The loop's last word is deliberately a NOP nobody jumps to.  All
-	; three exits branch to prepass_classify_next, and landing a jump
-	; directly on a hardware loop's LA is the one place where the loop-back
-	; and the jump would fight over the program counter.  One word buys
-	; that whole question away.
+	; The loop's last word is deliberately a NOP nobody jumps to.  Every
+	; exit branches to prepass_classify_next or lands on _nowrap, and
+	; landing a jump directly on a hardware loop's LA is the one place
+	; where the loop-back and the jump would fight over the program
+	; counter.  One word buys that whole question away.
 	nop
 prepass_classify_end
 prepass_classify_done
+	rts
+
+; Zero the kill bitmap.  Three sites need the identical clear: the run
+; start, the retirement of the pass-2 survivor cache before the sweep, and
+; the overflow exit that bypasses the sweep.  The bitmap may only ever
+; reach BUILD holding real kills.
+prepass_clear_kill
+	clr	a
+	move	#prepass_kill,r0
+	nop
+	rep	#PREPASS_KILL_WORDS
+	move	a1,x:(r0)+
 	rts
 
 ; The sorted list is walked once from depth class 0 (nearest) to class 63
@@ -3430,6 +3499,11 @@ prepass_occl_gy	= project_temp_x	; homes, deliberately not N registers
 prepass_occl_sy	= triangle_tint		; per-row edge steps, 3 words
 prepass_occl_cur	= projection_cx		; working edge accumulators, 3 words
 prepass_occl_sx	= project_temp_y	; per-cell edge steps, 3 words
+; Classify-phase alias, lifetime-disjoint from every sweep-phase alias above
+; AND from the same cell's own e01r role: the one-hot of the pass-2 survivor
+; cache's streaming cursor.  The stamp's first e01r write happens only after
+; prepass_clear_kill has retired the cache.
+prepass_cls_bit	= shade_sum_r
 
 ; Occlusion prepass state.  The class counter bank MUST stay here in on-chip
 ; Y RAM: it is written once per survivor in each classification pass and
@@ -3497,7 +3571,7 @@ prepass_tp_save
 ; the index upload and reports garbage, which cost this stage one full round
 ; of contradictory measurements once.
 ;
-; The current full-mesh program ends at P:$0967, leaving P:$0968-$09BF free
+; The current full-mesh program ends at P:$098B, leaving P:$098C-$09BF free
 ; before the resident indices.  Keep the "<" prefix on jumps and the short
 ; Y-scalar forms on any code added later, or the program will overwrite the
 ; first triangle indices without an assembler error.

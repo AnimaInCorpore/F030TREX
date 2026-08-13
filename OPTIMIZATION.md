@@ -1136,13 +1136,37 @@ the program-size change in words (negative frees words):
    was 65 early frames, a different mix).  About -0.8 ms/frame, 1%: real
    but small, because the two classification passes dominate the stage --
    which is site 3's target.
-3. **Pass-2 classify cache** [+15]. The two classification passes dominate
-   the 75.6 ms and run the identical area/bbox/zkey chain twice. The kill
-   bitmap is dead storage until the sweep: pass 1 can mark survivors there,
-   pass 2 then tests one bit per triangle and, for survivors, re-runs only
-   the index unpack and `make_triangle_zkey` -- area and bbox exist in pass
-   2 purely as the survivor filter the bit now answers -- and two program
-   words re-clear the bitmap before the sweep. No X or Y cost.
+3. **Pass-2 classify cache -- implemented.** The two classification passes
+   ran the identical area/bbox/zkey chain twice; the kill bitmap is dead
+   storage until the sweep, so pass 1 now marks every survivor's bit there
+   while it counts, and pass 2 walks the bits with the same streaming
+   word-pointer-plus-one-hot cursor idiom BUILD's kill consumer uses
+   (A2-carry wrap, 2.3f defect 2): a cached reject advances R2 past its
+   three resident words and the cursor, nothing else, while a survivor
+   re-runs only the unpack and the key.  The bucket rule stays one shared
+   code path, and the two passes now see the same survivor set by
+   construction.  Two constraints the audit's sketch missed: rejects must
+   resync R2 themselves (unpack normally advances it), and the OVERFLOW
+   exit must clear the bitmap -- pass 1 has filled it with survivor bits,
+   and BUILD reading those as kills would kill every survivor.  A shared
+   `prepass_clear_kill` serves the run start, the pre-sweep cache
+   retirement and that overflow exit.  Cost: 36 program words, not the
+   estimated 15 (extent `$0967` to `$098B`, 52 free -- the sketch omitted
+   the cursor advance, the R2 resync and the overflow clear).  Gates:
+   DOSBox 0/0; plain and arm-2 frame-100 `fb.res` reproduce
+   `d89958b3…3d16`; armed and disarmed hold runs both reproduce the
+   frame-291 checkpoint `e66d4d43…b00486` with cumulative pixel counters
+   identical to the site-2 validation pair to the last digit (13,426,986
+   armed / 13,489,906 disarmed) -- the culling decisions are bit-equal
+   across the change -- and the arm-2 survivor maximum stays exactly
+   1,194, zero overflow, zero protocol failures.  Measured effect: the
+   freestanding prepass falls from 75.98 to **60.28 ms/frame** (arm-2,
+   11,500-VBL runs of 310/318 frames, one host binary, only the `.lod`
+   swapped) -- **-15.7 ms/frame, -21%**, and -16.5 against the site-1
+   baseline's 76.76.  The faster `.lod` completes eight more frames in
+   the same VBL budget, which corroborates the per-frame figure; the
+   extra frames are hold frames near the new average, so the mix shift
+   does not carry the result.
 4. **`transform_animated_vertices` re-pipelined** [-25]. The in-place morph
    transform stages every triple through three Y scalars: ~37 instructions
    per vertex, many two-word. Holding the triple in x1/y1/x0 (all three are
@@ -1178,10 +1202,10 @@ the program-size change in words (negative frees words):
    2.3d and defect 4 of 2.3f document.
 
 Together that is on the order of 120-180 words against the 51 free at the
-time of the audit -- sites 1 and 2 have since netted 37 (41 freed, 4
-spent), putting the free window at 88 -- which moves the P ceiling from
-binding to comfortable for item 19's yield work before any of the speed
-value is counted.
+time of the audit.  Sites 1-3 have since landed: 41 words freed, 40 of
+them spent back on the two speed sites, the free window at 52, and the
+freestanding prepass measured 16.5 ms/frame cheaper -- the size reserve
+proper now rests in the still-open sites 4-9.
 
 Three families are explicitly excluded because they change results, not
 schedules:
@@ -4317,21 +4341,21 @@ The open roadmap, in recommended order (expected effects from the section
     frames ago (Cho Ren Sha's `swap_sprite_infos` exists for exactly this); and
     a missed pixel leaves a ghost from two frames back, which is a silent
     visual defect, so `fb.res` byte identity is the mandatory gate.
-21. Harvest the DSP instruction-stream reserve. **Audited; sites 1 and 2
-    implemented** -- see section 2.3h: roughly 120-180 recoverable program
-    words, of which site 1 (the corner-normal rotation, built
-    register-resident rather than X-staged) delivered 41 and site 2 (the
-    O(1) kill-bit addressing) spent 4 back at a measured -0.8 ms/frame on
-    the freestanding prepass, leaving 88 free to the ceiling.  Still
-    open is the pass-2 classify cache, the cycle site attacking the
-    classification share that dominates the
-    75.6 ms freestanding prepass cost 2.3f recorded.  That cost is hidden by
-    the FINISH window today, and every rasterizer improvement narrows that
-    window, so the return is program words and margin for item 19's yield
-    work, not frame rate: the BUILD path's wall-clock ceiling is the
-    few-milliseconds genuine DSP wait item 12's stage 2 bounded.  Gates as
-    always: DOSBox assembly clean, P extent at or below `$09BF`,
-    byte-identical frame-100 `fb.res` against the recorded checkpoint.
+21. Harvest the DSP instruction-stream reserve. **Audited; sites 1-3
+    implemented** -- see section 2.3h: site 1 (the corner-normal rotation,
+    built register-resident rather than X-staged) freed 41 words, and
+    sites 2 and 3 (O(1) kill-bit addressing, the pass-2 classify cache)
+    spent 40 of them back to take the freestanding prepass from 76.76 to
+    a measured **60.28 ms/frame** -- a fifth of the stage -- leaving 52
+    words free to the ceiling.  Still open are the size-only sites 4-9,
+    roughly another 100+ words when a feature needs the room.  The
+    prepass cost is hidden by the FINISH window today, and every
+    rasterizer improvement narrows that window, so the return is program
+    words and margin for item 19's yield work, not frame rate: the BUILD
+    path's wall-clock ceiling is the few-milliseconds genuine DSP wait
+    item 12's stage 2 bounded.  Gates as always: DOSBox assembly clean, P
+    extent at or below `$09BF`, byte-identical frame-100 `fb.res` against
+    the recorded checkpoint.
 
 ## 11. References
 
