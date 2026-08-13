@@ -1167,14 +1167,31 @@ the program-size change in words (negative frees words):
    the same VBL budget, which corroborates the per-frame figure; the
    extra frames are hold frames near the new average, so the mix shift
    does not carry the result.
-4. **`transform_animated_vertices` re-pipelined** [-25]. The in-place morph
-   transform stages every triple through three Y scalars: ~37 instructions
-   per vertex, many two-word. Holding the triple in x1/y1/x0 (all three are
-   legal multiplier pairings against y0) with the matrix streamed through
-   the static loop's own n4-rewind pattern gives ~21 single-word
-   instructions per vertex. In-place stays safe by construction: the three
-   reads of a vertex complete before its first write, and both cursors
-   advance three per vertex.
+4. **`transform_animated_vertices` re-pipelined -- implemented.** The
+   in-place morph transform staged every triple through three Y scalars:
+   ~37 instructions per vertex, many two-word.  The triple now rides in
+   x1/y1/x0 (all three are legal multiplier pairings against y0) with the
+   matrix streamed through the static loop's own n4-rewind pattern and
+   the translation loaded by the XY dual move that also fetches each
+   row's first matrix element: 21 single-word instructions per vertex,
+   and the `animation_vertex_x..z` staging cells retired into `tri_x0`'s
+   alignment pad.  One encoding correction against the sketch: the XY
+   dual move cannot encode (Rn)-Nn, so the translation cursor rewinds
+   through `(r1)+n1` while the matrix keeps the single parallel
+   `(r4)-n4`.  **N1 is -2, and the first build's -3 is worth recording.**
+   A +Nn update replaces the final access's own post-increment, so the
+   rewind is block size minus one -- the -3 walked the cursor one X word
+   lower per vertex, and the resulting garbage frames ran so slow that
+   the 4,000-VBL gate run died before its frame-100 dump.  The gate then
+   read the PREVIOUS build's fb.res and passed -- only the armed run's
+   fresh dump caught the corruption, and the file mtimes exposed the
+   stale pass.  Every gate run now deletes its result files first; a
+   missing dump is a failure, never a pass.  Result after the fix: **25
+   words freed**, exactly the estimate (extent `$0964` to `$094B`, 116
+   free), DOSBox 0/0, frame-100 `fb.res` freshly reproducing
+   `d89958b3…3d16` and the armed hold freshly reproducing the frame-291
+   checkpoint at 353 frames, zero failures.  The ~1.5 ms/frame cycle
+   model stays unmeasured (2.4a); the FINISH window hides it either way.
 5. **Survivor record write as a dual-move copy -- implemented.** The
    record write moved w5-w13 and w15-w17 one absolute load and one store
    at a time; the span scalars are now laid out in exact wire order --
@@ -1223,10 +1240,10 @@ the program-size change in words (negative frees words):
    2.3d and defect 4 of 2.3f document.
 
 Together that is on the order of 120-180 words against the 51 free at the
-time of the audit.  Sites 1-3, 5 and 6 have since landed: 80 words freed,
-40 of them spent back on the two speed sites, the free window at 91, and
-the freestanding prepass measured 16.5 ms/frame cheaper -- the remaining
-size reserve rests in the still-open sites 4 and 7-9.
+time of the audit.  Sites 1-6 have since landed: 105 words freed, 40 of
+them spent back on the two speed sites, the free window at 116, and the
+freestanding prepass measured 16.5 ms/frame cheaper -- the remaining size
+reserve rests in the still-open sites 7-9.
 
 Three families are explicitly excluded because they change results, not
 schedules:
@@ -4362,15 +4379,16 @@ The open roadmap, in recommended order (expected effects from the section
     frames ago (Cho Ren Sha's `swap_sprite_infos` exists for exactly this); and
     a missed pixel leaves a ghost from two frames back, which is a silent
     visual defect, so `fb.res` byte identity is the mandatory gate.
-21. Harvest the DSP instruction-stream reserve. **Audited; sites 1-3, 5
-    and 6 implemented** -- see section 2.3h: sites 1, 5 and 6 (the
-    register-resident corner-normal rotation, the wire-ordered record
-    copy, the merged Lambert channel loop) freed 80 words, and sites 2
-    and 3 (O(1) kill-bit addressing, the pass-2 classify cache) spent 40
-    of them back to take the freestanding prepass from 76.76 to a
-    measured **60.28 ms/frame** -- a fifth of the stage -- leaving 91
-    words free to the ceiling.  Still open are the size-only sites 4 and
-    7-9, roughly another 70+ words when a feature needs the room.  The
+21. Harvest the DSP instruction-stream reserve. **Audited; sites 1-6
+    implemented** -- see section 2.3h: the four size sites (the
+    register-resident corner-normal rotation, the re-pipelined morph
+    transform, the wire-ordered record copy, the merged Lambert channel
+    loop) freed 105 words, and sites 2 and 3 (O(1) kill-bit addressing,
+    the pass-2 classify cache) spent 40 of them back to take the
+    freestanding prepass from 76.76 to a measured **60.28 ms/frame** -- a
+    fifth of the stage -- leaving 116 words free to the ceiling.  Still
+    open are the size-only sites 7-9, roughly another 50+ words when a
+    feature needs the room.  The
     prepass cost is hidden by the FINISH window today, and every
     rasterizer improvement narrows that window, so the return is program
     words and margin for item 19's yield work, not frame rate: the BUILD

@@ -1177,49 +1177,50 @@ transform_animated_vertices
 	; Read each XYZ triple before overwriting it, then transform in place.  The
 	; fourth word per vertex remains free for project_vertices' backward
 	; expansion into (screen-x, screen-y, z, flags).
+	;
+	; The triple rides in x1/y1/x0 -- all three are legal multiplier
+	; pairings against y0 -- so each row streams the matrix through Y0
+	; with no staging cells and no reloads.  The translation cursor
+	; rewinds through (r1)+n1 with N1 = -2, because the XY dual move
+	; cannot encode (Rn)-Nn; the matrix rewinds through the single
+	; parallel move (r4)-n4 exactly like transform_vertices.  Both
+	; rewinds are block size MINUS ONE, since the +Nn update replaces
+	; the final access's own post-increment -- an N1 of -3 walks the
+	; cursor one word lower every vertex, into command_word and onward.
+	; In place stays safe by construction: the three reads of a vertex
+	; complete before its first write, and both cursors advance three
+	; per vertex.  Same MAC chain, same RND -- the rounding is unchanged.
 	move	y:<vertex_count,x0
 	move	#camera_vertices,r0
 	move	#camera_vertices,r2
+	move	#object_translation,r1
+	move	#>-2,n1
+	move	#frame_matrix,r4
+	move	#8,n4
 
 	do	x0,transform_animated_loop
 	move	x:(r0)+,x1
-	move	x1,y:animation_vertex_x
-	move	x:(r0)+,x1
-	move	x1,y:animation_vertex_y
-	move	x:(r0)+,x1
-	move	x1,y:animation_vertex_z
-	move	#frame_matrix,r4
+	move	x:(r0)+,y1
+	move	x:(r0)+,x0
 
-	move	x:object_translation,a
-	move	y:animation_vertex_x,x1
-	move	y:(r4)+,y0
-	mac	x1,y0,a	y:animation_vertex_y,x1
-	move	y:(r4)+,y0
-	mac	x1,y0,a	y:animation_vertex_z,x1
-	move	y:(r4)+,y0
-	mac	x1,y0,a
+	move	x:(r1)+,a	y:(r4)+,y0
+	mac	x1,y0,a	y:(r4)+,y0
+	mac	y1,y0,a	y:(r4)+,y0
+	mac	x0,y0,a
 	rnd	a
 	move	a1,x:(r2)+
 
-	move	x:object_translation+1,a
-	move	y:animation_vertex_x,x1
-	move	y:(r4)+,y0
-	mac	x1,y0,a	y:animation_vertex_y,x1
-	move	y:(r4)+,y0
-	mac	x1,y0,a	y:animation_vertex_z,x1
-	move	y:(r4)+,y0
-	mac	x1,y0,a
+	move	x:(r1)+,a	y:(r4)+,y0
+	mac	x1,y0,a	y:(r4)+,y0
+	mac	y1,y0,a	y:(r4)+,y0
+	mac	x0,y0,a
 	rnd	a
 	move	a1,x:(r2)+
 
-	move	x:object_translation+2,a
-	move	y:animation_vertex_x,x1
-	move	y:(r4)+,y0
-	mac	x1,y0,a	y:animation_vertex_y,x1
-	move	y:(r4)+,y0
-	mac	x1,y0,a	y:animation_vertex_z,x1
-	move	y:(r4)+,y0
-	mac	x1,y0,a
+	move	x:(r1)+n1,a	y:(r4)+,y0
+	mac	x1,y0,a	y:(r4)+,y0
+	mac	y1,y0,a	y:(r4)-n4,y0
+	mac	x0,y0,a
 	rnd	a
 	move	a1,x:(r2)+
 transform_animated_loop
@@ -3292,12 +3293,6 @@ animation_delta_y
 	ds	1
 animation_delta_z
 	ds	1
-animation_vertex_x
-	ds	1
-animation_vertex_y
-	ds	1
-animation_vertex_z
-	ds	1
 
 triangle_count
 	ds	1
@@ -3341,12 +3336,13 @@ shade_cy
 	ds	1
 shade_cz
 	ds	1
-; Four pad words so tri_x0 sits at a multiple of eight: prepass_stamp walks
+; Seven pad words so tri_x0 sits at a multiple of eight: prepass_stamp walks
 ; the six projected-corner scalars below through R3 under a modulo-6 M3, and
 ; the DSP's modulo addressing requires the block's base aligned to the next
-; power of two.  Three of the four are the retired shade_nx..shade_nz staging
-; cells; the corner normal is register-resident through the rotation now.
-	ds	4
+; power of two.  Six of the seven are retired staging cells -- shade_nx..nz
+; and animation_vertex_x..z -- whose values are register-resident through
+; the shading rotation and the morph transform now.
+	ds	7
 tri_x0
 	ds	1
 tri_y0
@@ -3560,7 +3556,7 @@ prepass_tp_save
 ; the index upload and reports garbage, which cost this stage one full round
 ; of contradictory measurements once.
 ;
-; The current full-mesh program ends at P:$0964, leaving P:$0965-$09BF free
+; The current full-mesh program ends at P:$094B, leaving P:$094C-$09BF free
 ; before the resident indices.  Keep the "<" prefix on jumps and the short
 ; Y-scalar forms on any code added later, or the program will overwrite the
 ; first triangle indices without an assembler error.
