@@ -1318,6 +1318,47 @@ with the other paid by the freed 112 plus a 56-word `PREPASS_MAX` trim to
 1,279 -- still above the 1,194 measured survivor maximum, at 2.3b-style
 thin headroom.
 
+### 2.3i The 4x4-cell yield experiment -- built, measured, rejected
+
+Item 19 and 2.3f name two suspects for the conservative yield: the
+8x8-pixel cells (64 fully covered pixels before anything stamps) and the
+64 coarse depth classes.  The 2.3h harvest made the first testable: its
+190 freed program words are Y-addressable through the P/Y overlay, so a
+4x4 configuration was built with the 168-word SEAL mask in the overlay at
+`Y:$0918-$09BF` (hard program ceiling `P:$0917`), the 168-word PENDING
+mask in X, and `PREPASS_MAX` trimmed 1,335 to 1,279 -- 85 over the
+measured 1,194 survivor maximum, and no use of the contested
+`Y:$0100-$01FF` block.  Net code cost was three words.
+
+Every gate held: DOSBox 0/0, fresh frame-100 `fb.res` at `d89958b3…3d16`,
+armed and disarmed hold runs both at `e66d4d43…b00486` -- kills stayed
+invisible under the 4x finer coverage -- zero overflow, zero protocol
+failures.  And for the first time both arms completed EQUAL frame counts
+(357/357), which exposed a metric artifact: the recorded 8x8 yield
+figures (61,697 in 2.3f, 62,920 in 2.3h site 2) came from pairs one
+frame apart, and the extra disarmed frame's ~38k pixels inflated them.
+The equal-frame 8x8 yield was roughly 25k pixels per run.
+
+**The 4x4 cells measured 20,976 fewer armed pixels over 357 equal frames
+-- no improvement over 8x8 -- while the freestanding prepass rose from
+60.28 to 74.86 ms/frame.**  The finding: cell resolution is NOT the
+binding constraint.  Sealing only happens across depth-class boundaries,
+and with most of the scene collapsed into a few of the 64 coarse classes
+there is nothing strictly nearer to seal against, no matter how fine the
+coverage quantum.  The code is reverted; the stock 8x8/64-class
+configuration stands.
+
+What would move the yield is both levers together -- finer cells AND
+finer classes -- which needs the 336-word mask pair plus a 128-word
+counter bank: ~296 overlay words against the 190 the harvest freed.  The
+`Y:$0100-$01FF` probe (256 words, mapping contested, hardware-gated) or
+a further ~106-word program harvest is therefore the prerequisite, and a
+classes-only experiment (128 classes in the overlay, stock 8x8 masks,
+ceiling `P:$093F`) is the cheap next probe of the hypothesis.  Until one
+of those runs, item 19's yield stands where 2.3f left it, now with the
+mechanism named and the metric corrected: compare yields only between
+equal-frame pairs.
+
 ### 2.4 The occlusion binary is not a timing source
 
 `trex_occl.tos` moves text and adds ~371 KB of BSS, and it stores an owner id
@@ -4393,6 +4434,14 @@ The open roadmap, in recommended order (expected effects from the section
     culling yield and FPS remain unmeasured. Sections 2.3a-2.3e retain the
     predecessor designs and measurements explicitly as history, not as the
     current memory or algorithm contract.
+
+    The first yield-raising experiment is measured and rejected: 4x4 cells
+    alone bought nothing, because the 64 coarse depth classes -- not the
+    cell size -- are the binding constraint (section 2.3i has the build,
+    the equal-frame metric correction, and the reverted layout).  Raising
+    the yield needs finer classes, alone as a cheap probe or jointly with
+    finer cells, and the joint variant is gated on the `Y:$0100-$01FF`
+    probe or a further program-word harvest.
 20. Delta clearing instead of the full-window clear. **Built, measured,
     REJECTED — see section 2.5.** It saves 8.0 ms in the clear and costs
     14.4 ms in bookkeeping, a net +6.1 ms, plus 13.5 ms of layout cost merely
