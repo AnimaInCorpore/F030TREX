@@ -1175,13 +1175,24 @@ the program-size change in words (negative frees words):
    instructions per vertex. In-place stays safe by construction: the three
    reads of a vertex complete before its first write, and both cursors
    advance three per vertex.
-5. **Survivor record write as a dual-move copy** [-22]. The record write
-   moves w5-w13 and w15-w17 one absolute load and one store at a time.
-   Reordering the span scalars so those source cells are contiguous turns
-   each run into a software-pipelined `move x0,x:(r1)+ y:(r4)+,x0` copy:
-   ~26 fewer memory instructions per survivor. The cells sit outside the
-   Y:$2A-$3E prepass alias window and above `tri_x0`, whose
-   multiple-of-eight anchor the reorder must not disturb.
+5. **Survivor record write as a dual-move copy -- implemented.** The
+   record write moved w5-w13 and w15-w17 one absolute load and one store
+   at a time; the span scalars are now laid out in exact wire order --
+   w5..w13 then w15..w17 contiguously, the UV staging and sorted corner
+   levels moved behind them -- and both runs stream through one R4 cursor
+   as a software-pipelined XY copy, with the w14 compose in its slot
+   between them.  One correction against the audit's sketch: the dual
+   move's X field encodes only X0/X1/A/B and its Y field only Y0/Y1/A/B,
+   so `x0` cannot ride the Y side -- A is the pipeline register instead
+   (`move a,x:(r1)+ y:(r4)+,a`), and because the Y-side load sign-extends
+   A2, the X-side limited store passes A1 through bit-exactly.  No code
+   walks the span block by pointer besides this copy (checked), the block
+   sits outside the Y:$2A-$3E alias window, and `tri_x0`'s
+   multiple-of-eight anchor is below and untouched.  Result: **25 words
+   freed** (extent `$098B` to `$0972`, 77 free), DOSBox 0/0, frame-100
+   `fb.res` reproducing `d89958b3…3d16` and the armed hold reproducing
+   the frame-291 checkpoint.  Cycle effect unmeasured (2.4a); the path is
+   pipelined behind host unpack either way.
 6. **Red/green channel merge** [-20]. Since 4.4c the two Lambert loops are
    textually identical except for their accumulator cell, and their
    clamp/depth-scale epilogues duplicate each other. One outer `DO #2`
@@ -1202,10 +1213,10 @@ the program-size change in words (negative frees words):
    2.3d and defect 4 of 2.3f document.
 
 Together that is on the order of 120-180 words against the 51 free at the
-time of the audit.  Sites 1-3 have since landed: 41 words freed, 40 of
-them spent back on the two speed sites, the free window at 52, and the
-freestanding prepass measured 16.5 ms/frame cheaper -- the size reserve
-proper now rests in the still-open sites 4-9.
+time of the audit.  Sites 1-3 and 5 have since landed: 66 words freed, 40
+of them spent back on the two speed sites, the free window at 77, and the
+freestanding prepass measured 16.5 ms/frame cheaper -- the remaining size
+reserve rests in the still-open sites 4 and 6-9.
 
 Three families are explicitly excluded because they change results, not
 schedules:
@@ -4341,14 +4352,15 @@ The open roadmap, in recommended order (expected effects from the section
     frames ago (Cho Ren Sha's `swap_sprite_infos` exists for exactly this); and
     a missed pixel leaves a ghost from two frames back, which is a silent
     visual defect, so `fb.res` byte identity is the mandatory gate.
-21. Harvest the DSP instruction-stream reserve. **Audited; sites 1-3
-    implemented** -- see section 2.3h: site 1 (the corner-normal rotation,
-    built register-resident rather than X-staged) freed 41 words, and
-    sites 2 and 3 (O(1) kill-bit addressing, the pass-2 classify cache)
-    spent 40 of them back to take the freestanding prepass from 76.76 to
-    a measured **60.28 ms/frame** -- a fifth of the stage -- leaving 52
-    words free to the ceiling.  Still open are the size-only sites 4-9,
-    roughly another 100+ words when a feature needs the room.  The
+21. Harvest the DSP instruction-stream reserve. **Audited; sites 1-3 and
+    5 implemented** -- see section 2.3h: sites 1 and 5 (the
+    register-resident corner-normal rotation, the wire-ordered record
+    copy) freed 66 words, and sites 2 and 3 (O(1) kill-bit addressing,
+    the pass-2 classify cache) spent 40 of them back to take the
+    freestanding prepass from 76.76 to a measured **60.28 ms/frame** -- a
+    fifth of the stage -- leaving 77 words free to the ceiling.  Still
+    open are the size-only sites 4 and 6-9, roughly another 90+ words
+    when a feature needs the room.  The
     prepass cost is hidden by the FINISH window today, and every
     rasterizer improvement narrows that window, so the return is program
     words and margin for item 19's yield work, not frame rate: the BUILD

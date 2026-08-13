@@ -931,27 +931,25 @@ build_triangle_not_killed
 	move	y:span_sx1,a
 	move	#>$fff,x0
 	and	x0,a
+	move	#span_sl_long,r4
 	move	a1,x:(r1)+			; w4
-	move	y:span_sl_long,x0
-	move	x0,x:(r1)+
-	move	y:span_sl_up,x0
-	move	x0,x:(r1)+
-	move	y:span_sl_low,x0
-	move	x0,x:(r1)+
-	move	y:span_dudx,x0
-	move	x0,x:(r1)+
-	move	y:span_dvdx,x0
-	move	x0,x:(r1)+
-	move	y:span_dul_up,x0
-	move	x0,x:(r1)+
-	move	y:span_dvl_up,x0
-	move	x0,x:(r1)+
-	move	y:span_dul_low,x0
-	move	x0,x:(r1)+
-	move	y:span_dvl_low,x0
-	move	x0,x:(r1)+			; w13
+	; w5..w13 stream from the span scalars, which the Y layout keeps in
+	; EXACT wire order so this software-pipelined XY copy moves one word
+	; per instruction: the X field stores the OLD accumulator while the Y
+	; field fetches the next cell.  A is the pipeline register because the
+	; dual move's X field only encodes X0/X1/A/B and its Y field only
+	; Y0/Y1/A/B; the Y-side load sign-extends A2, so the X-side limited
+	; store passes A1 through exactly.  R4 was set two instructions back
+	; to respect the AGU write-use spacing.
+	move	y:(r4)+,a
+	do	#8,span_record_gradients
+	move	a,x:(r1)+	y:(r4)+,a
+span_record_gradients
+	move	a,x:(r1)+			; w13
 	; The Gouraud tail: both sorted level starts share w14 (Q4.8 each,
-	; non-negative, at most 15<<8), the three gradients follow plain.
+	; non-negative, at most 15<<8); the three level gradients then
+	; continue through the same cursor, which the copy above left parked
+	; on span_dldx.
 	move	y:span_sl0,a
 	rep	#12+8
 	asl	a				; (sl0<<8) << 12
@@ -960,12 +958,10 @@ build_triangle_not_killed
 	asl	b				; sl1 << 8
 	add	b,a
 	move	a1,x:(r1)+			; w14
-	move	y:span_dldx,x0
-	move	x0,x:(r1)+			; w15
-	move	y:span_dll_up,x0
-	move	x0,x:(r1)+			; w16
-	move	y:span_dll_low,x0
-	move	x0,x:(r1)+			; w17
+	move	y:(r4)+,a
+	move	a,x:(r1)+	y:(r4)+,a
+	move	a,x:(r1)+	y:(r4)+,a
+	move	a,x:(r1)+			; w17
 	move	y:triangle_out_count,a
 	move	#>1,x0
 	add	x0,a
@@ -3426,11 +3422,34 @@ span_cross
 	ds	1
 span_mid
 	ds	1
+; The twelve cells from span_sl_long to span_dll_low sit in EXACT wire
+; order -- w5..w13, then w15..w17 -- because the record write streams them
+; through one pointer.  Moving any of them shears every later record field
+; against the host's unpack; the UV staging and the sorted corner levels
+; follow OUTSIDE the streamed window.
 span_sl_long
 	ds	1
 span_sl_up
 	ds	1
 span_sl_low
+	ds	1
+span_dudx
+	ds	1
+span_dvdx
+	ds	1
+span_dul_up
+	ds	1
+span_dvl_up
+	ds	1
+span_dul_low
+	ds	1
+span_dvl_low
+	ds	1
+span_dldx
+	ds	1
+span_dll_up
+	ds	1
+span_dll_low
 	ds	1
 span_uva
 	ds	1
@@ -3448,31 +3467,14 @@ span_su2
 	ds	1
 span_sv2
 	ds	1
-span_dudx
-	ds	1
-span_dvdx
-	ds	1
-span_dul_up
-	ds	1
-span_dvl_up
-	ds	1
-span_dul_low
-	ds	1
-span_dvl_low
-	ds	1
-; Gouraud level fields: the three sorted-slot corner levels and their
-; gradients, in level units Q4.8 wherever a fraction applies.
+; Gouraud level fields: the three sorted-slot corner levels, in level
+; units Q4.8 wherever a fraction applies; their gradients live in the
+; streamed window above.
 span_sl0
 	ds	1
 span_sl1
 	ds	1
 span_sl2
-	ds	1
-span_dldx
-	ds	1
-span_dll_up
-	ds	1
-span_dll_low
 	ds	1
 span_flip
 	ds	1
@@ -3571,7 +3573,7 @@ prepass_tp_save
 ; the index upload and reports garbage, which cost this stage one full round
 ; of contradictory measurements once.
 ;
-; The current full-mesh program ends at P:$098B, leaving P:$098C-$09BF free
+; The current full-mesh program ends at P:$0972, leaving P:$0973-$09BF free
 ; before the resident indices.  Keep the "<" prefix on jumps and the short
 ; Y-scalar forms on any code added later, or the program will overwrite the
 ; first triangle indices without an assembler error.
