@@ -2,7 +2,18 @@ DOSBOX=dosbox
 VASM=./tools/vasm/vasmm68k_mot
 VLINK=./tools/vlink/vlink
 
-.PHONY: all clean trex_m68030 trex_m68030_run trex_m68030_prepass trex_m68030_prepass_run trex_release trex_dsp create_dirs
+# Timing measurements use the corrected Hatari from the sibling F030Arcade
+# checkout, not a stock/Homebrew build: stock runs the Falcon DSP at twice its
+# real clock, which costs this program 84 ms per frame in the packet stage
+# alone (OPTIMIZATION.md 2.4b).  Override on the command line to compare.
+HATARI=../F030Arcade/third_party/hatari/build/src/hatari
+TOS402=../F030Arcade/third_party/tos/tos402.img
+MEASURE_DIR=./TREX/m68030/measure
+# 265-frame prefix on the corrected build; re-converge after any program change
+# (OPTIMIZATION.md 2.4b) rather than trusting this constant.
+MEASURE_VBLS=7710
+
+.PHONY: all clean trex_m68030 trex_m68030_run trex_m68030_prepass trex_m68030_prepass_run trex_release trex_dsp measure create_dirs
 
 all: create_dirs $(VASM) $(VLINK) ./TREX/m68030/TREX.TOS ./TREX/m68030/TREX.LOD
 
@@ -18,6 +29,28 @@ trex_m68030_prepass: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_prepass.tos
 trex_m68030_prepass_run: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_prepass_run.tos ./TREX/m68030/trex_dsp.lod
 
 trex_dsp: create_dirs ./TREX/dsp/trex_dsp.lod
+
+# Headless timing run of the full-mesh diagnostic build, then the report.
+# The 8.3 filename matters: GEMDOS truncates trex_m68030.tos, so --auto would
+# not find it.  Timers read the 200 Hz tick, so --benchmark does not distort
+# the result -- it only stops Hatari waiting on the host's clock.
+measure: trex_m68030
+	@test -x "$(HATARI)" || { echo "no Hatari at $(HATARI) -- build it in F030Arcade (see its hatari.md) or pass HATARI=..."; exit 1; }
+	@test -f "$(TOS402)" || { echo "no TOS 4.02 image at $(TOS402) -- pass TOS402=..."; exit 1; }
+	@mkdir -p $(MEASURE_DIR)
+	@cp ./TREX/m68030/trex_m68030.tos $(MEASURE_DIR)/TREX_M68.TOS
+	@cp ./TREX/m68030/trex_dsp.lod $(MEASURE_DIR)/trex_dsp.lod
+	@rm -f $(MEASURE_DIR)/render_stats.res $(MEASURE_DIR)/fb.res
+	cd $(MEASURE_DIR) && "$(abspath $(HATARI))" \
+	  --machine falcon --cpulevel 3 --cpuclock 16 --mmu true \
+	  --patch-tos true --fast-boot true --tos "$(abspath $(TOS402))" \
+	  --dsp emu --memsize 4 --ttram 0 --monitor rgb \
+	  --frameskips 4 --sound off --benchmark --confirm-quit off \
+	  --log-level warn --alert-level fatal \
+	  --harddrive . --auto 'C:\TREX_M68.TOS' --run-vbls $(MEASURE_VBLS)
+	@python3 ./tools/decode_render_stats.py $(MEASURE_DIR)/render_stats.res
+	@echo "frame-100 checkpoint (expect d89958b3...3d16):"
+	@shasum -a 256 $(MEASURE_DIR)/fb.res
 
 trex_release: create_dirs $(VASM) $(VLINK) ./TREX/m68030/TREX.TOS ./TREX/m68030/TREX.LOD
 
@@ -186,4 +219,5 @@ clean:
 	rm -f ./TREX/m68030/build/TREX.lst
 	rm -f ./TREX/m68030/TREX.LOD
 	rm -f ./TREX/m68030/trex_dsp.lod
+	rm -rf $(MEASURE_DIR)
 	rm -f ./TREX/dsp/build/*

@@ -154,8 +154,17 @@ and because the rest of this document is written against it:
 | Set-frame send, clear, OT and rounding | 30.4 ms | 6.6% |
 | **Total** | **460.0 ms / 2.17 FPS** | **100.0%** |
 
+**This table was taken with the DSP running at twice Falcon speed.** The
+emulator that produced it grants the DSP56001 four clocks per emulated 68030
+clock instead of two; section 2.4b is the re-measurement on a corrected build
+and puts the same binary at **534.2 ms / 1.87 FPS**, with all 84.5 ms of the
+difference in the DSP/packet row and the rasterizer rows unmoved. Read the
+shares above as obsolete — on the corrected model the transport stage is 48.6%
+of the frame and the rasterizer 45.7%.
+
 The frame-100 framebuffer checkpoint was byte-identical to the recorded
-full-mesh hash `d89958b3…3d16`. This is an emulator result, not a physical
+full-mesh hash `d89958b3…3d16`; it still is on the corrected emulator, which
+changes timing and not output. This is an emulator result, not a physical
 Falcon030 timing. The former LOD shipping result, 319.8 ms / 3.13 FPS, is
 historical and no longer describes a buildable configuration.
 
@@ -2201,6 +2210,172 @@ is what it costs, as the hook's comment claims.
   none of this is a Falcon measurement.
 - Measured on `trex_prepass.tos` over frames 0–199, not on the release binary
   over the full choreography.
+### 2.4b The DSP ran at twice Falcon speed; re-measured on a corrected emulator
+
+Section 2.4a bounded what the measuring emulator charges for and cleared the
+DSP clock rate. That clearance was wrong, and it was wrong in the direction
+that matters most to this pipeline: **stock Hatari grants the Falcon DSP four
+clocks per emulated 68030 clock instead of two**, so the DSP56001 ran at 32
+MIPS against the Falcon's 16. Every caller already scales CPU cycles by the
+ratio before calling `DSP_Run` — `src/cpu/newcpu.c` passes
+`2 * cpu_cycles * 2 / CYCLE_UNIT` at ten sites, `src/blitter.c` passes
+`2 * BlitterVars.op_cycles` — and `DSP_Run` then applied it a second time in
+`save_cycles += nHostCycles * 2`. The per-instruction cycle model was already
+exact, external-RAM penalty included; only the rate at which cycles were handed
+out was doubled.
+
+The corrected emulator is the `AnimaInCorpore/hatari` build vendored in the
+sibling `F030Arcade` repository at `third_party/hatari`, branch `main` at
+`f0736b24` (`v2.6.1-476-gf0736b24`) with a local one-line change to
+`DSP_Run()`. It carries a second, coupled fix: the CPU-to-DSP host port. Stock
+charges wait states only for the second and later bytes of an access; the
+corrected build replaces that with a per-direction, per-size table charged once
+per access — read 3/7/10 and write 4/3/7 clocks for byte/word/long
+(`DSP_HostPort_WS_Read` / `_Write` in `src/falcon/dsp.c`, overridable through
+`HATARI_DSP_WS_R1`..`_W4`). Fixing the DSP without the port is not an option:
+with the DSP at true speed and the port untouched, the CPU outruns it in a way
+hardware never does.
+
+**The calibration behind that build is not this repository's measurement.** It
+is recorded in `F030Arcade/hatari.md` against DSPBench v3.0b with real-Falcon
+reference columns: stock lands at ~200% of hardware MIPS in all four P/X/Y
+internal/external combinations, the corrected build at ~100% (16.045 / 8.021 /
+16.045 / 5.347 Mips against 16.000 / 8.000 / 16.000 / 5.333), and the RMS error
+over the eleven host-port tests falls from 28.3pp to 10.4pp. Cite it as that
+repository's result. What follows is this repository's.
+
+#### The controlled A/B
+
+One binary, `make trex_m68030`, byte-identical to the build from commit
+`4ea4f3a` (`cmp` against a clean worktree build; the SSI work in the tree is
+entirely inside `ifd TREX_SSI_*` and assembles to nothing here). One command
+line. The same 265-frame prefix both times, converged exactly by adjusting
+`--run-vbls` until `render_stats.res` reports 265 completed frames. **Only the
+emulator binary differs.**
+
+| Stage | stock 2.6.1 | corrected DSP + host port | Delta |
+|---|---:|---:|---:|
+| DSP set_frame | 12.8 ms | 13.2 ms | +0.4 ms |
+| DSP readback + packet build | 175.6 ms | **259.7 ms** | **+84.1 ms** |
+| Framebuffer clear | 14.5 ms | 14.5 ms | 0.0 ms |
+| Ordering Table insertion | 2.6 ms | 2.3 ms | -0.3 ms |
+| Software span rasterizer | 243.8 ms | 244.0 ms | +0.2 ms |
+| Present | 0.0 ms | 0.0 ms | 0.0 ms |
+| **Total** | **449.7 ms / 2.22 FPS** | **534.2 ms / 1.87 FPS** | **+84.5 ms (+18.8%)** |
+
+**The entire regression is one stage.** 84.1 ms of the 84.5 ms lands on DSP
+readback and packet build; every other stage moves less than half a millisecond,
+and the rasterizer — 54% of the frame — moves 0.2 ms. That is the signature the
+mechanism predicts, and it is the strongest available evidence that the
+corrected build perturbs nothing on the CPU side. The noise floor is smaller
+than the numbers being read: a straight repeat of the corrected run reproduces
+534.2 ms/frame and every stage to within 0.2 ms.
+
+Output is untouched. The frame-100 `fb.res` reproduces the recorded full-mesh
+checkpoint `d89958b3…3d16` under both emulators and is byte-identical between
+them; both runs write the same cumulative 9,049,666 pixels and link the same
+1,149 survivor packets on the final frame. **The corrected build changes timing
+only, not what the program computes.**
+
+#### Which half of the fix costs the 84 ms
+
+The port constants are environment-overridable, so the two mechanisms separate
+cleanly. Upstream charges nothing for an access's first byte and 4 clocks for
+each later one, which is exactly `R1/W1=0`, `R2/W2=4`, `R4/W4=12`: setting those
+on the corrected binary gives the true DSP clock with upstream's port model.
+
+| Configuration | packet stage | frame |
+|---|---:|---:|
+| stock 2.6.1 (DSP 2x fast, upstream port) | 175.6 ms | 449.7 ms / 2.22 FPS |
+| corrected DSP clock, upstream port | 263.9 ms | 538.4 ms / 1.86 FPS |
+| corrected DSP clock, corrected port | 259.7 ms | 534.2 ms / 1.87 FPS |
+
+**The DSP clock is the whole story: +88.7 ms.** The host-port recalibration is
+worth **-4.2 ms** to this program — a small net *gain*, because its traffic is
+dominated by block writes, and the new table charges a word write 3 instead of 4
+and a long write 7 instead of 12. Any future reasoning about this program's
+transport should treat the port model as approximately neutral and the DSP rate
+as the term that moved.
+
+#### Cross-check on the other core
+
+Section 2.4a's "free experiment" — run without `--mmu`, which selects a core
+that charges instruction execution time — doubles as a control on this result,
+since it changes the CPU model while leaving the DSP model alone. Same binary,
+same 265-frame prefix, `--cpu-exact --compatible --data-cache`:
+
+| Stage | stock 2.6.1 | corrected | Delta |
+|---|---:|---:|---:|
+| DSP readback + packet build | 178.3 ms | 261.4 ms | +83.1 ms |
+| Software span rasterizer | 381.4 ms | 379.0 ms | -2.4 ms |
+| set_frame + clear + OT + present | 33.4 ms | 33.0 ms | -0.4 ms |
+| **Total** | **593.6 ms / 1.68 FPS** | **673.7 ms / 1.48 FPS** | **+80.1 ms (+13.5%)** |
+
+The packet-stage delta is +83.1 ms here against +84.1 ms on the MMU core — the
+same number within noise, from a core that prices the rasterizer 56% higher
+(381.4 against 243.8 ms, which is 2.4a's bracket on the word MUL/DIV and
+execution-time share, now measured). **The DSP-stage regression is a property of
+the DSP model and not of the CPU core**, so it survives whichever core later
+work decides is the honest one.
+
+#### What this changes in the rest of this document
+
+- **The transport is now the largest stage in the frame.** DSP readback and
+  packet build goes from 39.0% to 48.6%; the rasterizer falls from 54.2% to
+  45.7%. For the whole life of this document the rasterizer has been the thing
+  to optimize. On the corrected model it is no longer the biggest item.
+- **Section 8.2a's three-FPS gate roughly doubles.** The distance from the frame
+  to 333.3 ms was 126.7 ms against the 460.0 ms baseline. Against 534.2 ms it is
+  **200.9 ms**. Section 8.2a already concluded that three FPS does not follow
+  from any identified optimization; that conclusion is now much stronger, and
+  the ~66 ms its two named levers would buy lands near 468 ms / 2.14 FPS rather
+  than near 395 ms / 2.53 FPS.
+- **Item 15 — moving the record stream off host-port PIO — gains, in relative
+  terms.** It targets the stage that is now half the frame. Nothing measured
+  here says the SSI/DMA path is easier or that section 7.4's hardware gates got
+  smaller; what changed is only that the prize is larger.
+- **The stage figures above 2.4b are not re-tabulated.** Deltas measured inside
+  the rasterizer or the clear (3.5, 3.6, 3.8, 3.9, 2.5) are unaffected — those
+  stages move less than half a millisecond between the two emulators. Deltas
+  measured on the DSP or packet stage (2.3a-2.3i, 4.x) were taken with the DSP
+  at double speed and should be read as lower bounds on their true cost, not
+  re-scaled by a constant: none of them was re-measured here.
+
+#### The recipe, which had never been written down
+
+The 460.0 ms baseline's exact command line was not recorded anywhere in this
+repository, which is why reproducing it required reconstructing it from 2.4a's
+`--mmu true` finding. This is the recipe, and `make measure` runs it:
+
+```sh
+hatari --machine falcon --cpulevel 3 --cpuclock 16 --mmu true \
+  --patch-tos true --fast-boot true --tos tos402.img \
+  --dsp emu --memsize 4 --ttram 0 --monitor rgb \
+  --frameskips 4 --sound off --benchmark --confirm-quit off \
+  --harddrive <rundir> --auto 'C:\TREX_M68.TOS' --run-vbls 7710
+```
+
+`<rundir>` holds `TREX_M68.TOS` (the `trex_m68030` build; the 8.3 name matters,
+GEMDOS truncates `trex_m68030.tos`) and `trex_dsp.lod`. 7710 VBLs is the
+265-frame prefix on the corrected build, 6583 on stock; a change to the program
+moves both, so re-converge rather than reusing the constant.
+`tools/decode_render_stats.py` turns the resulting `render_stats.res` into the
+tables above.
+
+Reconciling with the 460.0 ms of section 2 and 8.2a: this reconstruction lands
+at 449.7 ms on stock, and **10.1 ms of the 10.3 ms gap sits in the packet
+stage** (175.6 against 185.7). The rasterizer reproduces to 243.8 against 243.9 ms and the
+overhead stages to 29.9 against 30.4 ms. A residual confined to exactly the
+stage that the DSP and host-port models drive is consistent with the original
+figures having come from a different 2.6.1-devel build rather than from the
+Homebrew 2.6.1 release used here; it is not explained further, and the A/B above
+does not depend on it, since both of its columns were taken on this machine with
+this recipe.
+
+**Everything above is emulator timing.** The corrected build is calibrated
+against a real Falcon's DSPBench figures, which makes its DSP throughput far
+better founded than what it replaces, but 2.4a's bound still holds for the rest
+of the model and no figure in this document has been taken on a Falcon.
 
 ### 2.5 Delta clearing: built, measured, rejected
 
@@ -5181,6 +5356,14 @@ The packet stage reads 185.7, 185.7 and 186.0 across the normal and both
 profile builds, which is the cross-check that the patches touch only the
 rasterizer.  **The distance to 333.3 ms is 126.7 ms**, down from the 155.5 ms
 section 8.2 recorded before 3.9b/3.9c.
+
+**Both figures are pre-2.4b.** The same binary measures 534.2 ms on an emulator
+that runs the DSP at the Falcon's actual rate, which puts the distance to
+333.3 ms at **200.9 ms** — the gate roughly doubled, and all of the growth is in
+the packet stage this section is about. The two named levers below total about
+66 ms, which now lands near 468 ms / 2.14 FPS rather than near 395 ms / 2.53
+FPS, so this section's conclusion that three FPS does not follow from any
+identified optimization holds with a good deal more room to spare.
 
 **Section 8.2's own next-step suggestion is now measured out.** It proposed
 applying section 3.9's rule -- shrink the loop below the 256-byte instruction

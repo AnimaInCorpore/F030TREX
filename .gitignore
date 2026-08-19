@@ -7,6 +7,8 @@ tools/vlink/
 *.dbg
 a.out
 TREX/m68030/trex_dsp.lod
+# headless timing run scratch (make measure)
+TREX/m68030/measure/
 TREX/m68030/TREX.LOD
 __pycache__/
 *.pyc

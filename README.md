@@ -56,7 +56,20 @@ hatari --machine falcon --tos /path/to/tos402.rom --dsp emu --memsize 4 \
   TREX.TOS
 ```
 
-Use TOS 4.02, 4 MB of ST-RAM and DSP emulation enabled. **TOS 4.04 is not
+Use TOS 4.02, 4 MB of ST-RAM and DSP emulation enabled.
+
+**For timing work, use the corrected Hatari, not a stock one.** Stock Hatari
+(including the 2.6.1 Homebrew release) grants the Falcon DSP four clocks per
+emulated 68030 clock instead of two, so the DSP56001 runs at 32 MIPS against
+the real 16. The build vendored in the sibling `F030Arcade` checkout at
+`third_party/hatari` fixes that and recalibrates the CPU-to-DSP host port
+against DSPBench's real-Falcon figures. On this program the difference is 84.5
+ms per frame — 449.7 ms / 2.22 FPS becomes 534.2 ms / 1.87 FPS, all of it in
+the DSP readback and packet-build stage, with byte-identical output.
+`make measure` runs the documented headless timing recipe against that build
+and prints the stage report; OPTIMIZATION.md 2.4b has the measurement, the
+mechanism and what it changes. Stock Hatari remains fine for simply watching
+the program run. **TOS 4.04 is not
 compatible with the current DSP load path**: the program reaches its
 video-mode setup, but the DSP remains closed and no triangle packets are
 produced. The T-Rex stays absent, although the release-only FPS field can
@@ -89,7 +102,10 @@ uses the 2,724-triangle model, DSP occlusion, and textured Gouraud shading;
 `TREX.LOD` is the matching DSP program. The deprecated reduced-mesh variant
 and its build assets have been removed. Performance figures in
 OPTIMIZATION.md are identified as Hatari/emulator results; physical Falcon030
-timing remains unmeasured.
+timing remains unmeasured. Figures predating OPTIMIZATION.md 2.4b were taken
+with the DSP at twice its real clock and are superseded by the re-measurement
+there: the current full-mesh diagnostic baseline is **534.2 ms / 1.87 FPS**
+over the 265-frame prefix.
 
 The v1.2 release has a measured figure: **511.2 ms per frame, 1.956 FPS**
 under a Hatari corrected to run the DSP at the Falcon's real clock
