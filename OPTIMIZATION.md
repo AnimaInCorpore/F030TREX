@@ -2516,6 +2516,63 @@ construction here and the repeat-run noise floor is 0.2 ms (2.4b), so -4.6 ms is
 outside noise — but the mechanism is not established, and 2.1's warning about
 rasterizer deltas applies to reading anything more into it.
 
+#### The release build, measured for the first time
+
+Everything above is a diagnostic build. The shipped `TREX.TOS` is a different
+binary — `-DTREX_RUN -DTREX_PREPASS -DTREX_RELEASE -DTREX_FPS` — and 8.2a records
+why it had never been timed headlessly: `TREX_RUN` zeroes `stats_flush_enabled`,
+so a bounded run writes no `render_stats.res`. That flag and
+`framebuffer_dump_enabled` assemble the same `dc.l` on both branches, so setting
+both to 1 is a **two-byte patch that leaves the layout identical** to the shipped
+file, and 2.4a already establishes that the per-frame GEMDOS writes it re-enables
+cost nothing in emulated time. `cmp -l` against the released `TREX.TOS` reports
+exactly those two bytes.
+
+| Configuration | packet stage | rasterizer | frame |
+|---|---:|---:|---:|
+| release as shipped (`prepass_arm` 1) | 262.9 ms | 242.8 ms | **536.5 ms / 1.86 FPS** |
+| release, prepass disarmed (`prepass_arm` 0) | 259.6 ms | 242.7 ms | **533.0 ms / 1.88 FPS** |
+
+Both reproduce the same frame-100 image as each other (`a3e27e27…7b1c`, which
+differs from the diagnostic checkpoint only because 2.6's FPS overlay draws into
+the render target), so the kills stay invisible here too. The FPS overlay and
+page flip together measure 0.2 ms.
+
+**The armed prepass costs the release +3.5 ms/frame and returns 12.4 pixels per
+frame.** That is the same +3.5 ms the diagnostic arms measured above, reproduced
+in a second binary, and it is now a **net loss**: 2.3f's deliberately
+conservative 8x8-cell, 64-class yield was chosen when the prepass was free
+because the FINISH window swallowed it, and at the Falcon's real DSP clock the
+window no longer does. Disarming it is a one-byte change to the `prepass_arm`
+default and is worth **1.88 against 1.86 FPS**.
+
+This is an emulator result and 2.4a's bounds still apply — but it is the
+DSP-timing kind of question the corrected build is specifically calibrated for,
+so it is the most trustworthy sort of conclusion this harness produces. The
+recommendation is not to delete the prepass: it is item 19's vehicle and 2.3h
+banked program words for exactly that work. It is that **the arm should follow
+the yield**, and at today's yield the arm costs more than it returns.
+
+#### The current standings
+
+Everything measured on the corrected emulator, one binary per row except where
+noted, all at the converged 265-frame prefix:
+
+| Configuration | frame | FPS |
+|---|---:|---:|
+| lighting off — not a shippable option, sizes 4.4a's protocol | 482.2 ms | 2.07 |
+| **release, prepass disarmed — one byte from shipping** | **533.0 ms** | **1.88** |
+| prepass build, arm 0 / arm 3 | 533.6 ms | 1.87 |
+| `trex_m68030` diagnostic, the 2.4b baseline | 534.2 ms | 1.87 |
+| **release as shipped** | **536.5 ms** | **1.86** |
+| prepass build, arm 1 | 537.1 ms | 1.86 |
+| gouraud off | 538.8 ms | 1.86 |
+| prepass build, arm 2 freestanding | 651.5 ms | 1.53 |
+
+The spread between the fastest shippable configuration and the slowest sensible
+one is 3.5 ms. Everything larger on this list is a feature being switched off,
+not an optimization.
+
 #### What could not be re-measured
 
 Not everything DSP-side is a live configuration:

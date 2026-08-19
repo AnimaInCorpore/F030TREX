@@ -104,8 +104,11 @@ and its build assets have been removed. Performance figures in
 OPTIMIZATION.md are identified as Hatari/emulator results; physical Falcon030
 timing remains unmeasured. Figures predating OPTIMIZATION.md 2.4b were taken
 with the DSP at twice its real clock and are superseded by the re-measurement
-there: the current full-mesh diagnostic baseline is **534.2 ms / 1.87 FPS**
-over the 265-frame prefix.
+there. Over the 265-frame prefix the full-mesh **diagnostic** baseline is
+**534.2 ms / 1.87 FPS**, and the shipped `TREX.TOS` itself measures **536.5 ms /
+1.86 FPS** — the first headless timing of the release build (OPTIMIZATION.md
+2.4c), which also finds that disarming the occlusion prepass would make it
+533.0 ms / 1.88 FPS.
 
 The v1.2 release has a measured figure: **511.2 ms per frame, 1.956 FPS**
 under a Hatari corrected to run the DSP at the Falcon's real clock
