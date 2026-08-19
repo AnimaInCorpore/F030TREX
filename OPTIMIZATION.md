@@ -495,6 +495,10 @@ Both configurations write the same 17,072 pixels and link the same 752 packets.
 The rasterizer figure is identical to the tick, which is the whole point of the
 preshaded CLUT banks: the pixel loop does not know that lighting exists. The
 entire cost of flat shading is **+0.20% of the frame**, spent on the DSP side.
+**Superseded — see 2.4c.** That is the flat-shading, reduced-mesh epoch. On the
+current build, at the corrected DSP clock, the same one-byte `lighting_enabled`
+A/B measures **+52.0 ms, 9.7% of the frame**, essentially all of it on the DSP
+readback stage.
 
 **Viewing runs versus measurement runs.** `make run_trex` starts
 `TREX_RUN.TOS`, assembled from the same source with `-DTREX_RUN`: both
@@ -1099,7 +1103,9 @@ over 246 frames (0.030%), far below the established 64-class yield.  The
 arm-2 freestanding 64-class prepass cost
 75.6 ms/frame in Hatari -- the two classification passes dominate -- which
 the production arm-1 inline mode hid inside the FINISH window; these are
-emulator figures under the 2.4a caveats.
+emulator figures under the 2.4a caveats.  (**2.4c re-measures the prepass at
+the corrected DSP clock: 117.9 ms/frame freestanding, and the armed inline arm
+is no longer free.**)
 
 One methodological note for future diagnostic work: instrumented DSP builds
 are bound by the same `P:$09BF` ceiling as the shipping program.  A
@@ -1210,7 +1216,8 @@ the program-size change in words (negative frees words):
    armed / 13,489,906 disarmed) -- the culling decisions are bit-equal
    across the change -- and the arm-2 survivor maximum stays exactly
    1,194, zero overflow, zero protocol failures.  Measured effect: the
-   freestanding prepass falls from 75.98 to **60.28 ms/frame** (arm-2,
+   freestanding prepass falls from 75.98 to **60.28 ms/frame** (arm-2, and
+   **117.9 ms/frame when re-measured at the Falcon's real DSP clock — 2.4c**,
    11,500-VBL runs of 310/318 frames, one host binary, only the `.lod`
    swapped) -- **-15.7 ms/frame, -21%**, and -16.5 against the site-1
    baseline's 76.76.  The faster `.lod` completes eight more frames in
@@ -1394,7 +1401,9 @@ The equal-frame 8x8 yield was roughly 25k pixels per run.
 
 **The 4x4 cells measured 20,976 fewer armed pixels over 357 equal frames
 -- no improvement over 8x8 -- while the freestanding prepass rose from
-60.28 to 74.86 ms/frame.**  The finding: cell resolution is NOT the
+60.28 to 74.86 ms/frame.**  (Both figures are pre-2.4c; that section scales the
+pair to roughly 118 and 147 ms/frame as arithmetic, not measurement, and the
+rejection is unaffected.)  The finding: cell resolution is NOT the
 binding constraint.  Sealing only happens across depth-class boundaries,
 and with most of the scene collapsed into a few of the 64 coarse classes
 there is nothing strictly nearer to seal against, no matter how fine the
@@ -2401,6 +2410,132 @@ this recipe.
 against a real Falcon's DSPBench figures, which makes its DSP throughput far
 better founded than what it replaces, but 2.4a's bound still holds for the rest
 of the model and no figure in this document has been taken on a Falcon.
+
+### 2.4c The DSP-side A/Bs, re-taken at the corrected clock
+
+2.4b re-measured the frame. It left every measurement that isolates *DSP* work
+standing at figures taken with the DSP at double speed, and those are the ones a
+halved clock should move most. This is that campaign: the same 265-frame prefix,
+the same recipe, and in every case **one binary with one byte patched**, which
+is the only comparison 2.1 accepts. Each variant was verified with `cmp -l` to
+differ from its reference in exactly one byte before it was run.
+
+#### The occlusion prepass
+
+`prepass_arm` selects four configurations of `trex_m68030_prepass` — 0 off,
+1 inline and armed at startup, 2 freestanding and timed per frame, 3 a null
+command through the same timed bracket.
+
+| arm | | prepass | packet stage | frame |
+|---|---|---:|---:|---:|
+| 0 | off, in-binary baseline | — | 259.8 ms | 533.6 ms / 1.87 FPS |
+| 3 | null command, same bracket | 0.1 ms | 259.8 ms | 533.6 ms / 1.87 FPS |
+| 1 | inline, armed | not separately timed | 263.6 ms | 537.1 ms / 1.86 FPS |
+| 2 | freestanding, timed | **117.9 ms** | 377.8 ms | 651.5 ms / 1.53 FPS |
+
+**The freestanding prepass costs 117.9 ms/frame against 2.3h's 60.28.** The
+ratio is 1.96 — the clock halving and essentially nothing else, which is what a
+pass that is pure DSP arithmetic should show. Two internal checks hold: arm 3
+reproduces arm 0 to the tick, so the command protocol carries no cost of its own
+and the bracket is honest; and arm 2's packet stage rises 118.0 ms over arm 0
+against a prepass timer reading 117.9 ms, so the whole of the freestanding cost
+lands where it is attributed. The mix differs slightly from 2.3h's figure, which
+came from 11,500-VBL runs of 310 and 318 frames rather than a converged 265-frame
+prefix; at a ratio this close to exactly 2 that difference is not carrying the
+result.
+
+**The armed inline prepass is no longer free, and this is the finding that
+changes a conclusion rather than a number.** Arm 1 costs **+3.5 ms/frame** over
+arm 0 (537.1 against 533.6), all of it on the packet stage (+3.8 ms). Sections
+2.3f and 2.3h both record the FINISH window hiding the armed prepass completely,
+and 2.3h's "what DSP speed would even buy" argument is built on that: the prepass
+was said to sit inside the ~244 ms of raster time at no cost. At the Falcon's
+real DSP clock it does not quite fit any more. The kills are still live — arm 1
+writes 3,278 fewer pixels over the prefix — but that saving is 12.4 pixels per
+frame and does not offset anything.
+
+Correctness is unaffected in all four arms: every one reproduces the frame-100
+checkpoint `d89958b3…3d16`, including arm 1 with kills active, which is 2.3f's
+sealing rule holding. `prep_sta.res` reports `surv_max` exactly 1,194, zero
+overflow and zero protocol failures, matching 2.3h's validation to the digit.
+
+For 2.3i, the 4x4-cell experiment measured 60.28 → 74.86 ms/frame and was
+rejected. Its `.lod` is not in the tree, so the pair cannot be re-run; at the
+1.96 ratio measured here that comparison would scale to roughly 118 → 147
+ms/frame. **That is arithmetic on this section's ratio, not a measurement**, and
+it does not disturb the rejection, which rested on cell resolution not being the
+binding constraint rather than on the size of the gap.
+
+#### Lighting
+
+`lighting_enabled`, one byte, on the shipping `trex_m68030` build:
+
+| Stage | lighting on | lighting off | Delta |
+|---|---:|---:|---:|
+| DSP readback + packet build | 259.7 ms | 208.5 ms | **+51.2 ms** |
+| Software span rasterizer | 244.0 ms | 243.2 ms | -0.8 ms |
+| set_frame + clear + OT | 30.0 ms | 30.2 ms | +0.2 ms |
+| **Total** | **534.2 ms / 1.87 FPS** | **482.2 ms / 2.07 FPS** | **+52.0 ms (+10.8%)** |
+
+Both write the same 9,049,666 pixels and link the same 1,149 packets, so this is
+shading cost alone. **Section 2.1's conclusion that "the entire cost of flat
+shading is +0.20% of the frame" no longer describes this program**: the same A/B
+is now 9.7% of the frame. Most of that is not the emulator. 2.1's table is the
+flat-shading, reduced-mesh epoch; everything the per-corner Gouraud protocol
+added in 4.4/4.4a — three rotations and light sums per survivor, four level
+divisions, the 18-word record — arrived afterwards, and section 2 estimated it at
+~32 ms of readback stage under the doubled clock. 51.2 ms at the corrected clock
+is the same item, measured rather than estimated, on a DSP running at half the
+speed that estimate assumed.
+
+The practical consequence: **shading is the most expensive optional feature in
+this frame, it is entirely DSP-side, and turning it off is the single largest
+lever any A/B in this document has ever exposed.** It is not a lever anyone
+wants to pull — the shading is the point — but it sizes what 4.4a's protocol
+costs and it belongs in the same conversation as item 15, because it is DSP and
+transport work rather than rasterizer work.
+
+#### Gouraud bank selection
+
+`gouraud_enabled`, one byte, same build. Section 2 records the interpolation at
+**+8.1 ms**. It re-measures with the sign reversed:
+
+| Stage | gouraud on | gouraud off | Delta |
+|---|---:|---:|---:|
+| DSP readback + packet build | 259.7 ms | 259.8 ms | +0.1 ms |
+| Software span rasterizer | 244.0 ms | 248.5 ms | **-4.5 ms** |
+| **Total** | **534.2 ms** | **538.8 ms** | **-4.6 ms** |
+
+Per-span bank selection from the interpolated corner chain is now 4.6 ms/frame
+**cheaper** than the packet's single mean-level bank. This is not an emulator
+effect: it is a rasterizer figure, and 2.4b measured the rasterizer as moving
+0.2 ms between the two emulators. The +8.1 ms was taken against the 428.1 ms
+flat epoch, before 3.8's opaque path and 3.9's instruction-cache series rebuilt
+the row loop; that rasterizer no longer exists. Layout is identical by
+construction here and the repeat-run noise floor is 0.2 ms (2.4b), so -4.6 ms is
+outside noise — but the mechanism is not established, and 2.1's warning about
+rasterizer deltas applies to reading anything more into it.
+
+#### What could not be re-measured
+
+Not everything DSP-side is a live configuration:
+
+- **4.1, 4.1a, 4.1b, 4.1c, 4.1d** are protocol-migration deltas between epochs —
+  resident index list, survivors-only records, the span-setup record, the
+  switch-over, wire packing. Each compares a protocol that was replaced, and the
+  replaced side is no longer in the tree. They stand as history.
+- **2.3b through 2.3e** are labelled historical already and describe
+  configurations that no longer build.
+- **2.3h's nine per-site figures** were `.lod` swaps under one host binary. The
+  superseded `.lod` files are generated, not tracked, so the individual site
+  deltas cannot be re-run; only the post-harvest total measured here is current.
+- **4.4c** records no frame-time result to re-measure.
+
+The general rule this campaign supports: **DSP-side figures in this document
+scale by about 2 and should be read that way until re-measured, and the
+conclusions built on "the DSP work is hidden" need re-checking rather than
+re-scaling** — the prepass is the case where the number moved by the expected
+factor and the conclusion drawn from it did not survive.
 
 ### 2.5 Delta clearing: built, measured, rejected
 

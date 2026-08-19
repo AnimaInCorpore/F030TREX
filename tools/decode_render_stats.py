@@ -37,15 +37,16 @@ def load(path):
     n = len(data) // 4
     values = struct.unpack(">%dI" % n, data[:n * 4])
     fields = list(BASE)
+    stages = list(STAGES)
     if n >= 24:                     # -DTREX_PREPASS inserts t_prepass here
         fields.append("t_prepass")
-        STAGES.append(("DSP occlusion prepass", "t_prepass"))
+        stages.append(("DSP occlusion prepass", "t_prepass"))
     fields.append("dc_clear_longs")
-    return dict(zip(fields, values)), n
+    return dict(zip(fields, values)), n, stages
 
 
 def report(path):
-    stats, longs = load(path)
+    stats, longs, stages = load(path)
     frames = stats["frames"]
     print("%s  (%d longwords)" % (path, longs))
     if not frames:
@@ -61,7 +62,7 @@ def report(path):
 
     print("  -- stages, ms/frame --")
     accounted = 0.0
-    for label, key in STAGES:
+    for label, key in stages:
         ms = stats[key] * TICK_MS / frames
         accounted += ms
         print("    %-30s %8.1f ms  %5.1f%%" % (label, ms, 100.0 * ms / per_frame))
