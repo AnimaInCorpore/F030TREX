@@ -2289,13 +2289,38 @@ on the corrected binary gives the true DSP clock with upstream's port model.
 | stock 2.6.1 (DSP 2x fast, upstream port) | 175.6 ms | 449.7 ms / 2.22 FPS |
 | corrected DSP clock, upstream port | 263.9 ms | 538.4 ms / 1.86 FPS |
 | corrected DSP clock, corrected port | 259.7 ms | 534.2 ms / 1.87 FPS |
+| corrected DSP clock, **no port charge at all** | 259.8 ms | 534.1 ms / 1.87 FPS |
 
 **The DSP clock is the whole story: +88.7 ms.** The host-port recalibration is
 worth **-4.2 ms** to this program — a small net *gain*, because its traffic is
 dominated by block writes, and the new table charges a word write 3 instead of 4
-and a long write 7 instead of 12. Any future reasoning about this program's
-transport should treat the port model as approximately neutral and the DSP rate
-as the term that moved.
+and a long write 7 instead of 12.
+
+The last row is the stronger statement. Setting every constant to zero — no
+wait state charged on any host-port access in either direction — moves the frame
+by **0.1 ms**, and leaves the packet stage where the calibrated table leaves it.
+**The port's wait-state bill is not a term in this program's frame time at all.**
+That upstream's model still costs +4.1 ms is consistent rather than
+contradictory: the extra charge can only bite where the CPU runs ahead of the
+DSP, which is the bulk `Dsp_BlkUnpacked` upload path (long write 12 against 7),
+and is invisible everywhere the stage is already waiting on the DSP.
+
+That splits the 259.7 ms stage about as far as these timers can:
+
+| term | ms/frame | how it is known |
+|---|---:|---|
+| DSP-rate-sensitive | ~177 | the only part that moved when the clock halved: +88.7 ms on a doubling |
+| CPU-side unpack and packet build | ~83 | the residual |
+| host-port wait states | ~0 | measured directly, last table row |
+
+The ~177 ms is a **measured-delta-derived estimate**, not a timer reading: it
+assumes the rate-sensitive part scales exactly with the clock, which is what a
+halved clock on a fixed instruction stream should do but is not independently
+instrumented. The ~83 ms residual is bus traffic only — 2.4a's core prices
+instruction execution at zero — so it is a floor for the CPU-side cost on
+hardware, not an estimate of it. Any future reasoning about this program's
+transport should treat the port model as neutral, the DSP rate as the term that
+moved, and the CPU-side figure as understated.
 
 #### Cross-check on the other core
 
@@ -5143,9 +5168,23 @@ Cho Ren Sha pattern deliberately do not; either way, the CPU still executes
 the transfer loop. `DSP-XMIT -> DMA-RECORD` through the crossbar can write
 result records to ST-RAM autonomously. Combined with cross-frame pipelining,
 those records could already be in memory at frame start and the CPU
-would no longer service 86 result-chunk transactions. The upper bound is part
-of the measured 112.7 ms triangle/readback/packet stage; exact unpack, DSP and
-wire shares have not been isolated in the choreography build. Animation input
+would no longer service 86 result-chunk transactions. The 112.7 ms stage quoted
+in the rest of this paragraph is the LOD epoch's; **section 2.4b supersedes it
+and isolates the shares this sentence said had not been isolated**. Of the
+current 259.7 ms stage, about 177 ms is DSP-rate-sensitive and about 83 ms is
+CPU-side unpack and packet build, while the host port's own wait states measure
+**zero** — forcing every one of them to zero moves the frame 0.1 ms.
+
+That relocates the case for DMA. It is not a wait-state bill to be avoided: it
+is that the frame loop schedules nothing against those ~177 ms, so the CPU holds
+still through them while 244.0 ms of rasterizing waits behind. Cross-frame
+overlap (7.4a step 7) is where that goes, and DMA is what makes the overlap
+possible, since PIO forces the CPU to choose between transferring and
+rasterizing. Note also that the direct saving looks small here partly because
+2.4a's core charges nothing for executing the transfer loop and models no Videl
+contention, so PIO's real cost on a Falcon is invisible to this measurement by
+construction — which is a reason the comparison in 7.4 has to be run on
+hardware, not a reason to discount DMA. Animation input
 (4,933 words/frame average) would still use the host port unless a separate
 host-to-DSP DMA design were added.
 
@@ -5167,7 +5206,10 @@ The sound DMA frames 16-bit words; the record's slope fields are genuine
 24-bit values and need two DMA units each. Record volume varies with survivor
 count: roughly 10k-14k DSP words becomes 40-56 KB of 16-bit-framed output. At
 the Falcon's specified 1 MB/s ceiling this is 40-56 ms per frame. It fits
-inside the current 333.2 ms CPU rasterization window if truly asynchronous.
+inside the CPU rasterization window if truly asynchronous — that window is
+**244.0 ms** on the corrected emulator (2.4b), not the 333.2 ms of the LOD epoch
+this paragraph was written against, so the margin is narrower and the conclusion
+unchanged.
 The open question is the achieved rate and the M68030 slowdown when DMA, Videl
 and rasterizer all contend for ST-RAM; handshaking preserves data by stretching
 the transfer, not by creating bandwidth.
