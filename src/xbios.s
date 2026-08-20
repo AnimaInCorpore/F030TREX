@@ -33,6 +33,119 @@
 	addq	#2,a7
 	endm
 
+	macro	Supexec routine
+	pea	\1
+	move	#38,-(a7)
+	trap	#14
+	addq	#6,a7
+	endm
+
+; Falcon sound/DMA XBIOS calls.  The SSI span-stream bring-up keeps these
+; wrappers in the common include so its ownership code uses the same calling
+; convention as the proven F030MXDRV audio path.  The numeric arguments are
+; deliberately left at the call sites: clock, track, route and buffer modes
+; are part of the hardware protocol and must not be hidden in a convenience
+; macro.
+
+	macro	Locksnd
+	move	#128,-(a7)
+	trap	#14
+	addq	#2,a7
+	endm
+
+	macro	Unlocksnd
+	move	#129,-(a7)
+	trap	#14
+	addq	#2,a7
+	endm
+
+	macro	Soundcmd
+	move	\2,-(a7)
+	move	\1,-(a7)
+	move	#130,-(a7)
+	trap	#14
+	lea	6(a7),a7
+	endm
+
+	macro	Setbuffer
+	move.l	\3,-(a7)
+	move.l	\2,-(a7)
+	move	\1,-(a7)
+	move	#131,-(a7)
+	trap	#14
+	lea	12(a7),a7
+	endm
+
+	macro	Setmode
+	move	\1,-(a7)
+	move	#132,-(a7)
+	trap	#14
+	addq	#4,a7
+	endm
+
+	macro	Settracks
+	move	\2,-(a7)
+	move	\1,-(a7)
+	move	#133,-(a7)
+	trap	#14
+	lea	6(a7),a7
+	endm
+
+	macro	Setmontracks
+	move	\1,-(a7)
+	move	#134,-(a7)
+	trap	#14
+	addq	#4,a7
+	endm
+
+	macro	Buffoper
+	move	\1,-(a7)
+	move	#136,-(a7)
+	trap	#14
+	addq	#4,a7
+	endm
+
+	macro	Setinterrupt source,cause
+	move	\2,-(a7)
+	move	\1,-(a7)
+	move	#135,-(a7)
+	trap	#14
+	lea	6(a7),a7
+	endm
+
+	macro	Dsptristate
+	move	\2,-(a7)
+	move	\1,-(a7)
+	move	#137,-(a7)
+	trap	#14
+	lea	6(a7),a7
+	endm
+
+	macro	Devconnect
+	move	\5,-(a7)
+	move	\4,-(a7)
+	move	\3,-(a7)
+	move	\2,-(a7)
+	move	\1,-(a7)
+	move	#139,-(a7)
+	trap	#14
+	lea	12(a7),a7
+	endm
+
+	macro	Sndstatus
+	move	\1,-(a7)
+	move	#140,-(a7)
+	trap	#14
+	addq	#4,a7
+	endm
+
+	macro	Buffptr buffer
+	pea	\1
+	move	#141,-(a7)
+	trap	#14
+	addq	#6,a7
+	endm
+
 ; Falcon
 
 	macro	Montype

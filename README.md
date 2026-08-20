@@ -30,15 +30,17 @@ does:
 make DOSBOX=/Applications/dosbox.app/Contents/MacOS/DOSBox trex_dsp
 ```
 
-The full-mesh occlusion-culling release package is built with:
+The full-mesh release package is built with:
 
 ```sh
 make trex_release
 ```
 
-This produces `TREX/m68030/TREX.TOS`: the full 2,724-triangle model with armed
-DSP occlusion, textured Gouraud lighting, and no per-frame diagnostic file
-writes.  Its matching `TREX.LOD` is copied beside it for deployment, and
+This produces `TREX/m68030/TREX.TOS`: the full 2,724-triangle model with
+textured Gouraud lighting and no per-frame diagnostic file writes. The DSP
+occlusion path remains compiled in but defaults to disarmed because its current
+conservative yield measures as a net loss at the corrected DSP clock. Its
+matching `TREX.LOD` is copied beside it for deployment, and
 `TREX/m68030/README.TXT` is the 40-column, CRLF release note that ships with
 them; those three files together are the release archive.
 
@@ -76,6 +78,29 @@ produced. The T-Rex stays absent, although the release-only FPS field can
 still update on the black framebuffer. That is a TOS/DSP startup issue, not a
 rasterizer failure.
 
+To run the current SSI feed test on a real Falcon, build
+`make trex_ssi_loopback` and copy `TREXSSI.TOS` and `TREXSSI.LOD` together to
+an otherwise empty directory. This binary executes the validated full-row
+stream consumer and feeds the existing rasterizer on the M68030. It is safe
+to run on hardware, but it is still a software loopback: it does not enable
+the Falcon SSI, Crossbar or record-DMA registers. The run writes the frame-0
+diagnostic sidecars (`ssi_rows.res`, `ssi_rows.pkt`, `ssi_rows.status` and
+`ssihatri.sta`) so the transport and feed verdict can be copied back for
+inspection; later frames use the normal CPU path.
+
+`make trex_m68030_ssi_dma` builds the one target that really does claim the
+sound channel and start the Falcon record engine. It routes DSP transmit to
+DMA record, has the DSP transmit one framed 16,304-word burst over the SSI,
+waits for the declared end address, invalidates the 68030 data cache and
+compares the capture against a frame the host built beforehand -- then hands
+the channel back and renders normally. It writes `ssi_dma.res` (the
+stage-by-stage verdict plus every raw register image it saw) and
+`ssi_dcap.res` (the capture); `make ssi_dma_verify` re-derives the payload
+and CRC independently. Under the corrected Hatari the transfer arrives
+byte-exact. **Its 245 KB/s is the emulator's structural rate, not the
+Falcon's specified 1 MB/s**, and the cache contract is untested on real
+silicon -- see OPTIMIZATION.md 7.4b before quoting either.
+
 ### Hatari capture
 
 ![Texture-mapped T-Rex head in three-quarter view, running under Hatari](docs/screenshots/trex-hatari-three-quarter.png)
@@ -98,17 +123,19 @@ commands you can run here.
 
 Atari Falcon030, 16 MHz, DSP56001. Render target 240x224 inside a 256x224
 Videl mode. The supported release is a single full-mesh package: `TREX.TOS`
-uses the 2,724-triangle model, DSP occlusion, and textured Gouraud shading;
+uses the 2,724-triangle model and textured Gouraud shading; the optional DSP
+occlusion implementation is retained but default-disarmed;
 `TREX.LOD` is the matching DSP program. The deprecated reduced-mesh variant
 and its build assets have been removed. Performance figures in
 OPTIMIZATION.md are identified as Hatari/emulator results; physical Falcon030
 timing remains unmeasured. Figures predating OPTIMIZATION.md 2.4b were taken
 with the DSP at twice its real clock and are superseded by the re-measurement
-there. Over the 265-frame prefix the full-mesh **diagnostic** baseline is
-**534.2 ms / 1.87 FPS**, and the shipped `TREX.TOS` itself measures **536.5 ms /
-1.86 FPS** — the first headless timing of the release build (OPTIMIZATION.md
-2.4c), which also finds that disarming the occlusion prepass would make it
-533.0 ms / 1.88 FPS.
+there. Over the 265-frame prefix the current full-mesh **diagnostic** build
+measures **526.6 ms / 1.90 FPS**, and `TREX.TOS` measures **525.5 ms / 1.90
+FPS** with its release-only overlay and default-disarmed prepass. The
+frame-local normal-light cache removes 7.6 ms from the diagnostic DSP/packet
+path, while applying the prepass result from OPTIMIZATION.md 2.4c removes the
+release's previous 3.5 ms overhang; section 2.4d has the fixed-prefix gates.
 
 The v1.2 release has a measured figure: **511.2 ms per frame, 1.956 FPS**
 under a Hatari corrected to run the DSP at the Falcon's real clock
@@ -117,12 +144,17 @@ emulator that ran the DSP at twice its rate and are ~24% optimistic on the
 whole frame; sections 2.4b--2.4e are the corrected ones. Still not a Falcon
 measurement.
 
-The DSP program is the post-harvest build of OPTIMIZATION.md section 2.3h:
+The DSP program is the post-harvest build of OPTIMIZATION.md section 2.3h --
 nine sites reworked for size and speed at byte-identical output, with the
-armed occlusion prepass measured 25.6% cheaper in Hatari and the freed
-program memory documented as the budget for future occlusion-yield work
-(section 2.3i records why finer coverage cells alone were measured out and
-what the actual binding constraint is).
+armed occlusion prepass measured 25.6% cheaper in Hatari -- plus 2.4d's
+128-entry normal-light cache, which lets repeated corner normals bypass their
+3x3 rotation and six direct-light dot products while retaining the
+per-triangle depth cue. The default build ends at `P:$0995`, 42 words below
+the resident-index ceiling. Two instruments are conditionally assembled
+because they do not both fit: the `CMD_SSI_STREAM` transport probe of section
+7.4b (`SSIPROBE`, 103 words) and the cross-frame window burn loop
+(`WINPROBE`, 44 words). The shipping and measurement builds take the window
+probe only.
 
 ## Feature comparison with the PS1 reference
 
@@ -135,7 +167,7 @@ release rather than claiming pixel-for-pixel equivalence with the PS1 demo.
 | Mesh | Original TMD model | Same full mesh: 1,376 vertices and 2,724 triangles |
 | Animation | Authored morph-target choreography | Extracted PS1 morph data rebuilt on the DSP: 46 full gait poses plus sparse targets 5–8; the port adds a post-source hold after frame 273 |
 | Transform and culling | Original console geometry pipeline | DSP56001 handles transform, perspective projection, near-plane, degenerate-area, back-face and screen culling |
-| Occlusion | Reference-scene behavior | Falcon addition: an armed DSP screen-space prepass builds a conservative triangle kill bitmap during the authored choreography and the continuing post-frame-273 hold |
+| Occlusion | Reference-scene behavior | Falcon addition: an optional DSP screen-space prepass builds a conservative triangle kill bitmap; retained for yield work, default-disarmed in the release after corrected-clock measurement |
 | Lighting | Original PS1 lighting | Textured Gouraud shading with three coloured lights and reddish ambient light; documented as not yet an exact PS1 lighting reproduction |
 | Textures | PS1 TIM pages and CLUT metadata | Extracted PS1 texture pages and CLUTs, sampled by the M68030 software rasterizer |
 | Rasterization | PS1 hardware GPU path | M68030 software rasterizer; the DSP supplies projected vertices and span setup, and the host links the Ordering Table |

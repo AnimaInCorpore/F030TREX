@@ -8,6 +8,15 @@ Field 22 (t_prepass) exists only in -DTREX_PREPASS builds, which is what the
 23-vs-24 longword length distinguishes.
 
 Usage: decode_render_stats.py render_stats.res [more.res ...]
+       decode_render_stats.py --split normal.res nopix.res norows.res
+                              [--expect-frames N]
+
+--split turns the three profile builds of OPTIMIZATION.md 8.2 into the
+rasterizer decomposition.  NO_ROWS keeps only the per-packet setup and
+NO_PIXELS keeps setup plus the row walk, so the three rasterizer totals
+subtract into the three terms.  The subtraction is only meaningful when all
+three runs cover the SAME frames -- the choreography is not uniform -- which
+is what --expect-frames enforces.
 """
 import struct
 import sys
@@ -83,8 +92,68 @@ def report(path):
         print("    %-30s %10d" % (key, stats[key]))
 
 
+def per_frame_ms(stats, key):
+    return stats[key] * TICK_MS / stats["frames"]
+
+
+def frame_ms(stats):
+    return (stats["hz200_end"] - stats["hz200_start"]) * TICK_MS / stats["frames"]
+
+
+def split(paths, expect_frames):
+    """Decompose the rasterizer from the normal/NO_PIXELS/NO_ROWS trio."""
+    labels = ("normal", "NO_PIXELS", "NO_ROWS")
+    runs = [load(path)[0] for path in paths]
+
+    frames = {stats["frames"] for stats in runs}
+    if len(frames) != 1:
+        sys.exit("runs cover different frame counts %s -- re-converge the VBL "
+                 "budgets before subtracting" % sorted(frames))
+    frames = frames.pop()
+    if expect_frames is not None and frames != expect_frames:
+        sys.exit("runs cover %d frames, expected %d -- re-converge the VBL "
+                 "budgets" % (frames, expect_frames))
+
+    raster = [per_frame_ms(stats, "t_raster") for stats in runs]
+    packet = [per_frame_ms(stats, "t_packets") for stats in runs]
+    total = frame_ms(runs[0])
+
+    setup = raster[2]
+    rows = raster[1] - raster[2]
+    pixels = raster[0] - raster[1]
+    other = total - packet[0] - raster[0]
+
+    print("  frames                        : %d (all three runs)" % frames)
+    print("  -- patch builds, ms/frame --")
+    for label, stats, r in zip(labels, runs, raster):
+        print("    %-14s rasterizer %7.1f   frame %7.1f"
+              % (label, r, frame_ms(stats)))
+    print("  -- packet stage cross-check, ms/frame --")
+    print("    %s" % "  ".join("%s %.1f" % (l, p) for l, p in zip(labels, packet)))
+    print("    the patches must not move this; a drift here invalidates the split")
+    print("  -- split, ms/frame --")
+    print("    %-34s %7.1f" % ("DSP setup + readback + packet build", packet[0]))
+    print("    %-34s %7.1f" % ("Raster per-packet setup", setup))
+    print("    %-34s %7.1f" % ("Raster row/span walk", rows))
+    print("    %-34s %7.1f" % ("Raster pixel loops", pixels))
+    print("    %-34s %7.1f" % ("set_frame + clear + OT + rounding", other))
+    print("    %-34s %7.1f ms / %.2f FPS" % ("Total", total, 1000.0 / total))
+
+
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
+    args = sys.argv[1:]
+    if not args:
         sys.exit(__doc__)
-    for path in sys.argv[1:]:
-        report(path)
+    if args[0] == "--split":
+        args = args[1:]
+        expect = None
+        if "--expect-frames" in args:
+            i = args.index("--expect-frames")
+            expect = int(args[i + 1])
+            args = args[:i] + args[i + 2:]
+        if len(args) != 3:
+            sys.exit("--split needs exactly normal.res nopix.res norows.res")
+        split(args, expect)
+    else:
+        for path in args:
+            report(path)

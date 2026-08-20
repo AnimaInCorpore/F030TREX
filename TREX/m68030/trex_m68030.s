@@ -371,17 +371,18 @@ SCREEN_ALIGN		= 256
 DSP_STATE_CLOSED	= 0
 DSP_STATE_OPEN		= 1
 
-; The X layout ends at X:$3D4B: the projection overlays the camera array in
-; place, and the freed words carry the resident UV pairs plus the widened
-; span-record output buffer.
+; BUILD uses X through $3DF0: projected vertices overlay the camera array,
+; followed by the split corner normals, chunk UVs, span-record output, paired
+; light vectors and the frame-local normal-light cache.  The optional prepass
+; overlays the BUILD-dead tail and owns masks/kill/status through X:$3FFF.
 DSP_X_RESERVE		= 15872
-; Two resident arrays share Y: the packed triangle index list (5448 words) and
-; the face normals (8172), running $09C0..$3EF3.  Neither can start lower: the
-; Falcon maps Y:$0200 upwards onto the same physical words as external P
-; memory, so anything below the program's end (P:$06BB today -- check the DSP
-; program after edits; limit P:$09BF) would overwrite the program itself. See
-; the Y-memory notes in TREX/dsp/trex_dsp.asm.  The Falcon reports 16127 free
-; Y words.
+; Two resident arrays share external Y: the three-word packed full triangle
+; index list (8,172 words) at $09C0..$29AB and the first 1,905 corner normals
+; (5,715 words) at $29AC..$3FFE.  Neither can start lower: the Falcon maps
+; Y:$0200 upwards onto the same physical words as external P memory, so any
+; array below the program end (P:$091E now; limit P:$09BF) overwrites code.
+; See the Y-memory notes in TREX/dsp/trex_dsp.asm.  The Falcon reports 16,127
+; free Y words before this reservation.
 DSP_Y_RESERVE		= 16120
 DSP_ABILITY		= 0
 DSP_LOAD_BUFFER_BYTES	= 8192
@@ -399,6 +400,9 @@ DSP_CMD_SET_ANIMATED_FRAME	= 12
 DSP_CMD_LOAD_ANIMATION_GAIT	= 13
 DSP_CMD_APPLY_ANIMATION_TARGET	= 14
 DSP_CMD_FINISH_ANIMATED_FRAME	= 15
+; The DSP's control range: bit 6 set, bit 0 clear.  Only the live SSI
+; transport probe uses it; every other build never issues it.
+CMD_SSI_STREAM		= $40
 
 DSP_ACK_LOAD		= $00700002
 DSP_ACK_FRAME		= $00700003
@@ -458,6 +462,49 @@ DSP_TRI_OCCLUDER_BIT	= $00800000
 ; The level STARTS travel the wire because they are lighting results the
 ; host cannot rebuild.
 DSP_SPAN_RECORD_WORDS	= 18
+
+	ifd TREX_SSI_SHADOW
+; Host-only compact-record shadow diagnostic.  40,000 words leave room for
+; the observed full-mesh survivor corpus plus the 14-word frame envelope.
+; This binary still uses host-port GET_TRIANGLES and never claims sound DMA.
+SSI_SHADOW_CAPACITY_WORDS	= 40000
+SSI_SHADOW_DUMP_FRAME	= 0
+	endc
+
+	ifd TREX_SSI_ROWS
+; Host-only full-row shadow diagnostic.  60,000 words cover the current
+; observed shade-bound estimate (about 57,900 words) plus header/footer slack.
+; This binary also uses host-port output only; it never starts record DMA.
+SSI_ROW_SHADOW_CAPACITY_WORDS	= 60000
+SSI_ROW_SHADOW_DUMP_FRAME	= 0
+	endc
+
+	ifd TREX_SSI_HATARI
+; Hatari-only transport loopback.  TREX_SSI_ROWS remains required: the
+; loopback consumes the completed full-row stream produced by that path.
+	endc
+
+	ifd TREX_SSI_DMA
+; Live Falcon SSI transport probe.  This is the only build that actually
+; claims the sound channel, routes DSP-XMIT to DMA-RECORD and starts the
+; record engine; every other SSI target is host-port only.
+;
+; The frame is sized to 16,304 words on purpose: that is exactly the measured
+; frame-0 full-row span stream, so a transfer time here is directly
+; comparable with what the real stream would cost on the same machine.
+SSI_DMA_PROBE_TOTAL_WORDS	= 16304
+SSI_DMA_PROBE_PAYLOAD_WORDS	= SSI_DMA_PROBE_TOTAL_WORDS-14
+SSI_DMA_PROBE_SEED	= $1234
+SSI_DMA_PROBE_FRAME_ID	= 1
+SSI_DMA_PROBE_MESH_ID	= TREX_PRIMITIVES
+SSI_DMA_PROBE_GENERATION	= 1
+SSI_DMA_PROBE_STATUS_LONGS	= 40
+SSI_DMA_PROBE_COMMAND_WORDS	= 17
+; 200 Hz ticks the host will wait for the DSP's two reply words after the
+; transfer has finished or timed out.  The DSP abandons a stalled burst on
+; its own bounded spin, so this only has to cover the drain.
+SSI_DMA_PROBE_ACK_TIMEOUT	= 200
+	endc
 
 DSP_UPLOAD_WORDS	= 2+(TREX_VERTICES*3)
 ; Animated frames use acknowledged sub-transactions so no source block crosses
@@ -638,6 +685,23 @@ trex_init
 	bsr	dsp_upload_uvs
 	bsr	gpu_open
 	bsr	lib_tim_upload_all
+	ifd	TREX_SSI_SHADOW
+	; The diagnostic binary exercises ownership and raw Crossbar read-back,
+	; but leaves the channel stopped until a future producer is ready.  The
+	; shipping renderer has no call here because its host-port path remains
+	; the safe default.
+	bsr	ssi_shadow_probe_route
+	bsr	ssi_shadow_write_route
+	endc
+
+	ifd	TREX_SSI_DMA
+	; The one build that actually moves bytes over the Falcon SSI.  It runs
+	; once, here, with the DSP loaded and idle and no frame in flight, and
+	; hands the channel back before the renderer starts.  Everything the
+	; renderer does afterwards is the unchanged host-port path.
+	bsr	ssi_dma_probe_run
+	bsr	ssi_dma_probe_write_capture
+	endc
 
 	; These are the state objects a real implementation would pass to the
 	; Psy-Q/GTE and DSP backends.
@@ -672,6 +736,10 @@ trex_dummy_frame
 
 	clr.l	frame_number
 	clr.l	animation_frame
+	ifd TREX_SSI_HATARI
+	move.l	#-1,ssi_hatari_feed_pending_frame
+	clr.l	ssi_hatari_feed_pending
+	endc
 
 	; Zero the timing accumulators, then bracket the whole loop with both
 	; system clocks.  stat_frames counts what actually ran.
@@ -740,6 +808,14 @@ trex_dummy_frame
 	TimeMark	stat_mark_packets
 	bsr	dsp_packets_finish
 	TimeAdd	stat_mark_packets,stat_t_packets
+	ifd	TREX_SSI_SHADOW
+	cmpi.l	#SSI_SHADOW_DUMP_FRAME,frame_number
+	bne	.ssi_shadow_no_dump
+	tst.l	ssi_shadow_dumped
+	bne	.ssi_shadow_no_dump
+	bsr	ssi_shadow_write_dump
+.ssi_shadow_no_dump
+	endc
 
 	; Frame N is fully unpacked and linked; hand the NEXT frame's animation
 	; to the DSP before rasterizing, so its morph, transform and projection
@@ -776,7 +852,7 @@ trex_dummy_frame
 	moveq	#0,d0
 .z_spin_ready
 	move.l	d0,y_spin_index
-	; The prepass now stays armed through the synthetic hold as well.  The
+	; When enabled, the prepass stays armed through the synthetic hold.  The
 	; one-shot disarm that used to fire here guarded against the former DSP
 	; sweep, whose full-grid cell cursor visited all 3,360 mask cells per
 	; survivor and overran the frame budget on the hold's right-edge poses;
@@ -849,6 +925,9 @@ trex_shutdown
 	; final diagnostic flush on a clean keypress exit.
 	else
 	bsr	trex_write_render_stats
+	endc
+	ifd	TREX_SSI_SHADOW
+	bsr	ssi_shadow_release_route
 	endc
 	bsr	gpu_close
 	bsr	dsp_close
@@ -972,6 +1051,348 @@ trex_write_render_stats
 .trex_prepass_done
 	endc
 	rts
+
+	ifd	TREX_SSI_SHADOW
+; Write the selected compact frame as raw big-endian SSI words.  This is a
+; Hatari/host-port verification artifact only; no DMA transfer is active and
+; the default binary contains no call to this routine.
+; Claim the record channel for the optional bring-up binary and validate the
+; raw Crossbar fields immediately after Devconnect.  The DMA engine remains
+; stopped: this is an ownership/read-back probe, not a live producer.
+ssi_shadow_probe_route
+	clr.l	ssi_shadow_route_active
+	lea	ssi_shadow_buffer,a0
+	move.l	a0,a1
+	adda.l	#(SSI_SHADOW_CAPACITY_WORDS*2),a1
+	jsr	ssi_dma_claim
+	move.l	d0,ssi_shadow_route_claim_result
+	move.l	ssi_dma_route_status,ssi_shadow_route_status
+	move.l	ssi_dma_claim_stage,ssi_shadow_route_stage
+	moveq	#0,d0
+	move.w	ssi_dma_route_source,d0
+	move.l	d0,ssi_shadow_route_source
+	moveq	#0,d0
+	move.w	ssi_dma_route_destination,d0
+	move.l	d0,ssi_shadow_route_destination
+	tst.l	ssi_shadow_route_claim_result
+	bne	.ssi_shadow_probe_done
+	move.l	#1,ssi_shadow_route_active
+.ssi_shadow_probe_done
+	rts
+
+; Write five big-endian longwords: claim result, validator result, claim stage,
+; raw source, and raw destination.  The report is deliberately separate from
+; ssi_shad.res so a compact-stream decode cannot be mistaken for a route test.
+ssi_shadow_write_route
+	lea	ssi_shadow_route_record,a0
+	move.l	ssi_shadow_route_claim_result,(a0)+
+	move.l	ssi_shadow_route_status,(a0)+
+	move.l	ssi_shadow_route_stage,(a0)+
+	move.l	ssi_shadow_route_source,(a0)+
+	move.l	ssi_shadow_route_destination,(a0)+
+	Fcreate	ssi_route_path,#0
+	tst.l	d0
+	bmi	.ssi_shadow_route_done
+	move.w	d0,d7
+	Fwrite	d7,#20,ssi_shadow_route_record
+	Fclose	d7
+.ssi_shadow_route_done
+	rts
+
+ssi_shadow_release_route
+	tst.l	ssi_shadow_route_active
+	beq	.ssi_shadow_release_done
+	jsr	ssi_dma_release
+	clr.l	ssi_shadow_route_active
+.ssi_shadow_release_done
+	rts
+
+ssi_shadow_write_dump
+	movem.l	d0-d7/a0-a6,-(sp)
+	move.l	ssi_shadow_actual_words,d6
+	tst.l	d6
+	beq	.ssi_shadow_dump_done
+	lsl.l	#1,d6
+	Fcreate	ssi_shadow_dump_path,#0
+	tst.l	d0
+	bmi	.ssi_shadow_dump_done
+	move.w	d0,d7
+	Fwrite	d7,d6,ssi_shadow_buffer
+	Fclose	d7
+	move.l	#1,ssi_shadow_dumped
+.ssi_shadow_dump_done
+	movem.l	(sp)+,d0-d7/a0-a6
+	rts
+	endc
+
+	ifd	TREX_SSI_DMA
+; -----------------------------------------------------------------------------
+; Live SSI -> Crossbar -> DMA-RECORD transport probe
+;
+; Order matters and is not negotiable:
+;
+;   claim/route -> build the expected frame -> arm the record window
+;   -> hand the DSP its parameters -> wait for the declared end address
+;   -> invalidate the data cache -> compare -> collect the DSP's verdict
+;
+; The record window is armed BEFORE the DSP is told to transmit, because the
+; handshake makes DMA-RECORD the master: with the channel stopped the
+; Crossbar never clocks the SSI and the DSP's first word never leaves.  The
+; DSP's own reply is collected LAST, after the transfer, because it does not
+; answer until its burst is finished.
+;
+; Nothing here is on a rendering path.  A failure at any stage leaves the
+; sound channel restored and the renderer untouched.
+ssi_dma_probe_run
+	movem.l	d0-d7/a0-a6,-(sp)
+	lea	ssi_dma_probe_status,a0
+	moveq	#SSI_DMA_PROBE_STATUS_LONGS-1,d0
+	move.l	#-1,d1
+.ssi_dma_probe_clear
+	move.l	d1,(a0)+
+	dbra	d0,.ssi_dma_probe_clear
+	clr.l	ssi_dma_probe_active
+
+	tst.l	dsp_program_loaded
+	beq	.ssi_dma_probe_done
+
+	; Claim, route and validate.  ssi_dma_claim publishes its own stage and
+	; raw read-back whether it succeeds or not.
+	lea	ssi_dma_record_buffer,a0
+	move.l	a0,a1
+	adda.l	#(SSI_DMA_PROBE_TOTAL_WORDS*2),a1
+	jsr	ssi_dma_claim
+	move.l	d0,ssi_dma_probe_claim_result
+	move.l	ssi_dma_claim_stage,ssi_dma_probe_claim_stage
+	move.l	ssi_dma_route_status,ssi_dma_probe_route_status
+	bsr	ssi_dma_probe_copy_regs
+	tst.l	ssi_dma_probe_claim_result
+	bne	.ssi_dma_probe_done
+	move.l	#1,ssi_dma_probe_active
+
+	; Build the expected frame on the host first, so the capture is checked
+	; by compare instead of by re-deriving it from whatever arrived.
+	lea	ssi_dma_expect_buffer,a0
+	move.l	#SSI_DMA_PROBE_TOTAL_WORDS,d0
+	move.l	#SSI_DMA_PROBE_FRAME_ID,d1
+	move.l	#SSI_DMA_PROBE_MESH_ID,d2
+	move.l	#SSI_DMA_PROBE_GENERATION,d3
+	jsr	ssi_dma_probe_begin
+	tst.l	d0
+	bne	.ssi_dma_probe_release
+	move.l	#SSI_DMA_PROBE_PAYLOAD_WORDS,d0
+	move.l	#SSI_DMA_PROBE_SEED,d1
+	jsr	ssi_dma_probe_append_ramp
+	tst.l	d0
+	bne	.ssi_dma_probe_release
+	jsr	ssi_dma_shadow_finish
+	tst.l	d0
+	bmi	.ssi_dma_probe_release
+	move.l	d0,ssi_dma_probe_built_words
+	cmpi.l	#SSI_DMA_PROBE_TOTAL_WORDS,d0
+	bne	.ssi_dma_probe_release
+
+	; Poison the landing buffer.  Without this a transfer that never
+	; happened would be indistinguishable from one that arrived correct if
+	; the buffer happened to hold the right bytes already.
+	lea	ssi_dma_record_buffer,a0
+	move.l	#SSI_DMA_PROBE_TOTAL_WORDS-1,d0
+.ssi_dma_probe_poison
+	move.w	#$dead,(a0)+
+	dbra	d0,.ssi_dma_probe_poison
+
+	bsr	ssi_dma_probe_build_command
+
+	lea	ssi_dma_record_buffer,a0
+	move.l	a0,a1
+	adda.l	#(SSI_DMA_PROBE_TOTAL_WORDS*2),a1
+	jsr	ssi_dma_arm_record
+	move.l	d0,ssi_dma_probe_arm_result
+	bne	.ssi_dma_probe_release
+	bsr	ssi_dma_probe_copy_armed
+
+	; The DSP consumes all 17 parameter words before it touches the SSI, so
+	; this send cannot deadlock against the armed channel.
+	lea	ssi_dma_probe_command,a0
+	move.l	#SSI_DMA_PROBE_COMMAND_WORDS,d0
+	moveq	#0,d1
+	jsr	dsp_block_handshake
+
+	moveq	#0,d0
+	jsr	ssi_dma_wait_record
+	move.l	d0,ssi_dma_probe_wait_result
+	move.l	ssi_dma_wait_ticks,ssi_dma_probe_wait_ticks
+	move.l	ssi_dma_completed_bytes,ssi_dma_probe_bytes
+
+	; The record engine wrote system RAM without the 68030 seeing the bus
+	; cycles.  Drop every data-cache line before the compare reads them.
+	jsr	ssi_dma_invalidate_dcache
+	move.l	ssi_dma_cacr_image,ssi_dma_probe_cacr
+
+	bsr	ssi_dma_probe_compare
+	bsr	ssi_dma_probe_collect_ack
+
+.ssi_dma_probe_release
+	tst.l	ssi_dma_probe_active
+	beq	.ssi_dma_probe_done
+	jsr	ssi_dma_release
+	clr.l	ssi_dma_probe_active
+.ssi_dma_probe_done
+	bsr	ssi_dma_probe_write_status
+	movem.l	(sp)+,d0-d7/a0-a6
+	rts
+
+; Seventeen host-port words: the command, the generated payload length, the
+; ramp seed, then the eight header and six footer words taken verbatim from
+; the frame the host just built.  The DSP only relays the envelope, so both
+; sides are describing the same bytes by construction.
+ssi_dma_probe_build_command
+	lea	ssi_dma_probe_command,a0
+	move.l	#CMD_SSI_STREAM,(a0)+
+	move.l	#SSI_DMA_PROBE_PAYLOAD_WORDS,(a0)+
+	move.l	#SSI_DMA_PROBE_SEED,(a0)+
+	lea	ssi_dma_expect_buffer,a1
+	moveq	#7,d0
+.ssi_dma_probe_cmd_header
+	moveq	#0,d1
+	move.w	(a1)+,d1
+	move.l	d1,(a0)+
+	dbra	d0,.ssi_dma_probe_cmd_header
+	lea	ssi_dma_expect_buffer+((SSI_DMA_PROBE_TOTAL_WORDS-6)*2),a1
+	moveq	#5,d0
+.ssi_dma_probe_cmd_footer
+	moveq	#0,d1
+	move.w	(a1)+,d1
+	move.l	d1,(a0)+
+	dbra	d0,.ssi_dma_probe_cmd_footer
+	rts
+
+; Word-for-word compare of the capture against the expectation, reporting the
+; FIRST divergence.  An index plus both values localises a transport fault to
+; a position in the stream, which is what a ramp payload is for.
+ssi_dma_probe_compare
+	lea	ssi_dma_record_buffer,a0
+	lea	ssi_dma_expect_buffer,a1
+	moveq	#0,d2
+	move.l	#SSI_DMA_PROBE_TOTAL_WORDS-1,d3
+.ssi_dma_probe_compare_word
+	move.w	(a0)+,d0
+	move.w	(a1)+,d1
+	cmp.w	d1,d0
+	bne	.ssi_dma_probe_mismatch
+	addq.l	#1,d2
+	dbra	d3,.ssi_dma_probe_compare_word
+	clr.l	ssi_dma_probe_verify
+	move.l	#-1,ssi_dma_probe_bad_index
+	move.l	#-1,ssi_dma_probe_bad_got
+	move.l	#-1,ssi_dma_probe_bad_want
+	rts
+.ssi_dma_probe_mismatch
+	move.l	#-1,ssi_dma_probe_verify
+	move.l	d2,ssi_dma_probe_bad_index
+	andi.l	#$ffff,d0
+	move.l	d0,ssi_dma_probe_bad_got
+	andi.l	#$ffff,d1
+	move.l	d1,ssi_dma_probe_bad_want
+	rts
+
+; Collect the DSP's two reply words under a bounded wait.  dsp_block_handshake
+; would spin forever on a DSP that never answers, and a bring-up probe whose
+; failure mode is a hung machine reports nothing at all.
+ssi_dma_probe_collect_ack
+	move.l	$4ba.w,d3
+	lea	ssi_dma_probe_ack,a1
+	moveq	#1,d4
+.ssi_dma_probe_ack_word
+	btst.b	#DSP_HOST_ISR_RXDF,DSP_HOST_ISR
+	bne	.ssi_dma_probe_ack_take
+	move.l	$4ba.w,d5
+	sub.l	d3,d5
+	cmpi.l	#SSI_DMA_PROBE_ACK_TIMEOUT,d5
+	bcs	.ssi_dma_probe_ack_word
+	move.l	#-2,ssi_dma_probe_ack
+	move.l	#-2,ssi_dma_probe_dsp_status
+	rts
+.ssi_dma_probe_ack_take
+	move.l	DSP_HOST_DATA,(a1)+
+	dbra	d4,.ssi_dma_probe_ack_word
+	rts
+
+ssi_dma_probe_copy_regs
+	lea	ssi_dma_xbios_results,a0
+	lea	ssi_dma_probe_xbios,a1
+	moveq	#12,d1
+.ssi_dma_probe_copy_xbios
+	move.l	(a0)+,(a1)+
+	dbra	d1,.ssi_dma_probe_copy_xbios
+	moveq	#0,d0
+	move.w	ssi_dma_route_source,d0
+	move.l	d0,ssi_dma_probe_route_source
+	moveq	#0,d0
+	move.w	ssi_dma_route_destination,d0
+	move.l	d0,ssi_dma_probe_route_destination
+	moveq	#0,d0
+	move.w	ssi_dma_devconnect_source,d0
+	move.l	d0,ssi_dma_probe_devconnect_source
+	moveq	#0,d0
+	move.w	ssi_dma_devconnect_destination,d0
+	move.l	d0,ssi_dma_probe_devconnect_destination
+	moveq	#0,d0
+	move.b	ssi_dma_old_control,d0
+	move.l	d0,ssi_dma_probe_old_control
+	moveq	#0,d0
+	move.b	ssi_dma_old_int_control,d0
+	move.l	d0,ssi_dma_probe_old_int_control
+	rts
+
+ssi_dma_probe_copy_armed
+	moveq	#0,d0
+	move.b	ssi_dma_armed_control,d0
+	move.l	d0,ssi_dma_probe_armed_control
+	moveq	#0,d0
+	move.b	ssi_dma_armed_int_control,d0
+	move.l	d0,ssi_dma_probe_armed_int_control
+	moveq	#0,d0
+	move.w	ssi_dma_armed_mode,d0
+	move.l	d0,ssi_dma_probe_armed_mode
+	moveq	#0,d0
+	move.b	ssi_dma_armed_divider,d0
+	move.l	d0,ssi_dma_probe_armed_divider
+	moveq	#0,d0
+	move.w	ssi_dma_armed_xbar_source,d0
+	move.l	d0,ssi_dma_probe_armed_xbar_source
+	moveq	#0,d0
+	move.w	ssi_dma_armed_xbar_destination,d0
+	move.l	d0,ssi_dma_probe_armed_xbar_destination
+	rts
+
+; Twenty-six big-endian longwords.  Every stage that can fail publishes both
+; its verdict and the raw register image it saw, so one run is enough to tell
+; a refused claim from a wrong route from a stalled transmitter.
+ssi_dma_probe_write_status
+	Fcreate	ssi_dma_status_path,#0
+	tst.l	d0
+	bmi	.ssi_dma_probe_status_done
+	move.w	d0,d7
+	Fwrite	d7,#(SSI_DMA_PROBE_STATUS_LONGS*4),ssi_dma_probe_status
+	Fclose	d7
+.ssi_dma_probe_status_done
+	rts
+
+; Dump the capture so the decoder can be run against the actual bytes, not
+; only against the host's pass/fail verdict.
+ssi_dma_probe_write_capture
+	tst.l	ssi_dma_probe_arm_result
+	bne	.ssi_dma_probe_capture_done
+	Fcreate	ssi_dma_capture_path,#0
+	tst.l	d0
+	bmi	.ssi_dma_probe_capture_done
+	move.w	d0,d7
+	Fwrite	d7,#(SSI_DMA_PROBE_TOTAL_WORDS*2),ssi_dma_record_buffer
+	Fclose	d7
+.ssi_dma_probe_capture_done
+	rts
+	endc
 
 ; Write the last rendered frame to fb.res for headless inspection.  Reads
 ; last_rendered_base, which is latched before the Videl flip -- see section
@@ -1894,6 +2315,9 @@ dsp_packets_begin
 	; nothing reads until the resolve sweep inside gpu_rasterize_ot, long after
 	; build_gpu_packet_heads has consumed them.  rx_buffer survives for the
 	; no-DSP fallback, which still uses the copying builder.
+	ifd	TREX_SSI_SHADOW
+	bsr	ssi_shadow_begin_frame
+	endc
 	lea	gpu_packet_buffer,a1
 	move.l	a1,dsp_triangle_output_ptr
 	clr.l	dsp_triangle_output_count
@@ -1941,6 +2365,632 @@ dsp_send_build_chunk
 	Dsp_BlkUnpacked	dsp_triangle_chunk_tx,d5,dsp_rx_buffer,#0
 	rts
 
+	ifd	TREX_SSI_SHADOW
+; The optional host-shadow path is deliberately separate from the renderer's
+; packet records.  It copies raw GET_TRIANGLES records before unpack so a
+; future DMA capture can be compared against the exact DSP output.
+ssi_shadow_begin_frame
+	clr.l	ssi_shadow_failed
+	clr.l	ssi_shadow_active
+	lea	ssi_shadow_buffer,a0
+	move.l	#SSI_SHADOW_CAPACITY_WORDS,d0
+	move.l	frame_number,d1
+	moveq	#1,d2
+	move.l	frame_number,d3
+	jsr	ssi_dma_shadow_begin
+	tst.l	d0
+	bne	.ssi_shadow_begin_failed
+	move.l	#1,ssi_shadow_active
+	rts
+.ssi_shadow_begin_failed
+	move.l	#1,ssi_shadow_failed
+	rts
+
+; Append the raw records from the chunk just acknowledged.  w0's low five
+; bits are the chunk-local survivor index; the launch bookkeeping has already
+; published the chunk's global base in dsp_triangle_unpack_base.
+ssi_shadow_append_chunk
+	tst.l	ssi_shadow_active
+	beq	.ssi_shadow_append_done
+	tst.l	ssi_shadow_failed
+	bne	.ssi_shadow_append_done
+	move.l	dsp_triangle_chunk_survivors,d4
+	tst.l	d4
+	beq	.ssi_shadow_append_done
+	move.l	dsp_triangle_unpack_base,d5
+	lea	dsp_triangle_chunk_rx+8,a4
+	subq.l	#1,d4
+.ssi_shadow_append_loop
+	move.l	(a4),d0
+	andi.l	#$1f,d0
+	add.l	d5,d0
+	move.l	a4,a0
+	jsr	ssi_dma_shadow_append_record
+	tst.l	d0
+	bne	.ssi_shadow_append_failed
+	adda.l	#(DSP_SPAN_RECORD_WORDS*4),a4
+	dbra	d4,.ssi_shadow_append_loop
+	bra	.ssi_shadow_append_done
+.ssi_shadow_append_failed
+	move.l	#1,ssi_shadow_failed
+.ssi_shadow_append_done
+	rts
+
+ssi_shadow_finish_frame
+	tst.l	ssi_shadow_active
+	beq	ssi_shadow_finish_return
+	tst.l	ssi_shadow_failed
+	bne	.ssi_shadow_finish_discard
+	jsr	ssi_dma_shadow_finish
+	tst.l	d0
+	bmi	.ssi_shadow_finish_failed
+	move.l	d0,ssi_shadow_actual_words
+	clr.l	ssi_shadow_active
+	bra	ssi_shadow_finish_return
+.ssi_shadow_finish_failed
+	move.l	#1,ssi_shadow_failed
+	move.l	ssi_dma_shadow_words,ssi_shadow_actual_words
+	; Fall through to the same discard path as a transport failure.
+	bra	ssi_shadow_abort_frame
+.ssi_shadow_finish_discard
+	move.l	ssi_dma_shadow_words,ssi_shadow_actual_words
+
+ssi_shadow_abort_frame
+	tst.l	ssi_shadow_active
+	beq	.ssi_shadow_abort_done
+	jsr	ssi_dma_shadow_abort
+	clr.l	ssi_shadow_active
+.ssi_shadow_abort_done
+	rts
+
+ssi_shadow_finish_return
+	rts
+	endc
+
+	ifd TREX_SSI_ROWS
+; Build one complete-row shadow frame from the already host-validated packet
+; buffer.  This is intentionally after packet construction and before OT
+; submission: it observes the exact setup the CPU rasterizer will consume,
+; while leaving the shipping path and the compact-record diagnostic separate.
+ssi_row_shadow_write_frame
+	cmpi.l	#SSI_ROW_SHADOW_DUMP_FRAME,frame_number
+	bne	.ssi_rows_done
+	tst.l	ssi_row_shadow_dumped
+	bne	.ssi_rows_done
+	clr.l	ssi_row_shadow_failed
+	lea	ssi_row_shadow_buffer,a0
+	move.l	#SSI_ROW_SHADOW_CAPACITY_WORDS,d0
+	move.l	frame_number,d1
+	moveq	#1,d2
+	move.l	frame_number,d3
+	jsr	ssi_dma_row_shadow_begin
+	tst.l	d0
+	bne	.ssi_rows_begin_failed
+	ifd TREX_SSI_HATARI
+	; The row stream omits invisible packets.  Build a host-packet -> stream
+	; packet map so the later OT walk can feed rows in painter's order without
+	; confusing a skipped packet with the next visible stream packet.
+	clr.l	ssi_hatari_stream_packet_count
+	clr.l	ssi_hatari_map_visible
+	lea	ssi_hatari_host_to_stream,a0
+	move.l	dsp_packet_count_shadow,d0
+	beq	.ssi_hatari_map_clear_done
+	moveq	#-1,d1
+	subq.l	#1,d0
+.ssi_hatari_map_clear_loop
+	move.l	d1,(a0)+
+	dbra	d0,.ssi_hatari_map_clear_loop
+.ssi_hatari_map_clear_done
+	endc
+
+	lea	gpu_packet_buffer,a5
+	lea	dsp_triangle_rx_buffer+8,a4
+	move.l	dsp_packet_count_shadow,d7
+	beq	.ssi_rows_finish
+	move.l	d7,d6
+	subq.l	#1,d7
+	subq.l	#1,d6
+.ssi_rows_packet_loop
+	move.l	(a4),d0
+	move.l	a5,a0
+	jsr	ssi_row_shadow_append_packet
+	tst.l	d0
+	bne	.ssi_rows_packet_failed
+	ifd TREX_SSI_HATARI
+	lea	ssi_hatari_host_to_stream,a0
+	move.l	d6,d0
+	lsl.l	#2,d0
+	; Invisible packets are accepted by the row builder but do not emit a
+	; stream packet.  Only assign a stream index when the same clipped Y
+	; interval used by ssi_row_shadow_append_packet is non-empty.
+	move.l	16(a5),d1			; sy0
+	move.l	20(a5),d2			; rows_up
+	add.l	24(a5),d2			; total rows
+	move.l	d1,d3
+	add.l	d2,d3			; exclusive end
+	moveq	#0,d4
+	tst.l	d1
+	bge	.ssi_hatari_map_start_ready
+	moveq	#0,d1
+.ssi_hatari_map_start_ready
+	move.l	d3,d4
+	cmpi.l	#SCREEN_HEIGHT,d4
+	ble	.ssi_hatari_map_end_ready
+	move.l	#SCREEN_HEIGHT,d4
+.ssi_hatari_map_end_ready
+	sub.l	d1,d4
+	ble	.ssi_hatari_map_invisible
+	move.l	ssi_hatari_stream_packet_count,(0,a0,d0.l)
+	addq.l	#1,ssi_hatari_stream_packet_count
+	addq.l	#1,ssi_hatari_map_visible
+	bra	.ssi_hatari_map_done
+.ssi_hatari_map_invisible
+	moveq	#-1,d4
+	move.l	d4,(0,a0,d0.l)
+.ssi_hatari_map_done
+	endc
+	adda.l	#(25*4),a4
+	adda.l	#GPU_PACKET_BYTES,a5
+	subq.l	#1,d6
+	dbra	d7,.ssi_rows_packet_loop
+.ssi_rows_finish
+	jsr	ssi_dma_shadow_finish
+	tst.l	d0
+	bmi	.ssi_rows_finish_failed
+	move.l	d0,ssi_row_shadow_actual_words
+	bsr	ssi_row_shadow_write_dump
+	bsr	ssi_row_shadow_write_packets
+	move.l	#1,ssi_row_shadow_dumped
+	clr.l	ssi_row_shadow_fail_stage
+	bsr	ssi_row_shadow_write_status
+	ifd TREX_SSI_HATARI
+	lea	ssi_row_shadow_buffer,a0
+	move.l	ssi_row_shadow_actual_words,d0
+	jsr	ssi_dma_hatari_consume_frame
+	bsr	ssi_row_hatari_write_status
+	tst.l	ssi_dma_hatari_result
+	bne	.ssi_hatari_no_feed_pending
+	moveq	#1,d0
+	move.l	d0,ssi_hatari_feed_pending_seen
+	move.l	d0,ssi_hatari_feed_pending
+	move.l	frame_number,ssi_hatari_feed_pending_frame
+.ssi_hatari_no_feed_pending
+	endc
+
+	bra	.ssi_rows_done
+
+.ssi_rows_begin_failed
+	move.l	#1,ssi_row_shadow_fail_stage
+	bra	.ssi_rows_failed
+.ssi_rows_packet_failed
+	move.l	#2,ssi_row_shadow_fail_stage
+	bra	.ssi_rows_failed
+.ssi_rows_finish_failed
+	move.l	#3,ssi_row_shadow_fail_stage
+.ssi_rows_failed
+	move.l	#1,ssi_row_shadow_failed
+	bsr	ssi_row_shadow_write_status
+	jsr	ssi_dma_shadow_abort
+.ssi_rows_done
+	rts
+
+; Append one packet and its visible rows.
+; in: a0 = 32-longword packet, d0 = source triangle
+; out: d0 = 0 on success, -1 on builder/row failure; invisible packets are OK
+ssi_row_shadow_append_packet
+	movem.l	d1-d7/a0-a6,-(sp)
+	move.l	a0,a5
+	move.l	d0,d7
+	move.l	16(a5),d0			; sy0
+	move.l	20(a5),d1			; rows_up
+	add.l	24(a5),d1			; total rows
+	move.l	d0,d2
+	add.l	d1,d2			; exclusive y end
+	move.l	d0,d3			; visible start
+	tst.l	d3
+	bge	.ssi_rows_start_ok
+	moveq	#0,d3
+.ssi_rows_start_ok
+	move.l	d2,d4			; visible end
+	cmpi.l	#SCREEN_HEIGHT,d4
+	ble	.ssi_rows_end_ok
+	move.l	#SCREEN_HEIGHT,d4
+.ssi_rows_end_ok
+	sub.l	d3,d4			; visible row count
+	ble	.ssi_rows_packet_done
+
+	move.l	d7,d0
+	move.l	d4,d1
+	move.l	d3,d2
+	move.l	a5,a0
+	jsr	ssi_dma_row_shadow_packet_begin
+	tst.l	d0
+	bne	.ssi_rows_packet_failed
+
+	move.w	2(a5),d0
+	andi.l	#$0f,d0
+	move.l	d0,ssi_row_shadow_current_shade
+
+	; Common packet state.  These are the same field offsets loaded by
+	; rasterize_packet; the row walker below only replaces the pixel body with
+	; ROW_ABS emission.
+	move.l	16(a5),raster_y_current
+	move.l	32(a5),raster_xl
+	move.l	32(a5),raster_xr
+	move.l	52(a5),raster_du_dx
+	move.l	56(a5),raster_dv_dx
+	move.l	84(a5),raster_lvl
+	move.l	76(a5),d0			; top u|v<<8
+	bsr	ssi_row_shadow_unpack_uv0
+	move.l	d0,raster_ul
+	move.l	d1,raster_vl
+
+	; The flat diagnostic uses the packet shade and no level gradient, just as
+	; span_walk_half does.  The normal path consumes the packet's level fields.
+	tst.l	gouraud_enabled
+	bne	.ssi_rows_gouraud
+	move.l	ssi_row_shadow_current_shade,d0
+	lsl.l	#8,d0
+	move.l	d0,raster_lvl
+	clr.l	raster_dlvl
+.ssi_rows_gouraud
+
+	move.l	28(a5),d0			; middle vertex side
+	bne	.ssi_rows_mid_left
+
+	; Middle on the right: long edge is left, then the right edge restarts.
+	move.l	36(a5),raster_sl
+	move.l	60(a5),raster_dul
+	move.l	64(a5),raster_dvl
+	move.l	20(a5),raster_rows
+	move.l	40(a5),raster_sr
+	move.l	96(a5),raster_dlvl
+	bsr	ssi_row_shadow_walk_half
+	tst.l	d0
+	bne	.ssi_rows_packet_failed
+	move.l	24(a5),raster_rows
+	beq	.ssi_rows_packet_done
+	move.l	48(a5),raster_xr
+	move.l	44(a5),raster_sr
+	move.l	100(a5),raster_dlvl
+	bsr	ssi_row_shadow_walk_half
+	bra	.ssi_rows_packet_result
+
+.ssi_rows_mid_left
+	; Middle on the left: short left edge restarts at the middle.
+	move.l	40(a5),raster_sl
+	move.l	36(a5),raster_sr
+	move.l	60(a5),raster_dul
+	move.l	64(a5),raster_dvl
+	move.l	20(a5),raster_rows
+	move.l	96(a5),raster_dlvl
+	bsr	ssi_row_shadow_walk_half
+	tst.l	d0
+	bne	.ssi_rows_packet_failed
+	move.l	24(a5),raster_rows
+	beq	.ssi_rows_packet_done
+	move.l	48(a5),raster_xl
+	move.l	80(a5),d0			; middle u|v<<8
+	bsr	ssi_row_shadow_unpack_uv0
+	move.l	d0,raster_ul
+	move.l	d1,raster_vl
+	move.l	44(a5),raster_sl
+	move.l	68(a5),raster_dul
+	move.l	72(a5),raster_dvl
+	move.l	88(a5),raster_lvl
+	move.l	100(a5),raster_dlvl
+	bsr	ssi_row_shadow_walk_half
+	bra	.ssi_rows_packet_result
+
+.ssi_rows_packet_done
+	moveq	#0,d0
+	bra	.ssi_rows_packet_return
+.ssi_rows_packet_failed
+	moveq	#-1,d0
+.ssi_rows_packet_result
+.ssi_rows_packet_return
+	movem.l	(sp)+,d1-d7/a0-a6
+	rts
+
+; Decode the packet's packed u|v<<8 into Q8.8 row-start state.
+; in: d0 = u | (v << 8), out: d0 = u << 8, d1 = v << 8.
+ssi_row_shadow_unpack_uv0
+	move.l	d0,d1
+	andi.l	#$ff,d0
+	lsl.l	#8,d0
+	lsr.l	#8,d1
+	andi.l	#$ff,d1
+	lsl.l	#8,d1
+	rts
+
+; Emit all visible rows for one trapezoid half, with the same Y/X clipping,
+; ceil/right-exclusive convention, U/V prestep and Q4.8 shade clamping as the
+; CPU span walker.  The builder calls preserve the DDA registers for us.
+ssi_row_shadow_walk_half
+	move.l	raster_y_current,d0
+	bge	.ssi_rows_y_top_ok
+	move.l	d0,d1
+	neg.l	d1
+	cmp.l	raster_rows,d1
+	ble	.ssi_rows_y_catchup
+	move.l	raster_rows,d1
+.ssi_rows_y_catchup
+	sub.l	d1,raster_rows
+	add.l	d1,raster_y_current
+	move.l	raster_sl,d0
+	muls.l	d1,d0
+	add.l	d0,raster_xl
+	move.l	raster_sr,d0
+	muls.l	d1,d0
+	add.l	d0,raster_xr
+	move.l	raster_dul,d0
+	muls.l	d1,d0
+	add.l	d0,raster_ul
+	move.l	raster_dvl,d0
+	muls.l	d1,d0
+	add.l	d0,raster_vl
+	move.l	raster_dlvl,d0
+	muls.l	d1,d0
+	add.l	d0,raster_lvl
+.ssi_rows_y_top_ok
+	move.l	raster_y_current,d0
+	add.l	raster_rows,d0
+	cmpi.l	#SCREEN_HEIGHT,d0
+	ble	.ssi_rows_y_bottom_ok
+	move.l	#SCREEN_HEIGHT,d0
+	sub.l	raster_y_current,d0
+	move.l	d0,raster_rows
+.ssi_rows_y_bottom_ok
+	tst.l	raster_rows
+	ble	.ssi_rows_half_done
+
+.ssi_rows_row_loop
+	move.l	raster_xl,d0
+	add.l	#4095,d0
+	asr.l	#8,d0
+	asr.l	#4,d0				; ceil(xl)
+	move.l	raster_xr,d1
+	add.l	#4095,d1
+	asr.l	#8,d1
+	asr.l	#4,d1
+	subq.l	#1,d1				; ceil(xr)-1
+	move.l	raster_ul,d5
+	move.l	raster_vl,d6
+	move.l	raster_xl,d2
+	add.l	#4095,d2
+	not.l	d2
+	andi.l	#$fff,d2
+	beq	.ssi_rows_prestep_done
+	move.l	raster_du_dx,d4
+	muls.l	d2,d4
+	asr.l	#8,d4
+	asr.l	#4,d4
+	add.l	d4,d5
+	move.l	raster_dv_dx,d4
+	muls.l	d2,d4
+	asr.l	#8,d4
+	asr.l	#4,d4
+	add.l	d4,d6
+.ssi_rows_prestep_done
+
+	; Left clipping advances U/V by the clipped pixel distance.
+	tst.l	d0
+	bge	.ssi_rows_left_ok
+	move.l	d0,d2
+	neg.l	d2
+	move.l	raster_du_dx,d4
+	muls.l	d2,d4
+	add.l	d4,d5
+	move.l	raster_dv_dx,d4
+	muls.l	d2,d4
+	add.l	d4,d6
+	moveq	#0,d0
+.ssi_rows_left_ok
+	cmpi.l	#SCREEN_WIDTH-1,d1
+	ble	.ssi_rows_right_ok
+	move.l	#SCREEN_WIDTH-1,d1
+.ssi_rows_right_ok
+	cmp.l	d0,d1
+	blt	.ssi_rows_empty
+	move.l	d1,d4
+	sub.l	d0,d4
+	addq.l	#1,d4
+	move.l	d4,d1
+	move.l	d5,d2
+	move.l	d6,d3
+	bsr	ssi_row_shadow_emit_current_shade
+	tst.l	d0
+	bne	.ssi_rows_half_failed
+	bra	.ssi_rows_row_advance
+.ssi_rows_empty
+	; Preserve logical Y alignment for thin or clipped rows that have no
+	; drawable pixels after the X clip.  The packet header counts visible Y
+	; rows, so the stream needs an explicit one-word skip for each such row.
+	moveq	#1,d0
+	jsr	ssi_dma_row_shadow_skip_rows
+	tst.l	d0
+	bne	.ssi_rows_half_failed
+.ssi_rows_row_advance
+	move.l	raster_sl,d0
+	add.l	d0,raster_xl
+	move.l	raster_sr,d0
+	add.l	d0,raster_xr
+	move.l	raster_dul,d0
+	add.l	d0,raster_ul
+	move.l	raster_dvl,d0
+	add.l	d0,raster_vl
+	move.l	raster_dlvl,d0
+	add.l	d0,raster_lvl
+	addq.l	#1,raster_y_current
+	subq.l	#1,raster_rows
+	bne	.ssi_rows_row_loop
+.ssi_rows_half_done
+	moveq	#0,d0
+	rts
+.ssi_rows_half_failed
+	moveq	#-1,d0
+	rts
+
+; Emit one row, adding SET_SHADE only when the interpolated level changes.
+; in: d0=x0, d1=count, d2=U, d3=V; all values are already clipped.
+ssi_row_shadow_emit_current_shade
+	move.l	raster_lvl,d4
+	asr.l	#8,d4
+	bpl	.ssi_rows_shade_nonnegative
+	moveq	#0,d4
+.ssi_rows_shade_nonnegative
+	cmpi.l	#15,d4
+	ble	.ssi_rows_shade_clamped
+	moveq	#15,d4
+.ssi_rows_shade_clamped
+	cmp.l	ssi_row_shadow_current_shade,d4
+	beq	.ssi_rows_shade_ready
+	move.l	d0,-(sp)
+	move.l	d1,-(sp)
+	move.l	d2,-(sp)
+	move.l	d3,-(sp)
+	move.l	d4,d0
+	jsr	ssi_dma_row_shadow_set_shade
+	move.l	d0,d7
+	move.l	(sp)+,d3
+	move.l	(sp)+,d2
+	move.l	(sp)+,d1
+	move.l	(sp)+,d0
+	tst.l	d7
+	bne	.ssi_rows_shade_failed
+	move.l	d4,ssi_row_shadow_current_shade
+.ssi_rows_shade_ready
+	jsr	ssi_dma_row_shadow_append_row
+	rts
+.ssi_rows_shade_failed
+	moveq	#-1,d0
+	rts
+
+ssi_row_shadow_write_dump
+	movem.l	d0-d7/a0-a6,-(sp)
+	move.l	ssi_row_shadow_actual_words,d6
+	tst.l	d6
+	beq	.ssi_rows_dump_done
+	lsl.l	#1,d6
+	Fcreate	ssi_rows_dump_path,#0
+	tst.l	d0
+	bmi	.ssi_rows_dump_done
+	move.w	d0,d7
+	Fwrite	d7,d6,ssi_row_shadow_buffer
+	Fclose	d7
+.ssi_rows_dump_done
+	movem.l	(sp)+,d0-d7/a0-a6
+	rts
+
+ssi_row_shadow_write_status
+	lea	ssi_row_shadow_status_buffer,a0
+	move.l	ssi_row_shadow_failed,(a0)+
+	move.l	ssi_row_shadow_fail_stage,(a0)+
+	move.l	ssi_dma_shadow_words,(a0)+
+	move.l	dsp_packet_count_shadow,(a0)+
+	move.l	ssi_dma_shadow_active,(a0)+
+	move.l	ssi_dma_shadow_capacity,(a0)+
+	Fcreate	ssi_rows_status_path,#0
+	tst.l	d0
+	bmi	.ssi_rows_status_done
+	move.w	d0,d7
+	Fwrite	d7,#24,ssi_row_shadow_status_buffer
+	Fclose	d7
+.ssi_rows_status_done
+	rts
+
+	ifd TREX_SSI_HATARI
+; Write the result of the in-memory Hatari DMA consumer.  The stream itself
+; remains in ssi_rows.res; this sidecar records the hand-off verdict and the
+; counters a real DMA completion/CRC gate would publish before buffer swap.
+; Longwords: magic, version, result, input words, consumed words, packets,
+; logical rows, skipped rows, shade controls, computed CRC, expected CRC,
+; parser error stage, feed error, rasterized pixels, pending-frame match,
+; visited OT nodes, mapped stream packets, row callbacks, status writes,
+; resolve packets completed, visible map entries, missing map entries, first
+; missing host packet index (-1 when none).
+ssi_row_hatari_write_status
+	addq.l	#1,ssi_hatari_status_writes
+	lea	ssi_hatari_status_buffer,a0
+	move.l	#$48535349,(a0)+
+	move.l	#1,(a0)+
+	move.l	ssi_dma_hatari_result,(a0)+
+	move.l	ssi_dma_hatari_words,(a0)+
+	move.l	ssi_dma_hatari_consumed_words,(a0)+
+	move.l	ssi_dma_hatari_packets,(a0)+
+	move.l	ssi_dma_hatari_rows,(a0)+
+	move.l	ssi_dma_hatari_skips,(a0)+
+	move.l	ssi_dma_hatari_shades,(a0)+
+	moveq	#0,d0
+	move.w	ssi_dma_hatari_crc,d0
+	move.l	d0,(a0)+
+	moveq	#0,d0
+	move.w	ssi_dma_hatari_expected_crc,d0
+	move.l	d0,(a0)+
+	move.l	ssi_dma_hatari_error_stage,(a0)+
+	move.l	ssi_hatari_feed_failed,(a0)+
+	move.l	raster_pixel_count,(a0)+
+	move.l	ssi_hatari_feed_pending_seen,(a0)+
+	move.l	ssi_hatari_feed_nodes,(a0)+
+	move.l	ssi_hatari_feed_packets,(a0)+
+	move.l	ssi_hatari_feed_rows,(a0)+
+	move.l	ssi_hatari_status_writes,(a0)+
+	move.l	ssi_hatari_resolve_progress,(a0)+
+	move.l	ssi_hatari_map_visible,(a0)+
+	move.l	ssi_hatari_feed_missing,(a0)+
+	move.l	ssi_hatari_feed_first_missing,(a0)+
+	Fcreate	ssi_hatari_status_path,#0
+	tst.l	d0
+	bmi	.ssi_hatari_status_done
+	move.w	d0,d7
+	Fwrite	d7,#92,ssi_hatari_status_buffer
+	Fclose	d7
+.ssi_hatari_status_done
+	rts
+	endc
+
+; Dump the canonical packet setup beside the row stream for an independent
+; host-side comparison.  The row builder consumes these same 26 longwords,
+; but the verifier below recomputes clipping and DDA state in Python rather
+; than trusting this assembly walker.  Format: four big-endian longwords
+; {magic, frame, packet_count, record_words}, followed by records containing
+; {source_triangle, 26 packet longwords}.
+ssi_row_shadow_write_packets
+	movem.l	d0-d7/a0-a6,-(sp)
+	lea	ssi_row_shadow_packet_header,a0
+	move.l	#$52505731,(a0)+
+	move.l	frame_number,(a0)+
+	move.l	dsp_packet_count_shadow,(a0)+
+	move.l	#27,(a0)+
+	Fcreate	ssi_rows_packet_path,#0
+	tst.l	d0
+	bmi	.ssi_rows_packets_done
+	move.w	d0,d7
+	Fwrite	d7,#16,ssi_row_shadow_packet_header
+	move.l	dsp_packet_count_shadow,d6
+	beq	.ssi_rows_packets_close
+	subq.l	#1,d6
+	lea	gpu_packet_buffer,a5
+	lea	dsp_triangle_rx_buffer+8,a4
+.ssi_rows_packet_dump_loop
+	lea	ssi_row_shadow_packet_record,a0
+	move.l	(a4),(a0)+
+	move.l	a5,a1
+	moveq	#25,d5
+.ssi_rows_packet_copy
+	move.l	(a1)+,(a0)+
+	dbra	d5,.ssi_rows_packet_copy
+	Fwrite	d7,#(27*4),ssi_row_shadow_packet_record
+	adda.l	#(25*4),a4
+	adda.l	#GPU_PACKET_BYTES,a5
+	dbra	d6,.ssi_rows_packet_dump_loop
+.ssi_rows_packets_close
+	Fclose	d7
+.ssi_rows_packets_done
+	movem.l	(sp)+,d0-d7/a0-a6
+	rts
+	endc
+
 dsp_packets_finish
 	addq.l	#1,dsp_call_count
 	tst.l	dsp_triangle_stream_ready
@@ -1951,6 +3001,9 @@ dsp_packets_finish
 	tst.l	d0
 	bne	.finish_build
 .finish_fallback
+	ifd	TREX_SSI_SHADOW
+	bsr	ssi_shadow_abort_frame
+	endc
 	tst.l	dsp_vertices_fetched
 	bne	.finish_have_vertices
 	bsr	fetch_projected_vertices
@@ -1966,9 +3019,15 @@ dsp_packets_finish
 	bsr	build_gpu_shadow_packets
 	rts
 .finish_build
+	ifd	TREX_SSI_SHADOW
+	bsr	ssi_shadow_finish_frame
+	endc
 	lea	gpu_packet_buffer,a1
 	move.l	a1,gpu_packet_ptr
 	bsr	build_gpu_packet_heads
+	ifd	TREX_SSI_ROWS
+	bsr	ssi_row_shadow_write_frame
+	endc
 .finish_shadow
 	rts
 
@@ -2113,6 +3172,9 @@ dsp_drain_chunk_pipeline
 	move.l	d0,dsp_triangle_unpack_base
 	add.l	dsp_triangle_chunk_count,d0
 	move.l	d0,dsp_triangle_input_count
+	ifd	TREX_SSI_SHADOW
+	bsr	ssi_shadow_append_chunk
+	endc
 	clr.l	dsp_chunk_inflight
 	tst.l	dsp_triangles_remaining
 	beq	.dsp_cull_unpack
@@ -3421,7 +4483,22 @@ gpu_submit_ot
 .gpu_submit_ot_done
 	TimeAdd	stat_mark_otinsert,stat_t_otinsert
 	TimeMark	stat_mark_raster
+	ifd TREX_SSI_HATARI
+	tst.l	ssi_hatari_feed_pending
+	beq	.gpu_submit_normal_raster
+	; gpu_rasterize_ot still performs the packet resolve sweep, but its OT
+	; walk is skipped below.  The validated SSI rows then feed that same
+	; resolved pixel backend in OT order.
 	bsr	gpu_rasterize_ot
+	bsr	ssi_hatari_feed_rasterizer
+	bsr	ssi_row_hatari_write_status
+	move.l	#-1,ssi_hatari_feed_pending_frame
+	clr.l	ssi_hatari_feed_pending
+	bra	.gpu_submit_raster_done
+.gpu_submit_normal_raster
+	endc
+	bsr	gpu_rasterize_ot
+.gpu_submit_raster_done
 	TimeAdd	stat_mark_raster,stat_t_raster
 	TimeMark	stat_mark_present
 	; Keep this call site exactly one word-sized BSR in both release variants.
@@ -3518,6 +4595,9 @@ gpu_rasterize_ot
 	lea	gpu_packet_buffer,a1
 	move.l	dsp_packet_count_shadow,d7
 	subq.l	#1,d7
+	ifd TREX_SSI_HATARI
+	clr.l	ssi_hatari_resolve_progress
+	endc
 .gpu_resolve_packet
 	move.l	(a1),d0				; command | shade
 	move.l	d0,d5
@@ -3557,6 +4637,9 @@ gpu_rasterize_ot
 	move.l	a4,d1
 	moveq	#RASTER_LVL_SHIFT_WORD,d4
 .gpu_resolve_store
+	ifd TREX_SSI_HATARI
+	addq.l	#1,ssi_hatari_resolve_progress
+	endc
 	movem.l	d1-d5,GPU_PACKET_RESOLVE(a1)
 	lea	GPU_PACKET_BYTES(a1),a1
 	dbra	d7,.gpu_resolve_packet
@@ -3601,6 +4684,12 @@ gpu_rasterize_ot
 	moveq	#RASTER_LVL_SHIFT_LONG,d4
 	bra	.gpu_resolve_store
 .gpu_resolve_done
+	ifd TREX_SSI_HATARI
+	tst.l	ssi_hatari_feed_pending
+	beq	.gpu_raster_ot_continue
+	bra	.gpu_raster_ot_skip_walk
+.gpu_raster_ot_continue
+	endc
 
 	lea	ordering_table,a2
 	move.l	gpu_ot_bucket_max,d0
@@ -3630,8 +4719,140 @@ gpu_rasterize_ot
 .gpu_raster_ot_next_bucket
 	dbra	d7,.gpu_raster_ot_bucket
 	move.l	(sp)+,a2
+	ifd TREX_SSI_HATARI
+.gpu_raster_ot_skip_walk
+	move.l	(sp)+,a2
+	bra	.gpu_raster_ot_done
+	endc
 .gpu_raster_ot_done
 	rts
+
+	ifd TREX_SSI_HATARI
+; Consume the validated SSI row packets in the existing OT's far-to-near
+; order.  The stream itself is emitted in packet-buffer order, so the host
+; packet -> stream map bridges transport order and painter's visibility order.
+ssi_hatari_feed_rasterizer
+	 movem.l	d0-d7/a0-a6,-(sp)
+	 clr.l	ssi_hatari_feed_failed
+	 clr.l	ssi_hatari_feed_nodes
+	 clr.l	ssi_hatari_feed_packets
+	 clr.l	ssi_hatari_feed_rows
+	 clr.l	ssi_hatari_feed_missing
+	 move.l	#-1,ssi_hatari_feed_first_missing
+	 tst.l	gpu_ot_node_count
+	 beq	.ssi_hatari_feed_done
+	 lea	ssi_hatari_rasterize_row,a0
+	 move.l	a0,ssi_dma_hatari_feed_callback
+	 lea	ordering_table,a2
+	 move.l	gpu_ot_bucket_max,d0
+	 addq.l	#1,d0
+	 lsl.l	#2,d0
+	 adda.l	d0,a2
+	 move.l	gpu_ot_bucket_max,d7
+	 sub.l	gpu_ot_bucket_min,d7
+.ssi_hatari_feed_bucket
+	 move.l	-(a2),a1
+.ssi_hatari_feed_node
+	 tst.l	a1
+	 beq	.ssi_hatari_feed_next_bucket
+	 move.l	4(a1),a3
+	 move.l	(a1),a0
+	 addq.l	#1,ssi_hatari_feed_nodes
+	 move.l	a0,d0
+	 lea	gpu_packet_buffer,a4
+	 sub.l	a4,d0
+	 lsr.l	#7,d0			; GPU_PACKET_BYTES = 128
+	 move.l	d0,d1
+	 lsl.l	#2,d1
+	 lea	ssi_hatari_host_to_stream,a4
+	 move.l	(0,a4,d1.l),d1
+	 cmpi.l	#-1,d1
+	 bne	.ssi_hatari_feed_map_ready
+	 addq.l	#1,ssi_hatari_feed_missing
+	 tst.l	ssi_hatari_feed_first_missing
+	 bpl	.ssi_hatari_feed_node_next
+	 move.l	d0,ssi_hatari_feed_first_missing
+	 bra	.ssi_hatari_feed_node_next
+.ssi_hatari_feed_map_ready
+	 move.l	d0,d2
+	 lsl.l	#7,d2
+	 lea	gpu_packet_buffer,a4
+	 adda.l	d2,a4
+	 move.l	a4,ssi_hatari_feed_packet_ptr
+	 move.l	d1,d0
+	 addq.l	#1,ssi_hatari_feed_packets
+	 jsr	ssi_dma_hatari_feed_packet
+	 tst.l	d0
+	 bne	.ssi_hatari_feed_failed
+.ssi_hatari_feed_node_next
+	 move.l	a3,a1
+	 bra	.ssi_hatari_feed_node
+.ssi_hatari_feed_next_bucket
+	 dbra	d7,.ssi_hatari_feed_bucket
+.ssi_hatari_feed_done
+	 moveq	#0,d0
+	 bra	.ssi_hatari_feed_return
+.ssi_hatari_feed_failed
+	 move.l	#1,ssi_hatari_feed_failed
+	 moveq	#-1,d0
+.ssi_hatari_feed_return
+	 movem.l	(sp)+,d0-d7/a0-a6
+	 rts
+	endc
+
+	ifd TREX_SSI_HATARI
+; Row callback used by ssi_dma_hatari_feed_packet.  It deliberately enters
+; the existing resolved pixel bodies rather than maintaining a second texture
+; implementation: the SSI row supplies the clipped x/count, U/V start, Y and
+; current shade, while the packet resolve slots supply texture/CLUT pointers
+; and the correct pixel-body entry.
+ssi_hatari_rasterize_row
+	 movem.l	d0-d7/a0-a6,-(sp)
+	 addq.l	#1,ssi_hatari_feed_rows
+	 move.l	ssi_hatari_feed_packet_ptr,a0
+	 movem.l	GPU_PACKET_RESOLVE(a0),d1-d5
+	 move.l	d1,raster_span_entry
+	 move.l	d2,a5
+	 move.l	d3,raster_clut_tint_base
+	 move.w	d3,raster_flat_color
+	 move.w	d4,raster_lvl_shift
+	 move.l	d5,raster_shade
+
+	 move.l	52(a0),d0			; packet du/dx
+	 move.l	56(a0),d1			; packet dv/dx
+	 move.l	d0,a0
+	 move.l	d1,a1
+	 move.l	ssi_dma_hatari_feed_u,d5
+	 move.l	ssi_dma_hatari_feed_v,d6
+	 move.l	ssi_dma_hatari_feed_shade,d2
+	 move.w	raster_lvl_shift,d4
+	 lsl.l	d4,d2
+	 add.l	raster_clut_tint_base,d2
+	 move.l	d2,a6
+
+	 move.l	ssi_dma_hatari_feed_y,d0
+	 lsl.l	#8,d0
+	 add.l	d0,d0			; FRAMEBUFFER_STRIDE = 512
+	 move.l	render_base,a4
+	 adda.l	d0,a4
+	 move.l	ssi_dma_hatari_feed_x,d0
+	 add.l	d0,d0
+	 adda.l	d0,a4
+	move.l	ssi_dma_hatari_feed_count,d4
+	subq.l	#1,d4
+	; The resolved pixel bodies expect D7 to contain the span's pre-count:
+	; opaque bodies leave it unchanged and semitransparent bodies subtract
+	; discarded texels.  The normal span walker performs this before its
+	; indirect body jump; reproduce that contract for a direct SSI row call.
+	move.l	ssi_dma_hatari_feed_count,d7
+	 move.l	#1,raster_feed_row
+	 move.l	raster_span_entry,a3
+	 jsr	(a3)
+	 clr.l	raster_feed_row
+	 add.l	d7,raster_pixel_count
+	 movem.l	(sp)+,d0-d7/a0-a6
+	 rts
+	endc
 
 ; A0 points at one 32-longword packet: command, flat colour/page token, OT
 ; key, native texture page, the twenty-two span/level fields the DSP
@@ -4105,6 +5326,10 @@ span_walk_half
 	; falls through into .span_row_advance -- the hot path is contiguous
 
 .span_row_advance
+	ifd TREX_SSI_HATARI
+	tst.l	raster_feed_row
+	bne	.span_feed_row_done
+	endc
 	adda.l	raster_sl,a3
 	add.l	raster_sr,d3
 	move.l	raster_dul,d0
@@ -4130,6 +5355,10 @@ span_walk_half
 	rts
 .span_walk_empty
 	rts
+	ifd TREX_SSI_HATARI
+.span_feed_row_done
+	rts
+	endc
 
 ; Y clamp, out of line: the per-half top catch-up and bottom shorten exactly
 ; as they always ran, entered only when the packet's Y interval leaves the
@@ -5075,14 +6304,48 @@ banner_text
 ; Dsp_LoadProg reads the LOD from the current GEMDOS directory.  The Makefile
 ; copies the runtime LOD next to this executable.
 trex_dsp_lod_path
+	ifd TREX_SSI_LOOPBACK
+	dc.b	'TREXSSI.LOD',0
+	else
 	ifd TREX_RELEASE
 	dc.b	'TREX.LOD',0
 	else
 	dc.b	'trex_dsp.lod',0
 	endc
+	endc
 
 render_stats_path
 	dc.b	'render_stats.res',0
+
+	ifd	TREX_SSI_SHADOW
+ssi_shadow_dump_path
+	dc.b	'ssi_shad.res',0
+ssi_route_path
+	dc.b	'ssi_route.res',0
+	endc
+
+	ifd	TREX_SSI_DMA
+ssi_dma_status_path
+	dc.b	'ssi_dma.res',0
+ssi_dma_capture_path
+	dc.b	'ssi_dcap.res',0
+	even
+	endc
+
+	ifd	TREX_SSI_ROWS
+ssi_rows_dump_path
+	dc.b	'ssi_rows.res',0
+ssi_rows_status_path
+	dc.b	'ssi_rows.status',0
+ssi_rows_packet_path
+	dc.b	'ssi_rows.pkt',0
+	endc
+	ifd TREX_SSI_HATARI
+ssi_hatari_status_path
+	; GEMDOS/FAT 8.3 name: long extensions are silently clipped by Hatari's
+	; GEMDOS drive and can leave the host-side verifier reading an old sidecar.
+	dc.b	'ssihatri.sta',0
+	endc
 
 val_stats_path
 	dc.b	'val_stats.res',0
@@ -5113,7 +6376,15 @@ gouraud_enabled
 ;   2 = freestanding, timed per frame   3 = null command through the same
 ;                                            bracket (protocol-cost baseline)
 prepass_arm
+	ifd	TREX_RELEASE
+	; The corrected-clock release A/B measures the current conservative
+	; prepass as a 3.5 ms/frame net loss for only 12.4 hidden pixels/frame.
+	; Keep the implementation in the release for future yield work, but ship
+	; it disarmed until that yield pays for its FINISH-window overhang.
+	dc.l	0
+	else
 	dc.l	1
+	endc
 
 ; Deliberately NOT in stat_block: trex_dummy_frame clears that block, and it
 ; does so after prepass_startup has already run.  A command that failed at
@@ -6231,6 +7502,81 @@ val_field_counts
 val_stats_buffer
 	ds.l	VAL_STATS_LONGS
 
+	ifd	TREX_SSI_DMA
+; The record channel's landing window and the host's independent model of
+; what should arrive in it.  Both are plain ST-RAM BSS: Falcon sound DMA
+; addresses ST-RAM, and this program is loaded there.
+ssi_dma_record_buffer
+	ds.w	SSI_DMA_PROBE_TOTAL_WORDS
+ssi_dma_expect_buffer
+	ds.w	SSI_DMA_PROBE_TOTAL_WORDS
+ssi_dma_probe_command
+	ds.l	SSI_DMA_PROBE_COMMAND_WORDS
+ssi_dma_probe_active
+	ds.l	1
+
+; The status sidecar, in file order.  Contiguous on purpose: the writer dumps
+; the block, and the ack collector fills the last two entries in place.
+ssi_dma_probe_status
+ssi_dma_probe_claim_result
+	ds.l	1
+ssi_dma_probe_claim_stage
+	ds.l	1
+ssi_dma_probe_route_status
+	ds.l	1
+ssi_dma_probe_route_source
+	ds.l	1
+ssi_dma_probe_route_destination
+	ds.l	1
+ssi_dma_probe_devconnect_source
+	ds.l	1
+ssi_dma_probe_devconnect_destination
+	ds.l	1
+ssi_dma_probe_old_control
+	ds.l	1
+ssi_dma_probe_old_int_control
+	ds.l	1
+ssi_dma_probe_armed_control
+	ds.l	1
+ssi_dma_probe_armed_int_control
+	ds.l	1
+ssi_dma_probe_armed_mode
+	ds.l	1
+ssi_dma_probe_armed_divider
+	ds.l	1
+ssi_dma_probe_armed_xbar_source
+	ds.l	1
+ssi_dma_probe_armed_xbar_destination
+	ds.l	1
+ssi_dma_probe_arm_result
+	ds.l	1
+ssi_dma_probe_built_words
+	ds.l	1
+ssi_dma_probe_wait_result
+	ds.l	1
+ssi_dma_probe_wait_ticks
+	ds.l	1
+ssi_dma_probe_bytes
+	ds.l	1
+ssi_dma_probe_verify
+	ds.l	1
+ssi_dma_probe_bad_index
+	ds.l	1
+ssi_dma_probe_bad_got
+	ds.l	1
+ssi_dma_probe_bad_want
+	ds.l	1
+ssi_dma_probe_cacr
+	ds.l	1
+ssi_dma_probe_ack
+	ds.l	1
+ssi_dma_probe_dsp_status
+	ds.l	1
+; One raw XBIOS return per claim stage, 1..13, in stage order.
+ssi_dma_probe_xbios
+	ds.l	13
+	endc
+
 ; Temporary buffer required by Dsp_LoadProg while converting ASCII LOD.
 ; Overallocated by 64 KiB - 1 and used through the aligned window dsp_open
 ; computes, like the animation transfer buffer: the ROM's program bootstrap
@@ -6279,6 +7625,98 @@ dsp_triangle_chunk_tx
 	ds.l	DSP_TRIANGLE_CHUNK_TX_WORDS
 dsp_triangle_chunk_rx
 	ds.l	(2+(DSP_TRIANGLE_CHUNK*DSP_SPAN_RECORD_WORDS))
+
+	ifd	TREX_SSI_SHADOW
+	; Host-shadow buffer only in the optional diagnostic build.  The builder
+	; reserves its six-word footer, so the 40,000-word window is bounded.
+	even
+ssi_shadow_buffer
+	ds.w	SSI_SHADOW_CAPACITY_WORDS
+ssi_shadow_active
+	ds.l	1
+ssi_shadow_failed
+	ds.l	1
+ssi_shadow_actual_words
+	ds.l	1
+ssi_shadow_dumped
+	ds.l	1
+
+ssi_shadow_route_active
+	ds.l	1
+ssi_shadow_route_claim_result
+	ds.l	1
+ssi_shadow_route_status
+	ds.l	1
+ssi_shadow_route_stage
+	ds.l	1
+ssi_shadow_route_source
+	ds.l	1
+ssi_shadow_route_destination
+	ds.l	1
+ssi_shadow_route_record
+	ds.l	5
+	endc
+
+	ifd TREX_SSI_ROWS
+	even
+ssi_row_shadow_buffer
+	ds.w	SSI_ROW_SHADOW_CAPACITY_WORDS
+ssi_row_shadow_failed
+	ds.l	1
+ssi_row_shadow_actual_words
+	ds.l	1
+ssi_row_shadow_dumped
+	ds.l	1
+ssi_row_shadow_current_shade
+	ds.l	1
+ssi_row_shadow_fail_stage
+	ds.l	1
+ssi_row_shadow_status_buffer
+	ds.l	6
+ssi_row_shadow_packet_header
+	ds.l	4
+ssi_row_shadow_packet_record
+	ds.l	27
+	ifd TREX_SSI_HATARI
+ssi_hatari_status_buffer
+	ds.l	23
+	; Host packet index for each visible SSI packet, initialized to -1 for
+	; invisible packets before the frame's stream is built.
+ssi_hatari_host_to_stream
+	ds.l	TREX_PRIMITIVES
+ssi_hatari_stream_packet_count
+	ds.l	1
+ssi_hatari_feed_pending_frame
+	ds.l	1
+ssi_hatari_feed_pending
+	ds.l	1
+ssi_hatari_feed_packet_ptr
+	ds.l	1
+ssi_hatari_feed_failed
+	ds.l	1
+	; Hatari-only handoff accounting.  These counters make the sidecar prove
+	; that the validated stream reached the OT and row callback, not only that
+	; its parser accepted the bytes.
+ssi_hatari_feed_pending_seen
+	ds.l	1
+ssi_hatari_feed_nodes
+	ds.l	1
+ssi_hatari_feed_packets
+	ds.l	1
+ssi_hatari_feed_rows
+	ds.l	1
+ssi_hatari_status_writes
+	ds.l	1
+ssi_hatari_resolve_progress
+	ds.l	1
+ssi_hatari_map_visible
+	ds.l	1
+ssi_hatari_feed_missing
+	ds.l	1
+ssi_hatari_feed_first_missing
+	ds.l	1
+	endc
+	endc
 
 ; One eight-word native texture record per O3D polygon:
 ; u0,v0,u1,v1,u2,v2,CLUT,TPAGE.
@@ -6469,6 +7907,10 @@ raster_lvl_shift
 ; pre-existing cell for the same reason raster_opaque was.
 raster_walk_clip
 	ds.l	1
+	ifd TREX_SSI_HATARI
+raster_feed_row
+	ds.l	1
+	endc
 
 
 

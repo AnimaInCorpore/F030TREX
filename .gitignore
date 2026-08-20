@@ -4,12 +4,18 @@ tools/vlink/
 *.lst
 *.tos
 *.res
+*.status
+TREX/m68030/ssihatri.sta
+*.pkt
 *.dbg
 a.out
 TREX/m68030/trex_dsp.lod
 # headless timing run scratch (make measure)
 TREX/m68030/measure/
+# DSP assembly scratch (make trex_dsp copies the sources and DOS tools here)
+TREX/dsp/build/
 TREX/m68030/TREX.LOD
+TREX/m68030/TREXSSI.LOD
 __pycache__/
 *.pyc
 .DS_Store

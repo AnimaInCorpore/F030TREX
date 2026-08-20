@@ -1,4 +1,18 @@
 DOSBOX=dosbox
+# Assemble the DSP-side SSI transport probe (CMD_SSI_STREAM) into the .lod.
+# It costs P memory the renderer needs, so the shipping and measurement builds
+# leave it out; the SSI bring-up targets set it to 1.  See trex_dsp.asm's
+# "SSI transport probe" block and the P:$09BF ceiling note beside it.
+SSIPROBE=0
+# Assemble the cross-frame window capacity probe (2.4f).  Default on, as the
+# shipping build pays only three instructions per frame for it.  The SSI
+# bring-up build turns it off: both instruments together exceed P:$09BF.
+WINPROBE=1
+# Extra flags for the DSP assembly run.  Plain DOSBox needs none.  DOSBox-X
+# opens a working-folder prompt and a menu on macOS and then never reaches
+# BUILD.BAT, so it needs:
+#   make DOSBOX=dosbox-x DOSBOX_FLAGS='-nopromptfolder -nogui -nomenu -defaultconf' trex_dsp
+DOSBOX_FLAGS=
 VASM=./tools/vasm/vasmm68k_mot
 VLINK=./tools/vlink/vlink
 
@@ -12,8 +26,17 @@ MEASURE_DIR=./TREX/m68030/measure
 # 265-frame prefix on the corrected build; re-converge after any program change
 # (OPTIMIZATION.md 2.4b) rather than trusting this constant.
 MEASURE_VBLS=7710
+# Converged VBL budgets for the three-build rasterizer split (measure_split).
+# Each has to land on the SAME frame count as MEASURE_FRAMES or the averages
+# are taken over different stretches of the choreography and do not subtract;
+# the profile builds are faster and therefore need fewer VBLs.  Re-converge
+# all four after any program change rather than trusting these constants.
+MEASURE_FRAMES=265
+MEASURE_SPLIT_VBLS=7605
+MEASURE_SPLIT_NOPIX_VBLS=6760
+MEASURE_SPLIT_NOROWS_VBLS=5270
 
-.PHONY: all clean trex_m68030 trex_m68030_run trex_m68030_prepass trex_m68030_prepass_run trex_release trex_dsp measure create_dirs
+.PHONY: measure_split_run all clean trex_m68030 trex_m68030_run trex_m68030_prepass trex_m68030_prepass_run trex_m68030_ssi_shadow trex_m68030_ssi_rows trex_m68030_ssi_hatari trex_m68030_ssi_dma ssi_dma_verify measure_split trex_ssi_loopback ssi_rows_verify ssi_hatari_verify trex_release trex_dsp ssi_stream_model_test ssi_dma_compile_test measure create_dirs
 
 all: create_dirs $(VASM) $(VLINK) ./TREX/m68030/TREX.TOS ./TREX/m68030/TREX.LOD
 
@@ -28,7 +51,55 @@ trex_m68030_prepass: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_prepass.tos
 # writes so the Hatari disk indicator is not hit once per frame.
 trex_m68030_prepass_run: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_prepass_run.tos ./TREX/m68030/trex_dsp.lod
 
+# Optional host-shadow diagnostic: links the compact frame builder and the
+# stopped ownership/read-back probe into a separate binary.
+trex_m68030_ssi_shadow: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_shadow.tos
+
+# Optional full-row shadow diagnostic.  It serializes the exact host packet
+# setup into ROW_ABS/SET_SHADE records, but still does not start DMA.
+trex_m68030_ssi_rows: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_rows.tos
+
+# Hatari-only SSI loopback.  It consumes the completed full-row stream in
+# memory and validates the same envelope/CRC/row accounting a DMA completion
+# gate would publish; it does not touch Falcon SSI or Crossbar registers.
+trex_m68030_ssi_hatari: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_hatari.tos
+
+# Falcon-runnable SSI loopback package.  It exercises the complete-row
+# consumer and rasterizer feed on the 68030, but deliberately does not touch
+# physical SSI, Crossbar or DMA registers.  The distinct LOD name keeps the
+# pair self-contained when copied to a real Falcon.
+trex_ssi_loopback: create_dirs $(VASM) $(VLINK) ./TREX/m68030/TREXSSI.TOS ./TREX/m68030/TREXSSI.LOD
+
+# Independently recompute the row DDA from the packet sidecar and compare it
+# with the decoded full-row stream emitted by the optional diagnostic.
+ssi_rows_verify:
+	PYTHONPATH=./tools python3 ./tools/verify_ssi_rows.py ./TREX/m68030/ssi_rows.res ./TREX/m68030/ssi_rows.pkt
+
+# Verify both the independent row DDA and the in-emulator Hatari transport
+# consumer's completion sidecar.
+ssi_hatari_verify:
+	PYTHONPATH=./tools python3 ./tools/verify_ssi_hatari.py ./TREX/m68030/ssi_rows.res ./TREX/m68030/ssi_rows.pkt ./TREX/m68030/ssihatri.sta
+
 trex_dsp: create_dirs ./TREX/dsp/trex_dsp.lod
+
+ssi_stream_model_test:
+	python3 ./tools/ssi_stream_model.py --self-test
+
+# Live Falcon SSI transport probe.  The ONLY target that claims the sound
+# channel, routes DSP-XMIT to DMA-RECORD and starts the record engine.  It
+# runs one framed burst before the renderer starts and writes ssi_dma.res
+# plus the raw capture ssi_dcap.res.
+trex_m68030_ssi_dma: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_dma.tos ./TREX/m68030/trex_dsp.lod
+
+# Decode and independently re-derive the transport probe's capture.
+ssi_dma_verify:
+	PYTHONPATH=./tools python3 ./tools/verify_ssi_dma.py ./TREX/m68030/ssi_dma.res ./TREX/m68030/ssi_dcap.res
+
+# Compile-only Falcon SSI/DMA ownership scaffold.  It is intentionally not
+# linked into the renderer until the physical owner snapshot/restore and cache
+# coherency gates in OPTIMIZATION.md have been closed.
+ssi_dma_compile_test: create_dirs $(VASM) ./TREX/m68030/build/ssi_dma.o
+	@:
 
 # Headless timing run of the full-mesh diagnostic build, then the report.
 # The 8.3 filename matters: GEMDOS truncates trex_m68030.tos, so --auto would
@@ -51,6 +122,52 @@ measure: trex_m68030
 	@python3 ./tools/decode_render_stats.py $(MEASURE_DIR)/render_stats.res
 	@echo "frame-100 checkpoint (expect d89958b3...3d16):"
 	@shasum -a 256 $(MEASURE_DIR)/fb.res
+
+# The section 3.5 rasterizer split: per-packet setup, row/span walk and pixel
+# loops, from three builds over one identical prefix.  NO_ROWS keeps only the
+# per-packet setup; NO_PIXELS keeps setup plus the row walk.  Both patches
+# preserve the replaced instruction lengths, and the unpatched profile build
+# is byte-identical to the normal one -- which is why the split subtracts.
+# OPTIMIZATION.md 8.2 holds the current result.
+measure_split: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_m68030.tos \
+		./TREX/m68030/trex_profile_nopix.tos \
+		./TREX/m68030/trex_profile_norows.tos ./TREX/m68030/trex_dsp.lod
+	@test -x "$(HATARI)" || { echo "no Hatari at $(HATARI) -- see the measure target"; exit 1; }
+	@$(MAKE) --no-print-directory measure_split_run TAG=normal BIN=./TREX/m68030/trex_m68030.tos VBLS=$(MEASURE_SPLIT_VBLS)
+	@$(MAKE) --no-print-directory measure_split_run TAG=nopix BIN=./TREX/m68030/trex_profile_nopix.tos VBLS=$(MEASURE_SPLIT_NOPIX_VBLS)
+	@$(MAKE) --no-print-directory measure_split_run TAG=norows BIN=./TREX/m68030/trex_profile_norows.tos VBLS=$(MEASURE_SPLIT_NOROWS_VBLS)
+	@python3 ./tools/decode_render_stats.py --split \
+		$(MEASURE_DIR)/normal/render_stats.res \
+		$(MEASURE_DIR)/nopix/render_stats.res \
+		$(MEASURE_DIR)/norows/render_stats.res \
+		--expect-frames $(MEASURE_FRAMES)
+	@echo "frame-100 checkpoint (expect d89958b3...3d16):"
+	@shasum -a 256 $(MEASURE_DIR)/normal/fb.res
+
+measure_split_run:
+	@mkdir -p $(MEASURE_DIR)/$(TAG)
+	@cp $(BIN) $(MEASURE_DIR)/$(TAG)/TREX_M68.TOS
+	@cp ./TREX/m68030/trex_dsp.lod $(MEASURE_DIR)/$(TAG)/trex_dsp.lod
+	@rm -f $(MEASURE_DIR)/$(TAG)/render_stats.res $(MEASURE_DIR)/$(TAG)/fb.res
+	@cd $(MEASURE_DIR)/$(TAG) && "$(abspath $(HATARI))" \
+	  --machine falcon --cpulevel 3 --cpuclock 16 --mmu true \
+	  --patch-tos true --fast-boot true --tos "$(abspath $(TOS402))" \
+	  --dsp emu --memsize 4 --ttram 0 --monitor rgb \
+	  --frameskips 4 --sound off --benchmark --confirm-quit off \
+	  --log-level fatal --alert-level fatal \
+	  --harddrive . --auto 'C:\TREX_M68.TOS' --run-vbls $(VBLS) >/dev/null 2>&1
+
+./TREX/m68030/build/trex_profile_nopix.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) $< -quiet -Felf -m68030 -DTREX_PROFILE_NO_PIXELS -o $@ -L ./TREX/m68030/build/trex_profile_nopix.lst
+
+./TREX/m68030/trex_profile_nopix.tos: ./TREX/m68030/build/trex_profile_nopix.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
+./TREX/m68030/build/trex_profile_norows.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) $< -quiet -Felf -m68030 -DTREX_PROFILE_NO_ROWS -o $@ -L ./TREX/m68030/build/trex_profile_norows.lst
+
+./TREX/m68030/trex_profile_norows.tos: ./TREX/m68030/build/trex_profile_norows.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 trex_release: create_dirs $(VASM) $(VLINK) ./TREX/m68030/TREX.TOS ./TREX/m68030/TREX.LOD
 
@@ -107,6 +224,42 @@ TREX_MESH_DEPS = ./TREX/model/trex.o3d ./TREX/model/trex_facenormals.bin \
 
 ./TREX/m68030/build/trex_m68030.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
 	$(VASM) $< -quiet -Felf -m68030 -o $@ -L ./TREX/m68030/build/trex_m68030.lst
+
+./TREX/m68030/build/ssi_dma.o: ./TREX/m68030/ssi_dma.s ./src/xbios.s
+	$(VASM) $< -quiet -Felf -m68030 -o $@ -L ./TREX/m68030/build/ssi_dma.lst
+
+./TREX/m68030/build/trex_ssi_dma.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_dma.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_SSI_DMA -o $@ -L ./TREX/m68030/build/trex_ssi_dma.lst
+
+./TREX/m68030/trex_ssi_dma.tos: ./TREX/m68030/build/trex_ssi_dma.o ./TREX/m68030/build/ssi_dma.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
+./TREX/m68030/build/trex_ssi_shadow.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_dma.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_SSI_SHADOW -o $@ -L ./TREX/m68030/build/trex_ssi_shadow.lst
+
+./TREX/m68030/trex_ssi_shadow.tos: ./TREX/m68030/build/trex_ssi_shadow.o ./TREX/m68030/build/ssi_dma.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
+./TREX/m68030/build/trex_ssi_rows.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_dma.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_SSI_ROWS -o $@ -L ./TREX/m68030/build/trex_ssi_rows.lst
+
+./TREX/m68030/trex_ssi_rows.tos: ./TREX/m68030/build/trex_ssi_rows.o ./TREX/m68030/build/ssi_dma.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
+./TREX/m68030/build/trex_ssi_hatari.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_dma.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_SSI_ROWS -DTREX_SSI_HATARI -o $@ -L ./TREX/m68030/build/trex_ssi_hatari.lst
+
+./TREX/m68030/trex_ssi_hatari.tos: ./TREX/m68030/build/trex_ssi_hatari.o ./TREX/m68030/build/ssi_dma.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
+./TREX/m68030/build/TREXSSI.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_dma.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_RUN -DTREX_FPS -DTREX_SSI_ROWS -DTREX_SSI_HATARI -DTREX_SSI_LOOPBACK -o $@ -L ./TREX/m68030/build/TREXSSI.lst
+
+./TREX/m68030/TREXSSI.TOS: ./TREX/m68030/build/TREXSSI.o ./TREX/m68030/build/ssi_dma.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
+./TREX/m68030/TREXSSI.LOD: ./TREX/dsp/trex_dsp.lod
+	cp $< $@
 
 ./TREX/m68030/trex_m68030.tos: ./TREX/m68030/build/trex_m68030.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
@@ -168,7 +321,8 @@ TREX_MESH_DEPS = ./TREX/model/trex.o3d ./TREX/model/trex_facenormals.bin \
 ./TREX/dsp/trex_dsp.lod: ./TREX/dsp/trex_dsp.asm ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE
 	@if command -v $(DOSBOX) >/dev/null 2>&1; then \
 		cp ./TREX/dsp/trex_dsp.asm ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE ./TREX/dsp/build/ && \
-		SDL_VIDEODRIVER=dummy $(DOSBOX) -exit ./TREX/dsp/build/BUILD.BAT && \
+		printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' > ./TREX/dsp/build/dspconf.inc && \
+		SDL_VIDEODRIVER=dummy $(DOSBOX) $(DOSBOX_FLAGS) -exit ./TREX/dsp/build/BUILD.BAT && \
 		[ -s ./TREX/dsp/build/trex_dsp.lod ] && \
 		cp ./TREX/dsp/build/trex_dsp.lod $@; \
 	else \
@@ -205,6 +359,38 @@ clean:
 	rm -f ./TREX/m68030/trex_m68030.tos
 	rm -f ./TREX/m68030/build/trex_m68030.o
 	rm -f ./TREX/m68030/build/trex_m68030.lst
+	rm -f ./TREX/m68030/build/ssi_dma.o
+	rm -f ./TREX/m68030/build/ssi_dma.lst
+	rm -f ./TREX/m68030/build/trex_profile_nopix.o
+	rm -f ./TREX/m68030/build/trex_profile_nopix.lst
+	rm -f ./TREX/m68030/trex_profile_nopix.tos
+	rm -f ./TREX/m68030/build/trex_profile_norows.o
+	rm -f ./TREX/m68030/build/trex_profile_norows.lst
+	rm -f ./TREX/m68030/trex_profile_norows.tos
+	rm -f ./TREX/m68030/build/trex_ssi_dma.o
+	rm -f ./TREX/m68030/build/trex_ssi_dma.lst
+	rm -f ./TREX/m68030/trex_ssi_dma.tos
+	rm -f ./TREX/m68030/ssi_dma.res
+	rm -f ./TREX/m68030/ssi_dcap.res
+	rm -f ./TREX/m68030/build/trex_ssi_shadow.o
+	rm -f ./TREX/m68030/build/trex_ssi_shadow.lst
+	rm -f ./TREX/m68030/trex_ssi_shadow.tos
+	rm -f ./TREX/m68030/build/trex_ssi_rows.o
+	rm -f ./TREX/m68030/build/trex_ssi_rows.lst
+	rm -f ./TREX/m68030/trex_ssi_rows.tos
+	rm -f ./TREX/m68030/build/trex_ssi_hatari.o
+	rm -f ./TREX/m68030/build/trex_ssi_hatari.lst
+	rm -f ./TREX/m68030/trex_ssi_hatari.tos
+	rm -f ./TREX/m68030/build/TREXSSI.o
+	rm -f ./TREX/m68030/build/TREXSSI.lst
+	rm -f ./TREX/m68030/TREXSSI.TOS
+	rm -f ./TREX/m68030/TREXSSI.LOD
+	rm -f ./TREX/m68030/ssi_shad.res
+	rm -f ./TREX/m68030/ssi_rows.res
+	rm -f ./TREX/m68030/ssi_rows.status
+	rm -f ./TREX/m68030/ssi_rows.pkt
+	rm -f ./TREX/m68030/ssihatri.sta
+	rm -f ./TREX/m68030/ssi_route.res
 	rm -f ./TREX/m68030/trex_run.tos
 	rm -f ./TREX/m68030/build/trex_run.o
 	rm -f ./TREX/m68030/build/trex_run.lst

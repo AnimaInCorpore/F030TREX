@@ -73,6 +73,7 @@
 ; -----------------------------------------------------------------------------
 
 	include	'ioequ.inc'
+	include	'dspconf.inc'
 
 TREX_VERTICES	= 1376
 TREX_PRIMITIVES	= 2724
@@ -151,6 +152,21 @@ NORMAL_TOTAL	= 3610
 NORMAL_Y_COUNT	= 1905
 NORMAL_X_COUNT	= NORMAL_TOTAL-NORMAL_Y_COUNT
 
+; Direct-mapped, frame-local cache of the two clamped direct-light channel sums
+; produced for a corner normal.  Normal indices repeat often in the O3D
+; triangle stream, while rotating a normal and evaluating six dot products is
+; the dominant part of make_triangle_shade.  The tag is the full normal index;
+; the low seven bits select one of 128 entries.  Cached sums are deliberately
+; taken BEFORE the per-triangle depth cue, which is applied on every hit and
+; miss so triangles sharing a normal but not a depth remain bit-exact.
+;
+; All three arrays live in the phase-local X gap after the BUILD output and
+; before prepass_scratch.  cache_light_directions_x clears the tags after the
+; current frame matrix/light payload is final and after the prepass has
+; released the overlay.
+SHADE_CACHE_ENTRIES	= 128
+SHADE_CACHE_MASK	= SHADE_CACHE_ENTRIES-1
+
 ; Flat-shading quantization.  The Lambert term is a 1.23 fraction in [0,1);
 ; shifting it right by SHADE_SHIFT keeps its top SHADE_BITS as an integer
 ; level, so SHADE_MAX means "surface pointing straight at the light".  The
@@ -199,6 +215,10 @@ CMD_SET_ANIMATED_FRAME	= 12
 CMD_LOAD_ANIMATION_GAIT	= 13
 CMD_APPLY_ANIMATION_TARGET	= 14
 CMD_FINISH_ANIMATED_FRAME	= 15
+; Bit 6 selects the control range.  RESET is its only member with bit 0 set;
+; the SSI transport probe takes the even side, so the dispatcher separates
+; them with one extra JCLR and no new tree level.
+CMD_SSI_STREAM		= $40
 CMD_RESET		= $7f
 
 ACK_PING		= $700001
@@ -217,6 +237,17 @@ ACK_ANIMATION_BEGIN	= $70000c
 ACK_ANIMATION_GAIT	= $70000d
 ACK_ANIMATION_TARGET	= $70000e
 ACK_PREPASS		= $70000f
+ACK_SSI_STREAM		= $700010
+
+; SSI transport probe framing.  The envelope is the same 8-word header and
+; 6-word footer the span-stream contract defines; the DSP only relays it.
+SSI_HEADER_WORDS	= 8
+SSI_FOOTER_WORDS	= 6
+SSI_ENVELOPE_WORDS	= SSI_HEADER_WORDS+SSI_FOOTER_WORDS
+; Iterations the transmitter may stall before the burst is abandoned.  At four
+; cycles a pass and 32 MHz this is about 8 ms, an order of magnitude more than
+; the 128-CPU-cycle spacing an armed record channel clocks words at.
+SSI_TDE_SPIN		= 65535
 ERR_BAD_COMMAND		= $7fffff
 
 ; Cross-frame window capacity probe: outer repeats of the 32-cycle inner burn
@@ -325,6 +356,10 @@ main_loop
 	; control range first; command $7f is its only defined member.
 	jclr	#6,x0,dispatch_command_low
 	nop
+	IF	SSIPROBE
+	jclr	#0,x0,command_ssi_stream
+	nop
+	ENDIF
 	jmp	<command_reset
 
 dispatch_command_low
@@ -753,6 +788,7 @@ finish_no_prepass
 	; ~131 ms, which the window still partly absorbs, so that build could
 	; only ever report a modelled axis.  The inner DO is the outer loop's
 	; FIRST word, well clear of the last three the 56001 reserves.
+	IF	WINPROBE
 	move	y:probe_units,a
 	tst	a
 	jeq	<finish_no_probe
@@ -796,6 +832,7 @@ probe_burn_loop
 	nop
 	nop
 probe_burn_outer
+	ENDIF
 finish_no_probe
 
 	move	#ACK_FRAME,x0
@@ -1228,6 +1265,12 @@ cache_light_directions_x
 	move	y:(r0)+,x0
 	move	x0,x:(r1)+
 cache_light_direction_loop
+
+	; R1 now points at shade_cache_tags.  Only tags need invalidating; sum
+	; words are read only after an exact full-index tag match.
+	move	#>-1,a
+	rep	#SHADE_CACHE_ENTRIES
+	move	a1,x:(r1)+
 	rts
 
 transform_vertices
@@ -1482,7 +1525,7 @@ make_triangle_shade
 	; is the same expression transform_vertices already uses and stays
 	; correct if the frame matrix ever carries more than a rotation.
 	;
-	; Clobbers a, b, x0, x1, y0, y1, r0, r3, r4, r5, r6 and n4.  r1 and r2
+	; Clobbers a, b, x0, x1, y0, y1, r0, r3-r7, n4 and n7.  r1 and r2
 	; belong to the caller's chunk loop and are not touched.
 	;
 	; Gouraud corner pass: the loop below runs the rotation and the two
@@ -1522,16 +1565,36 @@ shade_depth_diff_clamped
 	move	a1,y:<shade_acc_g
 	move	#triangle_n0,r5
 	move	#corner_levels,r6
+	move	#shade_cx,r4
+	move	#>-3,n4
+	move	#>SHADE_CACHE_ENTRIES,n7
 
 	do	#3,shade_corner_loop
+	; Direct-map the full normal index through its low seven bits.  R7 keeps
+	; the tag/sum slot live across the miss path; none of the rotation or
+	; Lambert loops otherwise uses it.  A hit jumps over both expensive
+	; stages and re-enters at the common per-triangle depth multiply.
+	move	y:(r5)+,a
+	move	a1,b
+	move	#>SHADE_CACHE_MASK,x0
+	and	x0,b
+	move	#shade_cache_tags,x0
+	add	x0,b
+	move	b1,r7
+	move	#>NORMAL_Y_COUNT,x1
+	move	x:(r7),x0
+	cmp	x0,a
+	jeq	<shade_corner_cache_hit
+
 	; Bank-split load of this corner's normal: index below NORMAL_Y_COUNT
 	; reads the Y block behind the triangle indices, at or above it the X
 	; block that displaced the UV pairs.  The three components load
 	; straight into x1/y1/x0 and stay there through the whole rotation
 	; below, which writes only A and Y0 -- no staging cells, no reloads.
-	move	y:(r5)+,a
-	move	#>NORMAL_Y_COUNT,x0
-	cmp	x0,a
+	; Cache the full tag in the compare's parallel slot.  CMP does not write
+	; A, and the move reads A1 at instruction start, so the following bank
+	; address calculation still sees the same normal index.
+	cmp	x1,a	a1,x:(r7)
 	jge	<shade_corner_x_bank
 	move	a1,x0
 	add	x0,a
@@ -1545,7 +1608,7 @@ shade_depth_diff_clamped
 	move	y:(r0),x0
 	jmp	<shade_corner_loaded
 shade_corner_x_bank
-	sub	x0,a
+	sub	x1,a
 	move	a1,x0
 	add	x0,a
 	add	x0,a
@@ -1562,16 +1625,17 @@ shade_corner_loaded
 	; multiplier pairings, so each row streams the matrix through Y0 and
 	; needs no other memory operand at all.  R0 is dead between the normal
 	; fetch above and the Lambert loops' own re-point below, so it carries
-	; the row cursor.
-	move	#frame_matrix,r4
-	move	#shade_cx,r0
+	; the row cursor.  R4 stays parked on shade_cx for the Lambert loops;
+	; using R0/R3 here removes their per-corner R4/N4 reinitialization.
+	move	#frame_matrix,r0
+	move	#shade_cx,r3
 	do	#3,shade_rotate_row
-	move	y:(r4)+,y0
-	mpy	x1,y0,a	y:(r4)+,y0
-	mac	y1,y0,a	y:(r4)+,y0
+	move	y:(r0)+,y0
+	mpy	x1,y0,a	y:(r0)+,y0
+	mac	y1,y0,a	y:(r0)+,y0
 	mac	x0,y0,a
 	rnd	a
-	move	a1,y:(r0)+
+	move	a1,y:(r3)+
 shade_rotate_row
 
 	; Lambert sum over the three source lights.  Each contributes its own
@@ -1589,9 +1653,10 @@ shade_rotate_row
 	; simultaneously fetches the next Y-resident normal component and
 	; X-resident light component.  The DSP's XY move form assigns R0 to
 	; the X bus and R4 to the Y bus here.
+	; Advance R7 from this normal's tag to its red raw-sum slot.  N7 then
+	; walks red -> green after the two channel passes.
+	move	(r7)+n7
 	move	#phase_light_directions_x,r0
-	move	#shade_cx,r4
-	move	#>-3,n4
 	move	#shade_sum_r,r3
 	do	#2,shade_channel_loop
 	clr	b
@@ -1608,12 +1673,31 @@ shade_light_none
 	nop
 shade_light_loop
 	jsr	<shade_clamp_sum
-	move	a1,x0
-	move	y:<shade_depth_scale,y0
+	; The X:R dual move stores the cache value while copying the same limited
+	; accumulator into Y0 for the depth multiply.  The stored value is the raw
+	; clamped light sum; depth remains specific to this triangle and is
+	; recomputed on cache hits below.
+	move	a,x:(r7)	a,y0
+	move	y:<shade_depth_scale,x0
 	mpy	x0,y0,a
-	rnd	a
+	rnd	a	(r7)+n7
 	move	a1,y:(r3)+
 shade_channel_loop
+	jmp	<shade_corner_sums_ready
+
+shade_corner_cache_hit
+	; Tag -> red sum, then apply the identical two MPY/RND depth operations
+	; the miss path uses.  Keeping the cache before this step preserves the
+	; exact per-triangle depth cue and its rounding.
+	move	(r7)+n7
+	move	#shade_sum_r,r3
+	move	y:<shade_depth_scale,y0
+	do	#2,shade_cache_hit_channel
+	move	x:(r7),x0
+	mpy	x0,y0,a
+	rnd	a	(r7)+n7
+	move	a1,y:(r3)+
+shade_cache_hit_channel
 
 	; This corner's own level from its two sums, then accumulate ONE THIRD
 	; of each sum: a corner sum reaches 1.09 (see shade_clamp_sum), so the
@@ -1623,6 +1707,7 @@ shade_channel_loop
 	; darkest banks.  Thirds keep every intermediate below 1.0 except the
 	; final one, which the saturation below catches, and they make the
 	; accumulator the corner MEAN outright.
+shade_corner_sums_ready
 	jsr	<shade_quantize_level
 	move	a1,y:(r6)+
 	move	y:<shade_sum_r,x0
@@ -3275,6 +3360,152 @@ prepass_merge_done
 prepass_merge_clean
 	rts
 
+	IF	SSIPROBE
+; -----------------------------------------------------------------------------
+; SSI transport probe -- CMD_SSI_STREAM
+;
+; The DSP side of the Falcon "DSP-XMIT -> Crossbar -> DMA-RECORD" route.  This
+; is a transport bring-up command, not a renderer path: it runs standalone
+; between frames, borrows the BUILD chunk's dead X scratch, and touches no
+; state the geometry pipeline owns.
+;
+; Host words, in order:
+;   payload_count          number of generated 16-bit ramp words, 1..65535
+;   seed                   first ramp value, 16 bits
+;   SSI_ENVELOPE_WORDS     the frame header then the frame footer, verbatim
+;
+; The DSP transmits header, payload_count ramp words (seed, seed+1, ...,
+; modulo 16 bits) and footer, then replies ACK_SSI_STREAM and a status word:
+; 0 = every word was clocked out, 1 = the transmitter stalled and the burst
+; was abandoned to the host's timeout.
+;
+; The envelope is host-authored on purpose.  The whole frame is then exactly
+; predictable on the host BEFORE the transfer, so verification is a compare
+; against an independently built expectation rather than a re-derivation from
+; whatever arrived.  The ramp is generated here so the bulk payload is not
+; bounded by host-port bandwidth, and a ramp localises a transport fault --
+; a dropped or duplicated word shows up as a discontinuity at a known index,
+; which a pseudo-random payload plus a checksum would only report as "wrong".
+;
+; Alignment: the SSI transmits the TOP bits of the 24-bit word, so a 16-bit
+; word length sends bits 23..8.  Every value is therefore shifted left eight
+; on the way in, and the ramp is advanced in that same shifted domain -- the
+; step is $000100 and the mask $FFFF00 reproduces the 16-bit wrap exactly.
+;
+; Handshake framing: with DMA-RECORD as the master, SC2 is not driven by the
+; SSI at all.  PC5 is switched to GPIO output and raised by hand, which is
+; what tells the Crossbar a word is ready.  CRB is written before PCD because
+; enabling TE re-arms the transmitter's frame wait, and raising PC5 is what
+; clears it.
+command_ssi_stream
+	jsr	<receive_word
+	move	x0,y:ssi_payload_count
+	jsr	<receive_word
+	move	x0,a
+	rep	#8
+	asl	a
+	move	a1,y:ssi_ramp
+
+	move	#ssi_envelope,r0
+	do	#SSI_ENVELOPE_WORDS,ssi_envelope_end
+	jsr	<receive_word
+	move	x0,a
+	rep	#8
+	asl	a
+	move	a1,x:(r0)+
+ssi_envelope_end
+
+	move	#>SSI_TDE_SPIN,x0
+	move	x0,y:ssi_spin
+	clr	a
+	move	a1,y:ssi_status
+
+	movep	#0,x:m_crb			; transmitter off while it is set up
+	movep	#$4000,x:m_cra			; 16-bit words, no frame divider
+	movep	#$0140,x:m_pcc			; PC6/SCK and PC8/STD to the SSI
+	movep	#$0020,x:m_pcddr		; PC5 GPIO, driven as the frame line
+	; CRB copies the known-good Falcon DSP-to-Crossbar audio configuration
+	; minus its interrupt enables.  Which of MOD/SYN a handshaked transmit
+	; strictly needs is a PHYSICAL-hardware question this build cannot
+	; settle: with SC2 driven by hand the frame wait is cleared through
+	; PCD, so both settings behave identically in emulation.
+	movep	#$1a00,x:m_crb			; TE, network mode, sync, clock in
+	movep	#$0020,x:m_pcd			; raise the frame line
+
+	move	#ssi_envelope,r0
+	do	#SSI_HEADER_WORDS,ssi_header_end
+	move	x:(r0)+,x0
+	jsr	<ssi_send_word
+	nop
+ssi_header_end
+
+	move	y:ssi_payload_count,a
+	tst	a
+	jeq	<ssi_payload_end
+	; DO takes only the short absolute form for a memory count, and these
+	; probe scalars sit above Y:$3F.  The count goes through X0, which the
+	; loop body then reuses freely: DO latches LC at loop setup.
+	move	a1,x0
+	move	y:ssi_ramp,a
+	move	#>$000100,x1
+	move	#>$ffff00,y1
+	do	x0,ssi_payload_end
+	move	a1,x0
+	jsr	<ssi_send_word
+	add	x1,a
+	and	y1,a
+ssi_payload_end
+
+	move	#ssi_envelope+SSI_HEADER_WORDS,r0
+	do	#SSI_FOOTER_WORDS,ssi_footer_end
+	move	x:(r0)+,x0
+	jsr	<ssi_send_word
+	nop
+ssi_footer_end
+
+	; The last footer word is still sitting in TX until the Crossbar clocks
+	; it out.  Disabling TE before that replaces it with a zero on the wire
+	; and the frame arrives one real word short, so wait for the final TDE
+	; before tearing the route down.
+	jsr	<ssi_wait_tde
+
+	movep	#0,x:m_pcd
+	movep	#0,x:m_crb
+	movep	#0,x:m_pcddr
+	movep	#0,x:m_pcc
+
+	move	#ACK_SSI_STREAM,x0
+	jsr	<send_word
+	move	y:ssi_status,x0
+	jsr	<send_word
+	jmp	<main_loop
+
+; x0 = one word already aligned into bits 23..8.
+ssi_send_word
+	jsr	<ssi_wait_tde
+	movep	x0,x:m_tx
+	rts
+
+; Bounded wait for the transmitter to empty.  A route that is not armed never
+; sets TDE, and an unbounded wait there costs the whole run: the DSP would sit
+; here forever while the host waits on a reply that cannot come.  On the first
+; timeout the status latches and the spin limit collapses to a single test, so
+; abandoning the rest of a dead burst costs one status read per word instead
+; of a full spin each.
+ssi_wait_tde
+	move	y:ssi_spin,b
+	move	#>1,y0
+ssi_wait_tde_loop
+	jset	#m_tde,x:m_sr,ssi_wait_tde_done
+	sub	y0,b
+	jne	<ssi_wait_tde_loop
+	move	y0,y:ssi_status
+	move	y0,y:ssi_spin
+ssi_wait_tde_done
+	rts
+
+	ENDIF
+
 ; -----------------------------------------------------------------------------
 ; X memory
 ; -----------------------------------------------------------------------------
@@ -3312,9 +3543,15 @@ corner_normals_x
 chunk_uvs
 	ds	MAX_CHUNK*2
 
+; The SSI transport probe's frame envelope, overlaid on the BUILD chunk's UV
+; pairs.  CMD_SSI_STREAM is a standalone bring-up command that never runs
+; between a BUILD chunk's UV upload and its span pass, so this costs no
+; memory.  prepass_order overlays the same words for the same reason.
+ssi_envelope		=	chunk_uvs
+
 ; One chunk of survivor records, SPAN_RECORD_WORDS each.  Culled triangles
-; occupy nothing.  This is the last X allocation; the layout ends at X:$3C5E,
-; inside the host's 15,872-word reservation.
+; occupy nothing.  The record allocation ends at X:$3C5E; phase-local light
+; and normal-result caches continue above it without touching prepass_scratch.
 triangle_out
 	ds	MAX_CHUNK*SPAN_RECORD_WORDS
 
@@ -3324,6 +3561,14 @@ triangle_out
 ; are enough for the six RGB/green light vectors; prepass_scratch begins well
 ; above it, so the kill bitmap and its cursor remain untouched.
 phase_light_directions_x	=	triangle_out+MAX_CHUNK*SPAN_RECORD_WORDS
+
+; Frame-local normal-light cache.  The three 128-word arrays occupy only the
+; BUILD-dead tail of prepass_order and end below prepass_scratch, so they do
+; not reduce PREPASS_MAX or overlap the masks/kill bitmap that survive BUILD.
+shade_cache_tags	=	phase_light_directions_x+18
+shade_cache_r		=	shade_cache_tags+SHADE_CACHE_ENTRIES
+shade_cache_g		=	shade_cache_r+SHADE_CACHE_ENTRIES
+shade_cache_end		=	shade_cache_g+SHADE_CACHE_ENTRIES
 
 ; -----------------------------------------------------------------------------
 ; Occlusion prepass working set
@@ -3695,13 +3940,30 @@ prepass_tp_save
 ; Cross-frame window capacity probe.  Units of the fixed-cost burn loop that
 ; command_finish_animated_frame runs at the end of the window; 0 disables it
 ; and is what every shipping build ships.  It sits in one of the four retired
-; pad words above so no other symbol moves, and it is a `dc` rather than a
-; `ds` so the whole sweep is driven by patching ONE word of the .lod -- the
-; DSP program and the host binary then stay byte-identical across every point
-; of the sweep, which is a stronger equal-layout guarantee than the one-byte
-; host patches of 2.3f and 2.4e.
+; pad words above, and it is a `dc` rather than a `ds` so the whole sweep is
+; driven by patching ONE word of the .lod -- the DSP program and the host
+; binary then stay byte-identical across every point of the sweep, which is a
+; stronger equal-layout guarantee than the one-byte host patches of 2.3f and
+; 2.4e.
+	IF	WINPROBE
 probe_units
 	dc	0
+	ENDIF
+
+; SSI transport probe state.  These live above Y:$3F so their references use
+; the long absolute form; the probe is a one-shot bring-up command and none of
+; them is read on a rendering path.  They are assembled only into the SSI
+; bring-up builds; the shipping and measurement .lod reclaims the four words.
+	IF	SSIPROBE
+ssi_payload_count
+	ds	1
+ssi_ramp
+	ds	1
+ssi_spin
+	ds	1
+ssi_status
+	ds	1
+	ENDIF
 	ds	3
 
 ; -----------------------------------------------------------------------------
@@ -3744,8 +4006,19 @@ probe_units
 ; overwritten by the next upload and reports garbage, which cost this stage
 ; one full round of contradictory measurements once.
 ;
-; The current full-mesh program ends at P:$094C, leaving P:$094D-$09BF free
-; before the resident index list.  Keep the "<" prefix on jumps and the short
+; The default build (SSIPROBE=0, WINPROBE=1) ends at P:$0995, leaving
+; P:$0996-$09BF free before the resident index list -- 42 words.  That is the
+; configuration that ships and that every timing run uses.
+;
+; Two instruments are conditional because they do not both fit.  The SSI
+; transport probe (CMD_SSI_STREAM, SSIPROBE) costs 103 words; the cross-frame
+; window burn loop (WINPROBE) costs 44.  KNOWN STATE: the SSI bring-up
+; configuration (SSIPROBE=1, WINPROBE=0) ends at P:$09D0 and is 17 words OVER
+; the ceiling.  It is a non-shipping bring-up variant whose .lod is not
+; committed, so nothing that ships is affected, but it must be brought back
+; under $09BF before it can be trusted -- past that address the program
+; silently overwrites the first triangle index.  Keep the "<" prefix on jumps
+; and the short
 ; Y-scalar forms on any code added later, or the program will overwrite the
 ; index list without an assembler error.
 ; Absolute-short addressing is the largest single contributor: every data
@@ -3761,9 +4034,11 @@ probe_units
 ; memory loads into the ALU operation in front of them returned twenty-seven
 ; more, forcing absolute-short data addressing returned 103 (OPTIMIZATION.md
 ; 2.3d), and keeping the corner normal register-resident through the shading
-; rotation returned 41 more (2.3h site 1).  A parallel move reads its source
-; at the start of the instruction, so only loads whose source the ALU op does
-; not write may be folded, and a rep/do target must stay one word.
+; rotation returned 41 more (2.3h site 1).  The frame-local normal-light cache
+; then spends 29 program words to bypass repeated rotations and dot products
+; (2.4d).  A parallel move reads its source at the start of the instruction,
+; so only loads whose source the ALU op does not write may be folded, and a
+; rep/do target must stay one word.
 ; -----------------------------------------------------------------------------
 
 	org	y:$09c0

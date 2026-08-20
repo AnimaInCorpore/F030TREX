@@ -115,9 +115,10 @@ DSP56001
   Morph, transform, projection, near
   plane, back face, area and screen
   culling, per corner Gouraud light,
-  span setup, and a screen space
-  occlusion prepass that kills hidden
-  triangles before they are sent.
+  span setup, plus a frame local cache
+  for repeated corner normal lighting.
+  A screen space occlusion prepass is
+  retained but off in this release.
 
 68030
   Packet build, ordering table and a
@@ -143,8 +144,11 @@ The only figures recorded so far come
 from corrected Hatari, whose timing only
 approximates a real machine: 1.956
 frames per second for this build
-(511.2 ms/frame).  Older emulator
-figures used twice the Falcon DSP clock.
+(511.2 ms/frame), with about 47 percent
+in the rasterizer and 47 percent in DSP
+readback and packet building.  Older
+emulator figures used twice the Falcon
+DSP clock.
 Nothing has been measured on real
 hardware yet.  The number on your own
 Falcon is the interesting one.
@@ -169,12 +173,16 @@ sits between the two.
 
 Two phases are worth reporting:
 
-  Frames 0 to 273, the flyby, with
-  occlusion culling armed.
+  Frames 0 to 273, the flyby.
 
-  The walk after it, which draws the
-  full mesh with culling switched off
-  and is the heavier, steadier load.
+  The continuing walk after it, the
+  heavier, steadier load.
+
+The optional occlusion prepass is left
+off: corrected-clock Hatari measured its
+current conservative yield as a net
+loss.  It remains in the source for
+future yield work.
 
 A stock machine needs nothing special:
 that is what this was written and

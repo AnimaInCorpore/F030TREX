@@ -78,6 +78,34 @@ in [`TREX/m68030/trex_m68030.s`](TREX/m68030/trex_m68030.s).
 
 ## 2. Current measured baseline
 
+The current diagnostic baseline is the frame-local normal-light-cache build
+from section 2.4d, measured over the fixed 265-frame prefix on the corrected
+DSP-clock Hatari described in 2.4b:
+
+| Stage | Time per frame | Share of frame |
+|---|---:|---:|
+| DSP set_frame | 13.2 ms | 2.5% |
+| DSP triangle setup/readback and packet build | 252.1 ms | 47.9% |
+| Framebuffer clear | 14.6 ms | 2.8% |
+| Ordering Table insertion | 2.5 ms | 0.5% |
+| Software span rasterizer | 243.8 ms | 46.3% |
+| **Total** | **526.6 ms / 1.90 FPS** | **100.0%** |
+
+The frame-100 framebuffer remains byte-identical to the recorded diagnostic
+checkpoint `d89958b3…3d16`.  Relative to the immediately re-run 534.2 ms
+baseline below, all 7.7 ms of stage saving lands in DSP readback/packet build;
+the rasterizer is identical to the tick.  These are corrected-Hatari emulator
+measurements, not physical-Falcon timings.
+
+The release now keeps the occlusion implementation compiled in but defaults it
+to disarmed, following 2.4c's measured +3.5 ms net loss at the current yield.
+With the light cache and that default, the layout-identical two-byte timing
+copy of `TREX.TOS` measures **525.5 ms / 1.90 FPS** over the same 265 frames
+(251.8 ms packet stage, 242.8 ms rasterizer).  The two changes together remove
+11.0 ms from the previously recorded 536.5 ms release.  Its frame-100 dump hash
+changes because the release-only FPS digits now show the faster rate; the
+diagnostic build without that overlay is the byte-identity correctness gate.
+
 The deprecated reduced-mesh LOD, its generator and its generated assets were
 removed in the full-mesh-only revision. The maintained frontend now always
 embeds the original 2,724-triangle O3D and its full sidecars; there is no mesh
@@ -170,7 +198,12 @@ historical and no longer describes a buildable configuration.
 
 The full 2,724-triangle mesh moved from **763.8 to 488.8 ms** in section 3.9's
 instruction-cache series (1.31 to 2.05 FPS) at byte-identical output. Section
-8.2a then recorded the 460.0 ms diagnostic baseline above after 3.9b/3.9c.
+8.2a then recorded the 460.0 ms diagnostic baseline after 3.9b/3.9c.  **Both
+are stock-clock figures** and neither is the current baseline: 2.4b's clock
+correction adds about 74 ms to the same binary, and the table at the top of
+this section -- 526.6 ms / 1.90 FPS -- is what the current build measures.
+The series' *gains* survive the correction because they are rasterizer gains
+and the DSP clock is not a term in the rasterizer; its absolute totals do not.
 
 The following 475.2/517.3 ms discussion is retained as the historical
 reduced-mesh measurement timeline, not as a current baseline. Section 3.8's
@@ -1119,18 +1152,21 @@ diagnostic builds too.
 
 For visual playback without per-frame host-disk traffic, build the release
 target `trex_release`. It emits `TREX.TOS`, retaining `TREX_PREPASS` and the
-rewritten armed culling path from 2.3f while defining `TREX_RUN`:
+rewritten culling path from 2.3f while defining `TREX_RUN`:
 framebuffer/stat diagnostics and the final diagnostic flush are
 disabled. The matching `TREX.LOD` is still read once at startup, so the
 mounted GEMDOS volume remains necessary.
 
 This is the single supported full-mesh package: textured Gouraud shading,
-armed DSP occlusion through both the authored choreography and the frontend's
-post-frame-273 gait/turn hold, and no per-frame diagnostic file writes. Build
-it with `make trex_release`; the matching `TREX.LOD` copy is placed beside the
-TOS so the release directory is self-contained. The DSP protocol, resident
-memory layout and `.LOD` contents are the validated production path described
-above; no separate presentation-mode variants are part of the release.
+the DSP occlusion implementation retained but default-disarmed after 2.4c
+measured its current yield as a net loss, and no per-frame diagnostic file
+writes. Diagnostic prepass builds still default to arm 1, and the release's
+one-word `prepass_arm` can still select the same validated path for yield work.
+Build it with `make trex_release`; the matching `TREX.LOD` copy is placed
+beside the TOS so the release directory is self-contained. The DSP protocol,
+resident memory layout and `.LOD` contents are the validated production path
+described above; no separate presentation-mode variants are part of the
+release.
 
 ### 2.3h The DSP reserve, audited a third time -- sites and what they buy
 
@@ -2358,12 +2394,13 @@ work decides is the honest one.
   packet build goes from 39.0% to 48.6%; the rasterizer falls from 54.2% to
   45.7%. For the whole life of this document the rasterizer has been the thing
   to optimize. On the corrected model it is no longer the biggest item.
-- **Section 8.2a's three-FPS gate roughly doubles.** The distance from the frame
-  to 333.3 ms was 126.7 ms against the 460.0 ms baseline. Against 534.2 ms it is
-  **200.9 ms**. Section 8.2a already concluded that three FPS does not follow
-  from any identified optimization; that conclusion is now much stronger, and
-  the ~66 ms its two named levers would buy lands near 468 ms / 2.14 FPS rather
-  than near 395 ms / 2.53 FPS.
+- **The three-FPS gate roughly doubles.** The distance from the frame to
+  333.3 ms was 126.7 ms against 8.2a's 460.0 ms stock-clock baseline. Against
+  this build's 534.2 ms it was **200.9 ms**, and after 2.4d's light cache the
+  re-measured gate in section 8.2 is **193.3 ms**. Section 8.2a already
+  concluded that three FPS does not follow from any identified optimization;
+  that conclusion is now much stronger, and the ~66 ms its two named levers
+  would buy lands near 461 ms / 2.17 FPS rather than near 395 ms / 2.53 FPS.
 - **Item 15 — moving the record stream off host-port PIO — gains, in relative
   terms.** It targets the stage that is now half the frame. Nothing measured
   here says the SSI/DMA path is easier or that section 7.4's hardware gates got
@@ -2553,10 +2590,12 @@ recommendation is not to delete the prepass: it is item 19's vehicle and 2.3h
 banked program words for exactly that work. It is that **the arm should follow
 the yield**, and at today's yield the arm costs more than it returns.
 
-#### The current standings
+#### The pre-normal-cache standings
 
-Everything measured on the corrected emulator, one binary per row except where
-noted, all at the converged 265-frame prefix:
+Everything measured at this point on the corrected emulator, one binary per row
+except where noted, all at the converged 265-frame prefix. Section 2.4d
+supersedes the shippable rows with the normal-light cache and the disarmed
+release default:
 
 | Configuration | frame | FPS |
 |---|---:|---:|
@@ -2593,6 +2632,82 @@ scale by about 2 and should be read that way until re-measured, and the
 conclusions built on "the DSP work is hidden" need re-checking rather than
 re-scaling** — the prepass is the case where the number moved by the expected
 factor and the conclusion drawn from it did not survive.
+
+### 2.4d Frame-local normal-light cache and release disarm — implemented and measured
+
+Per-corner Gouraud evaluates three normal indices for every surviving
+triangle.  Across the complete static triangle stream, those 8,172 references
+name 3,609 distinct normals.  A read-only source-order simulation of the exact
+sidecar gives 3,777 hits in a 128-entry direct-mapped cache (**46.22%**).  That
+is a cache-locality model before culling, not a measured runtime hit rate, but
+it identified a repeated calculation with a much larger body than its lookup:
+one 3x3 normal rotation and two three-light dot-product passes.
+
+`make_triangle_shade` now caches the two clamped direct-light channel sums by
+full normal index.  The low seven index bits select a slot; an exact 24-bit tag
+rejects collisions.  The values are cached before the triangle-specific depth
+cue, so both hits and misses execute the same two depth MPY/RND operations and
+the same later level/tint quantization.  A miss follows the previous rotation,
+Lambert, per-light clamp and channel-clamp sequence byte for byte, then uses an
+X:R parallel move to store the raw channel sum while copying it into the depth
+multiply operand.  A hit bypasses only the work whose inputs are frame matrix,
+light vectors and normal index.
+
+The cache is frame-local. `cache_light_directions_x` invalidates its 128 tags
+after matrix/light state is final and, when armed, only after `prepass_run` has
+released the phase overlay.  Sums need no clear because no entry is read without
+a matching full tag.  The exact BUILD-phase ownership is:
+
+| X range | Words | Owner |
+|---|---:|---|
+| `$3C5F-$3C70` | 18 | paired direct-light vectors from 4.4c |
+| `$3C71-$3CF0` | 128 | normal-cache tags |
+| `$3CF1-$3D70` | 128 | red direct-light sums |
+| `$3D71-$3DF0` | 128 | green direct-light sums |
+| `$3DF1-$3F15` | 293 | unused BUILD-phase tail before `prepass_scratch` |
+
+All four cache regions overlay only the already-consumed tail of
+`prepass_order`; they do not reduce `PREPASS_MAX`, touch the masks, kill bitmap
+or status, change the host protocol, or widen the 18-word survivor record.
+The scheduling also parks R4/N4 on the rotated-normal triple across corners
+and uses R0/R3 for the rotation cursors, removing two per-corner pointer resets.
+
+The controlled A/B used the current worktree and the corrected-clock Hatari
+recipe from 2.4b.  The before run reproduced the recorded baseline exactly;
+the after run was re-converged to the same 265 completed frames by setting the
+VBL cap to 7,604:
+
+| Stage | Before | Normal-light cache | Delta |
+|---|---:|---:|---:|
+| DSP set_frame | 13.0 ms | 13.2 ms | +0.2 ms |
+| DSP readback + packet build | 259.8 ms | **252.1 ms** | **-7.7 ms** |
+| Clear + OT | 17.0 ms | 17.1 ms | +0.1 ms |
+| Software span rasterizer | 243.8 ms | 243.8 ms | 0.0 ms |
+| **Total** | **534.2 ms / 1.87 FPS** | **526.6 ms / 1.90 FPS** | **-7.6 ms (-1.4%)** |
+
+Both runs write 9,049,666 pixels over the prefix, finish frame 264 with 1,149
+packets/OT nodes, and reproduce frame 100 SHA-256
+`d89958b314c924ad…3d16`.  The isolated stage movement and unchanged rasterizer
+are the expected signature of DSP work removed from BUILD, but this remains an
+emulator measurement, not a physical-Falcon result.
+
+Assembly is 0 errors/0 warnings.  The program grows from `P:$0901` to
+`P:$091E`, leaving 161 words at `$091F-$09BF` before the resident indices.
+(Section 7.4b's transport probe has since taken 103 of those; the program
+now ends at `P:$0985`.)
+An armed-prepass 4,000-VBL gate completed 130 frames with zero protocol
+failures and reproduced the same frame-100 hash, directly exercising the
+prepass-order/cache lifetime boundary.
+
+The release default applies 2.4c's earlier result at the same time:
+`TREX_PREPASS` remains compiled in, and diagnostic prepass builds still default
+to arm 1, but `TREX_RELEASE` initializes `prepass_arm` to zero.  The cache plus
+that disarm measures **525.5 ms / 1.90 FPS** over 265 frames, against the
+recorded 536.5 ms / 1.86 FPS armed release: **-11.0 ms/frame (-2.1%)**.  Its
+9,049,666 raster pixels and 1,149 final packets remain equal.  The release
+framebuffer hash is not an identity gate because its FPS overlay is designed to
+change when timing changes; the overlay-free diagnostic hash above is the
+correct output check.
 
 ### 2.5 Delta clearing: built, measured, rejected
 
@@ -2976,6 +3091,16 @@ completely.  Re-taken the same way on the same full mesh and the same prefix:
 | Row/span walk | 303.9 ms | **112.6 ms** | **-191.3 ms** |
 | Per-packet setup | 95.3 ms | **91.2 ms** | -4.1 ms |
 
+**Every split in this section is a stock-clock measurement**, taken before
+2.4b established that stock Hatari ran the DSP at twice its real rate.  The
+*frame* columns above are therefore all too low.  The rasterizer terms are
+not: the DSP clock is not a term in the CPU rasterizer, and the corrected
+re-measurement in 8.2 reproduces the post-3.9b/3.9c rasterizer split to
+0.3 ms.  **Section 8.2 carries the current split** -- 68.5 ms per-packet
+setup, 112.7 ms row/span walk, 62.5 ms pixel loops, in a 526.6 ms frame --
+and is the one to quote.  The deltas above remain valid as deltas, since both
+of their columns share the same clock.
+
 The row walk was the target and gave up two thirds of itself.  The pixel loops
 were never touched -- not one instruction of `.span_tex_opaque_loop` changed --
 and still more than halved, because they share cache lines with the row body
@@ -3216,6 +3341,13 @@ is what happened when the suspect was measured instead of suspected. It is the
 largest single result in this document: **-38.2% of the frame on the shipping
 LOD and -36.0% on the full mesh, at byte-identical output**, from moving and
 shrinking code without changing what any of it computes.
+
+**Every absolute figure in this section is a stock-clock measurement**, taken
+before 2.4b found that stock Hatari ran the DSP at twice its real rate.  The
+series' deltas and percentages stand -- both sides of every A/B share one
+emulator, and the term being removed is CPU instruction fetch, which the DSP
+clock does not touch -- but its frame totals are all too low.  Section 8.2
+carries the corrected baseline.
 
 **First, the cache is on.** Section 2.5 wrote that "`CACR` is never programmed
 anywhere in this source, so the cache may not even be on". It is on. Hatari's
@@ -4166,19 +4298,34 @@ time — the saving appears as vanished *waiting* inside the readback stage.
 
 ### 4.2 DSP memory layout and the Falcon P/X/Y overlay
 
-The DSP X-memory layout ends at `X:$3CEB`: the base-vertex array, the
-camera/projected overlay, the resident packed UV pairs, and 448 output words
-for a 32-triangle chunk. The input buffer that used to follow the vertex
-arrays is gone with the per-frame index upload. The frontend reserves 15,872
-X words (`X:$0000-$3DFF`), leaving 276 reserved words after the current last
-allocation. The latest run reports 16,040 free X words and 16,127 free Y
-words from the Falcon DSP system before these explicit reservations.
+The current X layout has two mutually exclusive owners above the resident
+arrays. BUILD uses the chunk UV/output buffers, paired light vectors and the
+normal-light cache; the optional prepass first overlays that whole tail with
+its order list, then leaves only the masks/kill/status region live while BUILD
+runs:
 
-Neither the 8,172-word face-normal array nor the 5,448-word packed index list
-fits beside those three vertex arrays, so both live in Y memory — and their
-placement is constrained by a hardware detail that is easy to miss. The Falcon
-wires one 32K-word external SRAM into all three DSP address spaces. Only the
-low addresses are on-chip:
+| Range | Words | BUILD owner |
+|---|---:|---|
+| `X:$0040-$0043` | 4 | command and translation |
+| `X:$0044-$1063` | 4,128 | static base vertices |
+| `X:$1064-$25E3` | 5,504 | object/camera pose, then projected vertices in place |
+| `X:$25E4-$39DE` | 5,115 | X half of the corner-normal table |
+| `X:$39DF-$3A1E` | 64 | one chunk's packed UV pairs |
+| `X:$3A1F-$3C5E` | 576 | 32 survivor records at 18 words each |
+| `X:$3C5F-$3C70` | 18 | paired direct-light vectors |
+| `X:$3C71-$3DF0` | 384 | 128 tag/red/green normal-light cache entries |
+
+The prepass view is `X:$39DF-$3F15` order list (1,335 words),
+`X:$3F16-$3F85` masks (112), `X:$3F86-$3FF7` kill bitmap (114), and
+`X:$3FF8-$3FFF` status (8). The normal-light cache ends 293 words before the
+masks and is invalidated only after the prepass releases the order overlay.
+The latest run still reports 16,040 free X words and 16,127 free Y words from
+the Falcon DSP system before the frontend's explicit reservations.
+
+The resident index and normal arrays live in Y memory — and their placement is
+constrained by a hardware detail that is easy to miss. The Falcon wires one
+32K-word external SRAM into all three DSP address spaces. Only the low
+addresses are on-chip:
 
 | Space | On-chip | External mapping |
 |---|---|---|
@@ -4187,24 +4334,31 @@ low addresses are on-chip:
 | Y | `$0000-$00FF` | `$0100-$3FFF` -> external word `address` |
 
 So `Y:$0200` upwards is physically the same memory as `P:$0200` upwards, which
-is where a DSP program larger than 512 words keeps its own code. Placing the
-normal array at the bottom of Y overwrote the program: the DSP executed
-`normal[151].z` as an instruction at `P:$0202` and faulted immediately.
+is where a DSP program larger than 512 words keeps its own code. Placing a
+resident array at the bottom of external Y overwrites executable P words.
 
 Both arrays therefore start above the program. The tracked LOD's first free P
-address is currently **`P:$0979`** — `$094D` before 2.4f's window-capacity
-probe added 44 words for its burn loop and hook:
+address is currently **`P:$0996`** — `$094D` before 2.4f's window-capacity
+probe added 44 words for its burn loop and hook, and `$0979` before 2.4d's
+normal-light cache. The current exact map is:
 
 | Array | Range | Words |
 |---|---|---:|
-| `triangle_indices` | `Y:$09C0-$1F07` | 5,448 |
-| `face_normals` | `Y:$1F08-$3EF3` | 8,172 |
+| `triangle_indices` | `Y:$09C0-$29AB` | 8,172 (2,724 × 3 packed words) |
+| `corner_normals_y` | `Y:$29AC-$3FFE` | 5,715 (1,905 × XYZ) |
 
-`Y:$09C0` leaves **70** external words (`$0979-$09BF`) free above the current
-program for code growth. The frontend reserves 16,120 Y words through
-`Y:$3EF7`, so only four reserved words remain above `face_normals`. X memory
-is unaffected by the P/Y overlay: its external portion maps to
-`P:$4000-$7FFF`, which no realistic program size reaches.
+`Y:$09C0` leaves **42** external words (`$0996-$09BF`) free above the default
+build for code growth. That is the SSIPROBE=0 configuration; the SSI bring-up
+build (SSIPROBE=1, WINPROBE=0) currently ends at `$09D0`, 17 words past the
+ceiling, and is not usable until it comes back under it. The frontend reserves
+16,120 Y words through `Y:$3EF7`, so only four reserved words remain above
+`face_normals`.
+
+The remaining 1,705 corner normals are the X-bank allocation above. The
+on-chip scalar/counter block ends at `Y:$00DE`; `Y:$0100-$01FF` remains
+deliberately unused because the available Falcon mapping descriptions
+disagree about it. X memory is unaffected by the P/Y overlay: its external
+portion maps to `P:$4000-$7FFF`, which no realistic program size reaches.
 
 The two arrays use 13,620 words. That is why the index list is packed at two
 words per triangle: the unpacked three-word form would need 8,172 and does not
@@ -4218,10 +4372,14 @@ address in the LOD after adding DSP code:
 awk '/^_DATA P 0040/{f=1;next} /^_DATA/{f=0} f{n+=NF} END{printf "first free P address: $%X\n", 0x40+n}' TREX/dsp/trex_dsp.lod
 ```
 
-The complete animation-pose/transform/projection stage is 2.5% of the current
-frame. It is already DSP-side except for XYZ16 expansion and programmed-I/O
-transport, so moving more vertex arithmetic cannot materially improve the
-result. The dominant remaining work is the M68030 framebuffer path.
+The current program ends at `P:$0985`, leaving 58 words `$0986-$09BF` before
+`triangle_indices`: the normal-cache build ended at `P:$091E` and section
+7.4b's `CMD_SSI_STREAM` transport probe added 103 words. The complete
+animation-pose/transform/projection stage is 2.5% of the current frame. It is
+already DSP-side except for XYZ16 expansion and programmed-I/O transport; the
+remaining measured DSP lever was repeated per-corner lighting, which 2.4d now
+caches. The two large remaining stages are mixed DSP/host packet construction
+and the M68030 framebuffer path.
 
 ### 4.3 Extracted PS1 morph animation and choreography — active
 
@@ -4404,6 +4562,14 @@ with 1,097 last/1,100 maximum survivors, zero overflow and zero protocol
 failures. This directly covers the post-run cache refresh. These are
 control-path smoke tests only, not framebuffer-equivalence checks or timing
 results.
+
+Section 2.4d extends this phase-local block with a second cache at
+`X:$3C71-$3DF0`: 128 exact normal-index tags and two clamped direct-light sums
+per entry. It reuses a rotated/lit normal across triangle corners while
+leaving the triangle-specific depth MPY/RND and every downstream quantizer in
+place. Unlike the original paired-load scheduling change above, this extension
+has a corrected-clock fixed-prefix measurement: -7.7 ms in the mixed
+DSP/packet stage and -7.6 ms/frame overall at byte-identical diagnostic output.
 
 The raw TMD and setup routine `0x80127764` establish a different source
 contract:
@@ -5166,37 +5332,58 @@ and an end marker/checksum. It must be compared on a physical Falcon against
 both the current RXDF-polled loop and handshaked SSI DMA. A word mismatch or
 timeout rejects it; a Hatari timing alone cannot select it.
 
-### 7.4 Concrete SSI/DMA span-stream contract -- offline prototype
+### 7.4 Concrete SSI/DMA span-stream contract -- model implemented, hardware pending
 
-[`tools/ssi_stream_model.py`](tools/ssi_stream_model.py) is an executable
-16-bit protocol prototype and full-mesh cost/buffer model.  It deliberately
-does **not** touch Falcon hardware yet.
+There are two offline models, and they answer different questions.  Neither
+touches Falcon hardware.
 
-**The file that existed when this section was written described the ROW stream
-and was absent from the repository; the file now present describes the RECORD
-stream and is the one to run** (`python tools/ssi_stream_model.py`, 198,912
-checks).  The rest of 7.4 -- the ABS/SET_SHADE/RUN16 coder, the 86.9-KB row
-figures, the 2x192-KiB row sizing -- remains the row-stream specification and
-is unimplemented.  Section 7.4a is the record-stream contract and supersedes it
-for anything scoped to "DSP -> CPU result records only".
+[`tools/ssi_framing_model.py`](tools/ssi_framing_model.py) is the RECORD
+stream's 16-bit framing contract: lossless 24-to-16-bit unit splitting, the
+frame/footer envelope that distinguishes a complete buffer from a shifted,
+truncated or duplicated one, and capacity behaviour including the geometric
+worst case.  Run it directly (`python tools/ssi_framing_model.py`, 198,912
+checks).  Section 7.4a is that contract and supersedes the row-stream
+specification for anything scoped to "DSP -> CPU result records only".
+
+[`tools/ssi_stream_model.py`](tools/ssi_stream_model.py) is the ROW stream's
+protocol and full-mesh cost/buffer model, and is the one the SSI/DMA bring-up
+tools import.  `--self-test` covers CRC failure, truncation, capacity
+overflow, shade changes, `RUN16`, clipping and modulo-16-bit U/V recurrence
+(`make ssi_stream_model_test`).  The rest of 7.4 -- the ABS/SET_SHADE/RUN16
+coder, the 86.9-KB row figures, the 2x192-KiB row sizing -- is the row-stream
+specification this file models.
 
 The target hardware configuration is
 nevertheless exact enough to implement without rediscovering ownership:
 
-1. acquire the Falcon sound lock; snapshot the complete sound-DMA start/end/
-   count, mode, operation, Crossbar `$FF8930/$FF8932`, divider/track
+1. acquire the Falcon sound lock; snapshot the complete 24-bit sound-DMA
+   start/end/count registers, mode, operation, Crossbar `$FF8930/$FF8932`, divider/track
    `$FF8934..$FF8936`, DSP tristate and affected MFP interrupt state;
 2. stop record DMA, select a one-shot 16-bit record buffer with `Setbuffer`,
    and configure DSP SSI for 16-bit transmit words;
-3. in `$FF8930`, replace only DSP-XMIT bits 7..4 with **`$C`**: connected,
+3. in `$FF8930`, replace only DSP-XMIT bits **7..4** with **`$C`**: connected,
    32-MHz source, handshake enabled.  In `$FF8932`, replace only DMA-RECORD
-   bits 3..0 with **`$2`**: source DSP-XMIT, handshake enabled.  In raw masked
-   form those fields are `(old8930 & $FF0F) | $00C0` and
-   `(old8932 & $FFF0) | $0002`.  The equivalent `Devconnect` setup must produce
-   those read-back fields; DMA is single-shot, never looped;
-4. arm DMA record only after the inactive buffer and DSP frame id agree.  DMA
-   completion plus a valid footer, counts and checksum makes a buffer
-   consumable; neither condition alone does;
+   bits **3..0** with **`$2`**: source DSP output, handshake enabled.  In raw
+   masked form those fields are `(old8930 & $FF0F) | $00C0` and
+   `(old8932 & $FFF0) | $0002`.  The equivalent XBIOS `Devconnect(1, 1, 2,
+   1, 0)` setup must produce those read-back fields; DMA is single-shot, never
+   looped.
+
+   **Corrected 2026-08-20.**  Earlier revisions of this section named bits
+   15..12 of `$FF8930` and 11..8 of `$FF8932`, with the field values `$C` and
+   `$1`.  Both registers hold four four-bit fields and the two this route
+   needs are the LOW ones: bits 15..12 of `$FF8930` are the A/D converter's
+   source select and bits 11..8 of `$FF8932` are external output's.  The
+   validator in `TREX/m68030/ssi_dma.s` was written against the wrong text and
+   therefore could not have passed on a correctly routed machine.  The
+   corrected fields are confirmed by a live transfer (below); the prescale is
+   1 rather than 0 because prescale 0 selects the STE-compatible divider;
+4. arm DMA record only after the inactive buffer and DSP frame id agree.  The
+   stream is variable length, so the DSP sends `SSI_END` with the actual word
+   count and CRC after emitting the footer.  The host waits for the DMA current
+   pointer to reach `start + 2*actual_words`, stops the channel, and only then
+   treats a valid footer/count/CRC as consumable; a footer without the pointer
+   check, or a pointer without a valid footer, is insufficient;
 5. on every normal exit, abort and error path, stop only the owned channel and
    restore the saved registers/state before releasing the sound lock.
 
@@ -5209,18 +5396,139 @@ Application framing is a sequence of big-endian 16-bit units:
 | Record | Exact contents |
 |---|---|
 | Frame header, 8 words | magic `$5353`, version/flags, 32-bit frame id, mesh id, buffer generation, capacity in words, reserved |
-| Packet header, 6 words | `$E000 | row_count`, source triangle, 32-bit OT key, shade/tint state, DSP packet flags |
+| Packet header, 9 words | `$E000 | row_count`, source triangle, 32-bit OT key, shade/tint state, DSP packet flags, low 16 bits of `du/dx`, low 16 bits of `dv/dx`, signed packet `y_start` |
 | `ROW_ABS`, 3 words | `(x0 << 8) | (count-1)`, U Q8.8, V Q8.8; `x0 < 240` leaves `$Fxxx` for controls |
 | `SET_SHADE`, 1 word | `$F100 | level`, emitted only when the exact Gouraud bank changes |
+| `ROW_SKIP`, 1 word | `$F200 | (skip_count-1)`, advances logical rows with no drawable X span; count 1..256 |
 | `RUN16`, 7 words | `$F000 | (run_length-1)`, initial ABS row, signed `(dx,dcount)` bytes, signed 16-bit `du,dv`; exact modulo-16-bit recurrence, length 3..256 |
 | Frame footer, 6 words | end magic `$5AA5`, 32-bit frame id, actual packet count, actual word count, CRC-16 over header through last row |
 
-The decoder stops each packet after `row_count` reconstructed rows, so RLE
-does not need a forward body-size field.  `RUN16` is selected only when seven
-words beat the corresponding absolute rows; it can never expand geometry.
-Shade control can add at most one word per row.  The tool round-trips absolute,
-shade-change, signed-delta and 16-bit-wrap fixtures and rejects malformed or
-trailing words.
+The decoder stops each packet after `row_count` logical rows, counting both
+`ROW_ABS`/`RUN16` rows and `ROW_SKIP` rows, so RLE does not need a forward
+body-size field.  `RUN16` is selected only when seven words beat the
+corresponding absolute rows; it can never expand geometry.  Shade control can
+add at most one word per row.  The packet header carries the horizontal U/V
+gradients because the M68030 still advances U/V inside the pixel loop; their
+low 16 bits are sufficient because the sampled coordinates are modulo 16
+bits.  `y_start` anchors the logical row sequence, including empty rows.  The
+model round-trips absolute, shade-change, signed-delta and 16-bit-wrap
+fixtures, accepts an empty-row fixture, and rejects malformed or trailing
+words.
+
+The first implementation slice now also defines a **compact-record shadow
+stream**.  It is deliberately a host-side mirror of the existing
+`GET_TRIANGLES` result, not a second live DSP producer: the host can copy each
+18-word packed DSP record before the normal 22-field unpack and compare the
+two paths without changing rendering.  Its records are:
+
+| Record | Exact contents |
+|---|---|
+| Compact record, 39 words | `$D012`, 32-bit global source triangle, then 18 native DSP words as `(zero-extended high byte, low 16 bits)` pairs |
+| Compact frame header/footer | Same 8/6-word framing and CRC as the span stream; bit 15 of version/flags is `COMPACT_RECORD_FLAG` |
+
+The 24-bit expansion is intentionally not presented as the final bandwidth
+format.  It is word-aligned and preserves every DSP bit, which makes it a
+useful transport and field-comparison baseline.  `tools/ssi_stream_model.py`
+round-trips the compact frame, rejects non-zero padding or CRC corruption, and
+`TREX/m68030/ssi_dma.s` exposes `ssi_dma_pack_compact_record` plus the
+`ssi_dma_shadow_begin`, `ssi_dma_shadow_append_record`, `ssi_dma_shadow_finish`
+and `ssi_dma_shadow_abort` state machine.  The latter
+writes the same header/footer, reserves footer space on every append, and
+updates CRC-16 over the payload.  At the current 1,018.96 survivor/packet
+estimate this shadow is approximately **79,507 bytes/frame** (`28 + 1,018.96
+* 78`), an estimate rather than a captured DMA bandwidth result.
+
+The optional `trex_m68030_ssi_shadow` target links that builder into a separate
+diagnostic binary.  Its frame path calls `begin`, appends each raw
+`GET_TRIANGLES` survivor before the normal unpack, then calls `finish` or
+`abort` on fallback.  The data path remains host-port-only: initialization
+only runs the stopped ownership/read-back probe, and no live SSI producer or
+DMA transfer is started.  Its successful link is not a hardware transport
+result.
+
+The first end-to-end host-port check passed under Hatari 2.6.1, TOS 4.02,
+Falcon mode, 4 MB ST-RAM and DSP emulation on 2026-08-19.  The optional binary
+wrote `TREX/m68030/ssi_shad.res` for frame 0; the Python decoder accepted its
+header/footer/CRC and found 854 records in 33,320 words (66,640 bytes), with a
+declared capacity of 40,000 words and footer CRC `$4F0D`.  This is an emulator
+framing/copy result only.
+
+The same optional binary now calls the owner during initialization.  It does
+not start DMA; it claims the channel, performs the post-`Devconnect` raw
+Crossbar read-back gate when reached, writes `TREX/m68030/ssi_route.res`, and
+releases the channel before DSP shutdown.  The five signed big-endian
+longwords are `claim_result`, `route_result`, `claim_stage`, raw source, and
+raw destination.  The 2026-08-19 Hatari report was `[-1, -2, 2, 0, 0]`:
+the conservative idle-DMA snapshot gate rejected the emulator's inherited
+sound state before `Devconnect`, so `route_result=-2` means “validator not
+reached.”  This is a useful safe-refusal result, not a route or DMA success;
+physical Falcon read-back remains outstanding.
+
+The separate `trex_m68030_ssi_rows` target now shadows the same validated
+`gpu_packet_buffer` as complete clipped rows.  Its nine-word packet header
+adds `y_start`; `ROW_SKIP` preserves thin-triangle rows whose X interval is
+empty, while `ROW_ABS` carries the clipped X/count and Q8.8 U/V start.  This
+target emits frame 0 once, writes `ssi_rows.res` and a six-longword
+`ssi_rows.status` sidecar, and a `ssi_rows.pkt` packet sidecar for independent
+verification; live SSI/DMA remains disabled just like the compact target.  A
+Hatari 2.6.1/TOS 4.02/Falcon/DSP-emulation run on 2026-08-19 produced 854
+packets, 4,090 logical rows, 2,257 non-empty rows and 1,833 `ROW_SKIP` rows in
+16,304 words (32,608 bytes), with footer CRC `$6914`.  The Python decoder and
+`make ssi_rows_verify` independently recomputed and matched every packet
+header and row event.  These are measured emulator framing/copy results, not
+physical DMA throughput or image-equivalence results.  Gouraud produced no
+`SET_SHADE` changes in this frame.
+
+The `trex_m68030_ssi_hatari` target now implements the first running end-to-end
+transport-to-rasterizer version.  It builds the same full-row stream, hands the
+completed buffer to `ssi_dma_hatari_consume_frame`, and then feeds the validated
+rows into the existing resolved pixel bodies.  The consumer accepts a buffer
+only after checking the row-frame header, packet markers, logical row counts, X
+bounds, footer frame/count/length and CRC.  The Hatari-only handoff then walks
+the existing far-to-near Ordering Table, maps each host packet to its stream
+packet, and calls the direct texture/CLUT pixel entry with the SSI row's clipped
+X/count/U/V/Y/shade state.  `ROW_SKIP` advances logical Y without entering a
+pixel body; the normal CPU DDA is not advanced by the feed path.
+
+The status sidecar is the 23-longword `ssihatri.sta` (an 8.3 GEMDOS name).
+Fields 0-13 publish the parser result and rasterized-pixel count; fields 14-22
+publish the pending-frame handoff, OT nodes visited, mapped packets, row
+callbacks, status writes, resolve progress, visible-map count, map misses and
+the first missing host index.  The 2026-08-19 Hatari 2.6.1/TOS 4.02/Falcon/
+DSP-emulation run accepted all **16,304 words**, **854 packets**, **4,090
+logical rows**, **1,833 `ROW_SKIP` rows**, and CRC `$6914`; the feed visited and
+mapped **854/854 OT nodes**, reported **0 map misses**, entered **2,257
+non-empty row callbacks**, and counted **4,679 rasterized pixels**.  `make
+ssi_hatari_verify` independently matched the transport counters and complete
+packet DDA.  These are measured Hatari/emulator results, not physical Falcon
+SSI/DMA bandwidth or a physical-framebuffer result; the target still does not
+start SSI/DMA or exercise Crossbar registers.
+
+For the pixel handoff gate, paired Hatari capture builds with
+`-DTREX_DUMP_FRAME=0` produced byte-identical `fb.res` files for the normal CPU
+renderer and the SSI-fed renderer: `cmp` returned zero differences and both
+files hashed to
+`cacebce2809290265d90d2a6af044691b2a6f681e350d1d90a5d1902bbd67b5b`.  This is a
+measured frame-0 emulator equivalence check; it does not establish physical
+Falcon DMA/cache behavior or equivalence for the later choreography frames.
+
+The `trex_ssi_loopback` target packages the same path as `TREXSSI.TOS` with a
+matching `TREXSSI.LOD`, so it can be copied to a physical Falcon without
+renaming the DSP file. This is a Falcon-runnable software loopback, not the
+physical SSI implementation: the 68030 builds and consumes the in-memory
+stream, while the SSI, Crossbar and record-DMA registers remain untouched.
+It is intended to establish real-machine startup, memory-budget and
+framebuffer behavior before the physical owner/consumer gate is enabled.
+The loopback produces its frame-0 sidecars once; later frames deliberately
+fall back to the normal CPU rasterizer. No physical-Falcon FPS or DMA result
+is claimed by this artifact.
+
+The feed is deliberately Hatari-gated.  The shipping CPU path retains its
+normal OT walk and pixel entry, while the Hatari path keeps the resolve pass,
+skips its normal OT draw, and consumes the validated row stream in painter's
+order.  A real DMA consumer must preserve the same complete-buffer boundary,
+generation/frame/count/length/CRC checks and fallback behavior before this
+handoff can be moved onto hardware.
 
 Ownership is ping-pong, not a ring with ambiguous readers:
 
@@ -5231,29 +5539,225 @@ boundary: stop/complete -> verify generation/frame/count/length/CRC -> swap
 failure : do not swap; discard B and use the existing host-port/CPU path
 ```
 
-Each buffer is **192 KiB**, 384 KiB total.  In all 274 recorded full-mesh
-frames the conservative no-RLE stream fits: average ABS is 86,892 bytes,
-the every-row shade-change bound is 111,770 bytes, and the largest observed
-bound is 157,444 bytes.  No compression credit is taken.  The asset-level
+Each buffer is **192 KiB**, 384 KiB total.  With the corrected nine-word
+packet header, the rounded full-mesh cost model is approximately 92,977 bytes
+for ABS rows and 117,856 bytes with a shade control on every row, before any
+`ROW_SKIP` overhead.  These are estimates from 12,439.35 rows and 1,018.96
+packets per frame; no compression
+credit is taken until real DSP rows have been captured.  The earlier 86,892 /
+111,770 figures belonged to the superseded six-word header and must not be
+used for buffer sizing.  The asset-level
 geometric worst case is 2,724 x 224 rows: 3,693,772 ABS bytes or 4,914,124
 bytes with a shade control on every row.  Therefore the DSP must reserve footer
 space, stop before capacity, write an overflow footer and force the fallback;
 192 KiB is an observed-corpus bound, never an unconditional geometry bound.
 
-Two hardware issues prevent honest activation in this revision:
+#### 7.4b The route runs: live DSP-XMIT to DMA-RECORD transfer
 
-- DMA writes and 68030 data-cache reads need an explicit coherency contract.
-  This task does not change CACR.  A later implementation must either obtain a
-  provably cache-inhibited buffer mapping or save/alter/restore the relevant
-  cache state with interrupt-safe ownership and a physical-Falcon test.
-- The program currently has DSP XBIOS lifecycle macros but no sound-DMA
-  save/restore owner.  Adding only the happy-path register writes would corrupt
-  another sound client and make timeout recovery unsafe.
+`make trex_m68030_ssi_dma` builds `trex_ssi_dma.tos`, the first and only
+target that claims the sound channel, routes the Crossbar and **starts the
+record engine**.  Every other SSI target is host-port only.  It runs one
+framed burst before the renderer starts, hands the channel back, and then
+renders normally through the unchanged host-port path.
 
-Hatari cannot close either hardware gate.  Consequently the source contains
-the protocol/cost prototype but no dormant half-configured Crossbar path.  The
-first hardware implementation must field-compare every decoded row against
-the existing host record before it is allowed to feed the rasterizer.
+Three defects had to be fixed before anything could move, and each is worth
+recording because none of them would have produced a diagnosable failure:
+
+1. **The route was validated against the wrong register fields.**  See the
+   correction in step 3 above.  The gate compared `$FF8930 & $F000` with
+   `$C000` and `$FF8932 & $0F00` with `$0100`, which are the A/D converter and
+   external-output fields.  On a correctly routed Falcon it fails.
+2. **The claim gate rejected an idle machine.**  It refused to proceed when
+   any of the low four bits of `$FF8900` were set.  Those bits are
+   end-of-buffer interrupt *source selects*, and their power-on value is
+   `$05` -- Hatari resets the register to exactly that.  A quiescent machine
+   that had never played a sound was therefore rejected before `Devconnect`,
+   which is precisely the `claim_stage 2` / `route_result -2` result the
+   2026-08-19 run reported.  `$FF8900` is still captured and restored, and
+   `Setinterrupt` is still never called; the gate is now the two ENABLE bits
+   of `$FF8901` alone.  The mask used for that was also wrong: `$000F`
+   covered two undefined bits and missed **record** enable at bit 4, so it
+   could not have rejected an inherited recording client -- the one case it
+   exists for -- while rejecting a repeat flag left by a stopped one.  It is
+   now `$0011`.
+3. **Every XBIOS return was tested against zero.**  The sound XBIOS calls do
+   not share one success convention: `Locksnd` answers 1, several answer 0,
+   and `Soundcmd`/`Devconnect` answer a previous setting.  A healthy machine
+   was rejected at `Soundcmd`, which returned `2`.  The gate is now the
+   XBIOS-wide one -- negative is an error -- and all thirteen raw returns are
+   published in the sidecar.
+
+The producer is new.  `CMD_SSI_STREAM` (`$40`, in the DSP's previously
+single-member bit-6 control range) configures the SSI for 16-bit transmit,
+switches PC5 to a GPIO output and drives it by hand as the handshake frame
+line, then transmits a host-authored 8-word header, a generated ramp payload
+and a host-authored 6-word footer.  It costs 103 DSP program words; the
+program now ends at P:`$0985` against the P:`$09BF` ceiling.  The frame
+envelope is host-authored on purpose, so the *entire* expected frame --
+including its CRC-16/CCITT-FALSE -- exists on the host before the transfer and
+the capture is checked by compare rather than re-derived from whatever
+arrived.  The payload is a ramp rather than a pseudo-random pattern because a
+ramp localises a transport fault to an index instead of only reporting
+"wrong".
+
+Ordering is not negotiable: the record window is armed **before** the DSP is
+told to transmit, because the handshake makes DMA-RECORD the master and a
+stopped channel never clocks the SSI; and the DSP's reply is collected
+**after** the transfer, because it does not answer until its burst is done.
+Both waits are bounded -- the host on the 200 Hz tick, the DSP on a spin
+count that collapses to a single test after the first stall -- so a dead
+route reports rather than hanging the machine.
+
+**Measured, Hatari 2.6.1 (corrected DSP clock), TOS 4.02, Falcon, 4 MB
+ST-RAM, DSP emulation, 2026-08-20.**  A frame of **16,304 words / 32,608
+bytes** -- deliberately the exact size of the measured frame-0 full-row span
+stream -- moved over the route and arrived byte-exact:
+
+| Field | Value |
+|---|---|
+| claim | stage 13, route validated |
+| `$FF8930` / `$FF8932` read-back | `$00C0` / `$0002` |
+| raw field write needed after `Devconnect` | **no** |
+| pre-claim `$FF8901` / `$FF8900` | `$00` / `$05` |
+| armed `$FF8901`, `$FF8935`, `$FF8920/21` | `$10`, `$01`, `$0043` |
+| CACR during the transfer | `$00003111` (both caches enabled) |
+| transferred | 32,608 bytes, all 16,304 words |
+| elapsed | 26 ticks of the 200 Hz clock = 130 ms |
+| DSP reply | `ACK_SSI_STREAM`, stall status 0 |
+| capture vs. host expectation | identical, footer CRC `$0809` |
+
+`make ssi_dma_verify` re-derives the payload, the footer counts and the CRC
+from the capture's own header and confirms the same verdict independently of
+the on-target compare.
+
+The failure contract was exercised, not just written.  A fault-injected build
+that skips the arm step leaves the Crossbar with nothing to clock, which is
+the worst case for a route where the sink is the master.  Measured on the same
+configuration: the DSP abandoned its burst and answered `ACK_SSI_STREAM` with
+stall status 1; the host's wait returned -1 after its full 400-tick timeout
+with **0 bytes** moved; the compare reported index 0, got `$DEAD` (the poison
+the probe writes into the window beforehand), expected `$5353`; `make
+ssi_dma_verify` rejected the run naming the clear record-enable bit; and the
+renderer went on to complete 34 normal frames.  A bring-up probe whose failure
+mode is a hung machine reports nothing, so this path matters as much as the
+success path.
+
+Two findings from that table deserve to be separated from the pass/fail:
+
+- **TOS 4.02's `Devconnect(1, 1, 2, 1, 0)` already produces the exact raw
+  fields.**  The masked read-modify-write this file specifies was a no-op on
+  this configuration.  It is retained because it costs nothing and removes a
+  dependency on a particular TOS revision, but the read-back gate -- not the
+  forced write -- is what makes that safe to say.
+- **130 ms for 32,608 bytes is 245 KB/s, and that is Hatari's number, not the
+  Falcon's.**  Hatari clocks handshaked DMA-record from its sample-rate
+  interrupt: one word per `CPU_Freq / rate / playTracks / 2` cycles, which at
+  16 MHz, divider 1 (62,500 Hz) and one track is 128 CPU cycles per word =
+  125,000 words/s = 250 KB/s.  The measurement lands on that structural
+  ceiling to within the tick resolution, which is good evidence the transfer
+  really is being clocked by the emulated Crossbar -- and equally good
+  evidence that it says nothing about the Falcon's specified 8 Mbit/s = 1 MB/s
+  wire rate.  On hardware the handshake gates a free-running serial clock
+  instead.  **A physical-Falcon transfer time is still outstanding and cannot
+  be obtained from this build.**
+
+The cache coherency gate is now implemented rather than absent.  The record
+engine writes system RAM without the 68030 seeing the bus cycles, so
+`ssi_dma_invalidate_dcache` clears every data-cache entry (CACR bit 11, `CD`)
+before the host reads the capture.  The 68030 data cache is write-through, so
+there is nothing dirty to push and a bulk invalidate is the complete
+contract; the CACR image above confirms the data cache was in fact enabled
+during the transfer, so this is a real requirement and not a no-op.  It
+covers a buffer the CPU reads *after* the transfer, which is why the
+transport waits for the declared end address first; it does not make a buffer
+safe to read while DMA is writing it.  **Physical-Falcon confirmation is
+still outstanding**: Hatari does not model the 68030 caches' interaction with
+DMA at all, so this build cannot distinguish a correct contract from a
+missing one.
+
+What Hatari still cannot close: physical SSI timing, real cache behaviour,
+bus contention against true-colour Videl, and DMA data ownership on hardware.
+The first hardware implementation must field-compare every decoded row
+against the existing host record before it is allowed to feed the rasterizer.
+
+#### 7.4a Implementation plan and current slice
+
+Implementation is deliberately staged so every failure can return to the
+existing host-port path:
+
+1. **Offline model — implemented.**  `tools/ssi_stream_model.py` defines the
+   canonical words, CRC-16/CCITT-FALSE, `ROW_ABS`, `ROW_SKIP`, `SET_SHADE`,
+   `RUN16`, packet gradients and Y anchoring, compact 24-bit record framing,
+   capacity checks and decoder self-tests.  `make
+   ssi_stream_model_test` passed on 2026-08-19 in the repository environment;
+   this is a host-side protocol result, not a Falcon transport measurement.
+2. **Physical transport test — implemented and running in emulation.**  The
+   common sound/DMA XBIOS wrappers and `TREX/m68030/ssi_dma.s` owner are
+   present.  The owner captures/restores idle DMA and Crossbar state under
+   `Supexec`, leaves MFP interrupts untouched, rejects an inherited *running*
+   channel, and follows `F030MXDRV`'s proven lock, stop, explicit matrix setup
+   and reverse cleanup.  `make trex_m68030_ssi_dma` now completes the whole
+   route: claim, raw Crossbar read-back, armed one-shot record window, a DSP
+   SSI producer (`CMD_SSI_STREAM`), the declared-end completion gate, the
+   data-cache invalidate and a full-frame compare.  Its 2026-08-20 Hatari run
+   moved 16,304 words byte-exact; section 7.4b has the table and the three
+   defects that had to be fixed first.  The optional `trex_m68030_ssi_shadow`
+   target still records only the claim gate and raw route fields in
+   `ssi_route.res`, with the channel stopped.  The remaining hardware step is
+   to run the same probe on a physical Falcon and to compare RXDF-polled PIO,
+   block-gated blind PIO and handshaked SSI DMA there under true-colour Videl
+   load.  `make ssi_dma_compile_test` only checks assembly; `make
+   ssi_dma_verify` checks an emulator capture.  Neither is a hardware or
+   throughput result.
+3. **Compact-record mirror — host-shadow integration implemented.**
+   Before the normal `GET_TRIANGLES` unpack, copy the 18 raw DSP longwords plus
+   the global chunk base into the compact 39-word form, frame it, and validate
+   it with the executable model.  The assembly packer and the
+   begin/append/finish/abort builder now enforce capacity and CRC rules; the
+   optional `trex_m68030_ssi_shadow` binary calls it from the chunk drain while
+   the normal renderer remains unchanged.  The Python round-trip fixture and
+   the Hatari-generated `ssi_shad.res` artifact both decode successfully.  The
+   optional owner probe is separate and leaves DMA stopped; the live DSP-SSI
+   producer and physical DMA sink remain disabled.  The next gate is to route
+   this same builder's buffer through the owned record channel, then compare
+   every source index, native word, footer count and CRC against the host-port
+   transaction on hardware.
+4. **Full-row shadow stream — host-shadow integration and independent
+   verification implemented.**  The
+   optional `trex_m68030_ssi_rows` target walks the exact validated packet
+   setup, applies the CPU path's Y/X clipping, U/V prestep and shade clamp,
+   and emits `ROW_ABS`/`ROW_SKIP` records with packet `y_start`.  Its Hatari
+   frame-0 artifact decoded successfully on 2026-08-19; this validates
+   framing, capacity, CRC and row-count alignment.  `tools/verify_ssi_rows.py`
+   then recomputes the DDA from `ssi_rows.pkt` and matches every packet/event
+   in the decoded stream.  This is still not physical SSI or byte-identical
+   framebuffer output; the next gate is the same comparison over two
+   revolutions and the synthetic hold.
+5. **Hatari transport loopback and rasterizer feed — implemented.**  The
+   `trex_m68030_ssi_hatari` target hands the completed row buffer to an
+   in-memory DMA consumer, validates framing/packet-row accounting/bounds/
+   footer/CRC, resolves packet texture state once, and feeds the existing
+   pixel bodies in OT order.  The sidecar's 854-node/854-packet/0-miss result
+   and 2,257 row callbacks are checked by `make ssi_hatari_verify`.  This closes
+   the emulated transport-to-rasterizer boundary but not the Falcon SSI/DMA,
+   cache-coherency or physical-framebuffer gates.
+6. **Physical same-frame stream consumer.**  Port the validated Hatari handoff
+   to the owned DMA buffer, retaining the complete-buffer boundary and the
+   host-port rebuild fallback for overflow, timeout, CRC or cache failure.
+   The transport underneath it now exists and is exercised end to end
+   (7.4b); what is missing is a DSP that emits real span rows rather than a
+   generated ramp, and a physical machine to measure it on.
+7. **Cross-frame overlap.**  Only after same-frame correctness and hardware
+   throughput are measured: DMA frame N+1 into the inactive 192-KiB buffer
+   while the M68030 rasterizes frame N.  Static UV input requires either a DSP
+   memory rebalance or SSI playback DMA; that combined path is a separate
+   hardware gate.
+
+The stream packet parser must build the complete OT before rasterization.  A
+packet cannot be drawn as it arrives because painter's visibility depends on
+the far-to-near OT walk.  DMA buffers are therefore ping-pong owned: the CPU
+reads one, DMA writes the other, and a buffer swaps only after pointer,
+generation, frame ID, word count and CRC validation.
 
 ### 7.4a Record-stream contract -- frozen and proved offline
 
@@ -5363,13 +5867,16 @@ those records could already be in memory at frame start and the CPU
 would no longer service 86 result-chunk transactions. The 112.7 ms stage quoted
 in the rest of this paragraph is the LOD epoch's; **section 2.4b supersedes it
 and isolates the shares this sentence said had not been isolated**. Of the
-current 259.7 ms stage, about 177 ms is DSP-rate-sensitive and about 83 ms is
-CPU-side unpack and packet build, while the host port's own wait states measure
-**zero** — forcing every one of them to zero moves the frame 0.1 ms.
+current **252.1 ms** stage, about 177 ms is DSP-rate-sensitive and about 83 ms
+is CPU-side unpack and packet build, while the host port's own wait states
+measure **zero** — forcing every one of them to zero moves the frame 0.1 ms.
+The split was taken at 259.7 ms, before 2.4d's light cache removed 7.6 ms of
+it; the shares are quoted unrescaled because the cache changed what the CPU
+side fetches, not how the stage divides.
 
 That relocates the case for DMA. It is not a wait-state bill to be avoided: it
 is that the frame loop schedules nothing against those ~177 ms, so the CPU holds
-still through them while 244.0 ms of rasterizing waits behind. Cross-frame
+still through them while 243.7 ms of rasterizing waits behind. Cross-frame
 overlap (7.4a step 7) is where that goes, and DMA is what makes the overlap
 possible, since PIO forces the CPU to choose between transferring and
 rasterizing. Note also that the direct saving looks small here partly because
@@ -5399,9 +5906,9 @@ The sound DMA frames 16-bit words; the record's slope fields are genuine
 count: roughly 10k-14k DSP words becomes 40-56 KB of 16-bit-framed output. At
 the Falcon's specified 1 MB/s ceiling this is 40-56 ms per frame. It fits
 inside the CPU rasterization window if truly asynchronous — that window is
-**244.0 ms** on the corrected emulator (2.4b), not the 333.2 ms of the LOD epoch
-this paragraph was written against, so the margin is narrower and the conclusion
-unchanged.
+**243.7 ms** on the corrected emulator (2.4b, re-measured for 8.2 on
+2026-08-20), not the 333.2 ms of the LOD epoch this paragraph was written
+against, so the margin is narrower and the conclusion unchanged.
 The open question is the achieved rate and the M68030 slowdown when DMA, Videl
 and rasterizer all contend for ST-RAM; handshaking preserves data by stretching
 the transfer, not by creating bandwidth.
@@ -5440,6 +5947,20 @@ X clip before emitting a row, the stream removes not only the two normal
 prestep multiplies but also the cold UV catch-up/left-clip multiplies. The
 M68030 still owns the texture/CLUT accesses and pixel loop.
 
+**The multiplies have not moved yet, and it is worth being exact about
+where they are.**  The row-stream *consumer* is already clean:
+`ssi_hatari_rasterize_row` takes the Q8.8 U and V straight from the stream,
+derives the framebuffer address with shifts alone (`lsl.l #8` plus two
+doublings for the 512-byte stride and the 2-byte pixel) and jumps directly to
+the resolved pixel body, so it never enters `span_walk_half` and executes
+**zero** `MULS.L` per row.  The *producer* is not: the `TREX_SSI_ROWS` builder
+runs the identical prestep pair, plus two more for the left-clip catch-up,
+because in every build that exists today the **host** constructs the stream.
+The multiplies therefore moved from the walker into the stream builder, on the
+same CPU in the same frame -- a relocation, not an offload.  The 68.4-ms bound
+below is only recovered once the DSP emits the rows (7.4a steps 6 and 7); the
+7.4b transport probe transmits a generated ramp and does not move it either.
+
 There are two integration stages:
 
 1. **Same-frame proof:** emit row starts over SSI while the existing host-port
@@ -5457,19 +5978,23 @@ There are two integration stages:
 
 The natural extension is a complete span stream. Adding clipped `x0`, `x1`
 and the Gouraud row level makes the M68030 row body a sequential record load
-plus the pixel loop and removes the whole edge/ceil/clip walk. A simple five-
-word representation is about 90.4 KB/frame before packet headers, 90 ms at the
-specified ceiling and 271 KB/s when spread across 333.2 ms. It still fits the
-window on paper, but unlike the U/V-only stream it is not merely a multiply
-offload and needs a fresh current-rasterizer decomposition before being called
-worthwhile.
+plus the pixel loop and removes the whole edge/ceil/clip walk. The corrected
+model adds the packet's low-16-bit `du/dx` and `dv/dx` values plus a signed
+`y_start` as three header words, so the rounded full-mesh estimate is
+approximately 93.0 KB/frame for ABS rows and 117.9 KB with a shade control on
+every row, before `ROW_SKIP` overhead. Those are 93.0 and 117.9 ms at the
+specified ceiling. They fit on paper, but unlike the U/V-only
+stream this is not merely a multiply offload: ST-RAM contention, CPU decode,
+DSP production time and cache invalidation still require physical measurement.
 
 That decomposition and the exact packed format now exist.  For the full mesh,
 274 recorded frames average **12,439.35 walked rows and 1,018.96 packets**;
 the observed maximum is 18,181 rows.  U/V-only is 49,757 bytes/frame, or 49.8
-ms at the specified ceiling.  The section 7.4 three-word ABS row plus six-word
-packet headers is 86,892 bytes/frame (86.9 ms); an adversarial shade change on
-every row raises it to 111,770 bytes (111.8 ms).  `RUN16` may reduce those
+ms at the specified ceiling.  The section 7.4 three-word ABS row plus
+nine-word packet headers is approximately 92,977 bytes/frame (93.0 ms) from
+the rounded corpus averages, before `ROW_SKIP` overhead; an adversarial shade
+change on every row raises
+the model to approximately 117,856 bytes (117.9 ms).  `RUN16` may reduce those
 figures but the budget credits **zero** compression until real DSP rows have
 been captured.
 
@@ -5478,7 +6003,7 @@ epoch and has since shrunk by a third to a half.**  The LOD window is 180.7 ms
 rather than 333.2, and the full-mesh one 272.0 ms rather than 544.3.  A stream
 sized to "fit inside the window on paper" therefore has to be re-checked
 against the current figures before any of these paragraphs is acted on: the
-86.9-KB no-RLE full stream is 86.9 ms nominal against a 272.0 ms window, which
+93.0-KB no-RLE full stream is 93.0 ms nominal against a 272.0 ms window, which
 still fits, while the transfer duration a design may hide has fallen with it.
 The payload figures themselves are unaffected -- they are counts of rows and
 packets, and section 3.9 changed neither.
@@ -5497,63 +6022,102 @@ Run coding here compresses geometric row state only.
 The target is **333.3 ms/frame on a stock 16-MHz Falcon030**, full 2,724-
 triangle mesh and stock DSP.  The only current end-to-end split is Hatari's;
 it is a planning ledger, not a stock projection, because the active core
-charges much CPU arithmetic zero:
+charges much CPU arithmetic zero.
 
-| Full-mesh component, frames 0--263 | Before 3.9 | **Current** |
-|---|---:|---:|
-| DSP setup + host readback + packet build | 189.1 ms | **186.3 ms** |
-| Raster per-packet setup | 95.3 ms | **91.2 ms** |
-| Raster row/span walk | 303.9 ms | **112.6 ms** |
-| Raster pixel loops | 145.1 ms | **68.2 ms** |
-| Set-frame send + clear + OT + rounding | 30.3 ms | **30.5 ms** |
-| **Total** | **763.7 ms / 1.31 FPS** | **488.8 ms / 2.05 FPS** |
+**Re-measured on the corrected-clock emulator, 2026-08-20.**  The two older
+columns were taken on stock Hatari, which ran the Falcon DSP at twice its real
+rate (2.4b), and they are kept only as the shape of the 3.9 result.  The
+current column is the shipping diagnostic build on the corrected emulator,
+over the same converged 265-frame prefix, with the section 3.5 profile patches
+re-taken on that build:
 
-**Section 3.9 moved this gate by more than any transport ever proposed for
-it, and it did so on the CPU side of the host port.**  The distance left to
-333.3 ms is **155.5 ms**, against 430.4 ms before.  Everything below is
-re-derived on the current column; the old arithmetic is kept only where it is
-still the conclusion.
+| Full-mesh component, converged prefix | Before 3.9 (stock clock) | After 3.9 (stock clock) | **Current (corrected clock)** |
+|---|---:|---:|---:|
+| DSP setup + host readback + packet build | 189.1 ms | 186.3 ms | **252.1 ms** |
+| Raster per-packet setup | 95.3 ms | 91.2 ms | **68.5 ms** |
+| Raster row/span walk | 303.9 ms | 112.6 ms | **112.7 ms** |
+| Raster pixel loops | 145.1 ms | 68.2 ms | **62.5 ms** |
+| Set-frame send + clear + OT + rounding | 30.3 ms | 30.5 ms | **30.8 ms** |
+| **Total** | **763.7 ms / 1.31 FPS** | **488.8 ms / 2.05 FPS** | **526.6 ms / 1.90 FPS** |
 
-Removing the entire row walk now leaves **376.2 ms / 2.66 FPS** -- still short,
+`make measure_split` reproduces this.  The three patch builds measured 526.6,
+464.1 and 351.2 ms per frame (normal, `TREX_PROFILE_NO_PIXELS`,
+`TREX_PROFILE_NO_ROWS`), each converged to exactly 265 frames, with the normal
+build's frame-100 `fb.res` reproducing `d89958b3…3d16`.  The packet stage
+reads 252.1, 252.3 and 252.2 across them, which is the cross-check that the
+patches touch only the rasterizer.  An independent second set of three runs
+agreed on every term to 0.2 ms, which is the precision to attach to these
+figures: the timers are 200 Hz ticks over 265 frames, so one tick either way
+is 0.02 ms and a few ticks of scheduling jitter is all the spread there is.
+
+**The correction lands entirely in the packet stage, exactly where 2.4b says
+it must.**  Against 8.2a's stock-clock measurement of the same code family,
+the three rasterizer terms reproduce to 0.7 ms -- 112.7 against 113.4, 68.5
+against 68.3, 62.5 against 62.2 -- while the packet stage moves 185.7 to
+252.1.  The DSP clock is not a term in the CPU rasterizer and is most of the
+term in the stage that waits on the DSP.  **The total is therefore worse than
+the 488.8 ms this section used to claim.**  No corrected-clock measurement of
+that exact build exists, but the mechanism is not in doubt: 8.2a measured the
+*same binary* at 460.0 ms stock and 534.2 ms corrected, so a Falcon-rate DSP
+was always going to add something near 74 ms to the 488.8 figure as well.
+That number described an emulator, not a Falcon.
+
+**Section 3.9 still moved this gate by more than any transport ever proposed
+for it, and it did so on the CPU side of the host port** -- that conclusion
+was measured on the rasterizer, which the clock correction does not touch.
+What changed is the distance left: **193.3 ms**, not the 155.5 ms this section
+recorded against the inflated baseline.  Everything below is re-derived on the
+current column.
+
+Removing the entire row walk now leaves **413.9 ms / 2.42 FPS** -- still short,
 so the shape of the old conclusion survives: a U/V-only offload, whose
 hardware ceiling is only the 68.4-ms multiply bound, cannot close three FPS.
-But what it must be *combined* with has collapsed.  After ideal row removal
-the design needs a further **42.9 ms**, not 126.5 ms, out of a 186.3-ms
-packet/readback stage and a 91.2-ms packet setup.  That is 23% of one stage
-instead of 67% of it.
+After ideal row removal the design needs a further **80.6 ms** out of a
+252.1-ms packet/readback stage and a 68.5-ms packet setup -- **32% of the
+packet stage**.  On the stock-clock figures that read 42.9 ms and 23%, so the
+combined lever this section recommends is harder than it looked, not easier.
 
 The optimistic architectural envelope -- full row walk and the entire current
-packet/readback stage both gone -- is now **189.9 ms / 5.27 FPS**, against a
-target of 333.3.  The margin inside the envelope went from 62.6 ms to
-143.4 ms, which is the first time this chain has had room for the costs the
-envelope does not model: CPU packet material and OT construction cannot be
-literally zero, an 86.9--111.8-KB DMA stream still writes and is later read
-from ST-RAM, and DSP construction has a real cost.
+packet/readback stage both gone -- is **161.8 ms / 6.18 FPS**, against a
+target of 333.3, with **171.5 ms** of margin.  That envelope *improved* on the
+corrected clock, and the improvement is an artefact rather than a gain: the
+envelope assumes the packet stage away entirely, so charging more to it makes
+the envelope look roomier while making the real frame slower.  Read the margin
+only as headroom for what the envelope does not model -- CPU packet material
+and OT construction cannot be literally zero, a 93.0--117.9-KB DMA stream
+still writes and is later read from ST-RAM, and DSP construction has a real
+cost.
 
 Two consequences for what to build next:
 
-- **The remaining frame is dominated by two host-side stages that are
-  themselves mostly fetch**, not by the row walker the SSI stream was
-  designed around.  91.2 ms of per-packet setup for 1,149 packets is
-  1,270 cycles each at 16 MHz, and the NO_ROWS build proves that is
-  `rasterize_packet` alone.  Applying section 3.9's own rule to it and to
-  the 186.3-ms packet stage is cheaper, needs no hardware, and is where the
-  next 155.5 ms is most plausibly found.
+- **The remaining frame is dominated by the packet/readback stage**, not by
+  the row walker the SSI stream was designed around, and not -- as the
+  stock-clock column suggested -- by per-packet setup either.  At 252.1 ms it
+  is 47.9% of the frame on its own.  Per-packet setup is now **68.5 ms** for
+  1,149 packets, or 953 cycles each at 16 MHz, down from the 91.2 ms and
+  1,270 cycles this section used to argue from; 3.9b/3.9c already took most of
+  what was there.  The 252.1-ms stage is where the next 193.3 ms has to come
+  from, and 7bece90 measured its internal split: about 177 ms DSP-rate-
+  sensitive, about 83 ms CPU-side unpack and packet build, and **zero** host
+  port.
 - **Roadmap item 19 got relatively more attractive, not less.**  Occlusion
   culling removes whole survivors, and a survivor now costs proportionally
   more in packet setup and wire transport than in row walking.
 
 Revised verdict:
 
-- **3 FPS full mesh: still not demonstrated, but no longer architecturally
-  gated on SSI/DMA.**  155.5 ms is a host-side optimization target of the
-  size section 3.9 just met twice over; it was a transport-architecture
-  problem when the gap was 430.4 ms.
+- **3 FPS full mesh: still not demonstrated.**  193.3 ms is the gap, and
+  unlike the 155.5 ms figure it replaces, most of it now sits in a stage whose
+  dominant term is the DSP waiting to finish -- which is an argument for
+  cross-frame overlap (7.4a step 7), not against transport work.  It is no
+  longer true to say the gap is purely a host-side optimization target of the
+  size section 3.9 met twice over.
 - **The former 1,600-triangle LOD reached 3 FPS, but it is removed.** Its
-  319.8 ms / 3.13 FPS result remains a historical data point only; the
-  supported build is the full mesh and has no 3-FPS emulator result.
-- **U/V-only SSI: insufficient** even under its best arithmetic bound, and
-  now by a wider margin, since the row walk it targets is 112.6 ms.
+  319.8 ms / 3.13 FPS result remains a historical data point only, and a
+  stock-clock one; the supported build is the full mesh and has no 3-FPS
+  emulator result at any clock.
+- **U/V-only SSI: insufficient** even under its best arithmetic bound, since
+  the row walk it targets is 112.7 ms.
 - **Five FPS is deferred.**  No optimization may spend the margin needed to
   close the stock full-mesh 3-FPS chain merely to improve a 200-ms stretch
   target.
@@ -5573,11 +6137,11 @@ The full mesh could not be measured headlessly until the former
 `render_stats.res`. After the LOD removal, the standard `make trex_m68030`
 target is the equivalent full-mesh diagnostic build, without `TREX_RUN`.
 
-Measured over 265 frames, frame-100 `fb.res` reproducing the recorded full-mesh
-checkpoint `d89958b3…3d16`, with the section 3.5 profile patches re-taken on
-the same build:
+Measured over 265 frames on **stock Hatari**, frame-100 `fb.res` reproducing
+the recorded full-mesh checkpoint `d89958b3…3d16`, with the section 3.5
+profile patches re-taken on the same build:
 
-| Component | ms/frame | share |
+| Component, stock clock | ms/frame | share |
 |---|---:|---:|
 | DSP readback + packet build | **185.7** | 40.4% |
 | Raster row/span walk | 113.4 | 24.7% |
@@ -5588,25 +6152,30 @@ the same build:
 
 The packet stage reads 185.7, 185.7 and 186.0 across the normal and both
 profile builds, which is the cross-check that the patches touch only the
-rasterizer.  **The distance to 333.3 ms is 126.7 ms**, down from the 155.5 ms
-section 8.2 recorded before 3.9b/3.9c.
+rasterizer.
 
-**Both figures are pre-2.4b.** The same binary measures 534.2 ms on an emulator
-that runs the DSP at the Falcon's actual rate, which puts the distance to
-333.3 ms at **200.9 ms** — the gate roughly doubled, and all of the growth is in
-the packet stage this section is about. The two named levers below total about
-66 ms, which now lands near 468 ms / 2.14 FPS rather than near 395 ms / 2.53
-FPS, so this section's conclusion that three FPS does not follow from any
-identified optimization holds with a good deal more room to spare.
+**This whole table is pre-2.4b and is retained as the stock-clock reference
+only.**  Section 8.2's current column supersedes it: the same split re-taken
+on the corrected emulator, after 2.4d's light cache, is 252.1 / 112.7 / 68.5 /
+62.5 / 30.8 for **526.6 ms / 1.90 FPS**.  The four non-packet terms reproduce
+this table to 0.7 ms, and the packet stage grows 185.7 to 252.1 -- 2.4d's
+light cache removing 7.6 ms of what the clock correction added.  **The
+distance to 333.3 ms is 193.3 ms**, not the 126.7 ms this section derived from
+the inflated baseline.  The two named levers below total about 66 ms, which
+lands near **461 ms / 2.17 FPS**, so this section's conclusion that three FPS
+does not follow from any identified optimization holds with a good deal more
+room to spare.
 
-**Section 8.2's own next-step suggestion is now measured out.** It proposed
+**Section 8.2's own next-step suggestion is measured out.** It proposed
 applying section 3.9's rule -- shrink the loop below the 256-byte instruction
-cache -- to the 186.3 ms packet stage.  Listing accounting on the three
+cache -- to the packet stage.  Listing accounting on the three
 per-survivor host loops says there is nothing there to get: the packet builder's
 body is **130 bytes**, `gpu_submit_ot`'s is **62**, and 3.9c's resolve sweep is
 **118**, all comfortably inside the cache, and the record-unpack loop was
-already pinned to 250 bytes by 3.9 step 4.  Whatever the 185.7 ms is, it is not
-loop-body eviction.
+already pinned to 250 bytes by 3.9 step 4.  Whatever that stage is, it is not
+loop-body eviction.  7bece90 later split it directly on the corrected build:
+of 252.1 ms, about 177 ms is DSP-rate-sensitive, about 83 ms is CPU-side
+unpack and packet build, and the host port's own wait states measure zero.
 
 **What it is, in the part that can be named:** the wire is about 26,800 words
 per frame (1,149 survivor records at eighteen words, plus 5,448 UV words for
@@ -5655,7 +6224,7 @@ result. The 41 ms remains conditional on a substantially different occlusion
 strategy, not a class-count-only change. Both
 together are about 66 ms of the 126.7 needed, landing near **395 ms / 2.53
 FPS**.  **Three FPS on the full mesh therefore does not follow from any
-optimization currently identified**, and the residual ~60 ms has no mechanism
+optimization currently identified**, and the residual ~127 ms has no mechanism
 short of moving the record stream off host-port PIO entirely (item 15), which
 Hatari cannot validate and which section 7.4 shows is not a small piece of
 work. The retired LOD's 3-FPS result is not a supported-performance claim.
@@ -5902,7 +6471,8 @@ The open roadmap, in recommended order (expected effects from the section
    moving cold bodies out of line, hoisting packet invariants and shrinking
    the two per-item loops below 256 bytes measure **517.3 to 319.8 ms
    (1.93 to 3.13 FPS) on the LOD and 763.8 to 488.8 ms (1.31 to 2.05) on the
-   full mesh**, at byte-identical output throughout.  Registerizing xr is part
+   full mesh** -- stock-clock totals; see 8.2 for the corrected baseline --
+   at byte-identical output throughout.  Registerizing xr is part
    of that series (step 3).  The remaining local candidate is the per-row ceil
    incrementalization; the row walker is no longer the dominant term, so
    section 8.2's SSI conclusion has been re-derived rather than inherited.
@@ -6091,6 +6661,24 @@ The open roadmap, in recommended order (expected effects from the section
    ~173 ms, or **362.7 ms / 2.76 FPS** if the exposed term went to zero, against
    the 14.2 ms the transport itself is worth.  Remaining unknown, hardware only:
    DMA/68030 ST-RAM contention, which no Hatari result can bound.
+
+   **The route now runs, and the row-stream figures are corrected (7.4b).**
+   The no-RLE row model is approximately 93.0 KB average (117.9 KB shade
+   bound) once the packet gradients the CPU pixel loop needs are included --
+   not the superseded six-word-header estimate.  Full mesh makes U/V 49.8 KB/frame and the
+   corrected no-RLE model approximately 93.0 KB average (117.9 KB shade bound),
+   not the superseded six-word-header estimate or old LOD-derived 36.2 KB.
+   The executable ABS/SET_SHADE/RUN16 coder now round-trips its fixtures,
+   including the packet gradients required by the CPU pixel loop, and the
+   compact 18-word DSP-record shadow has the same CRC/framing fixture.  The
+   common sound/DMA wrappers, compact pack helper and stopped ownership /
+   raw-readback probe are now present, informed by `F030MXDRV`; the Hatari
+   probe safely rejected its inherited state at the idle-DMA snapshot gate
+   before route validation.  The next physical-Falcon gate is raw Crossbar
+   read-back plus handshaked DSP-XMIT -> DMA-RECORD, variable-length pointer
+   completion, and cache coherency without an ad-hoc CACR write.  Only then
+   may cross-frame span consumption replace the CPU row walker.  U/V-only is
+   explicitly insufficient for three FPS.
 16. **Closed to a measured mechanism.**  Three findings, each by scan:
    the Gouraud buffer growth moved the unpinned preshaded CLUT banks and
    cost 80 ms at an unchanged instruction stream — they are pinned now.
@@ -6272,7 +6860,8 @@ The open roadmap, in recommended order (expected effects from the section
     prepass from 76.76 to a measured **60.28 ms/frame**, which the size
     sites then carried to **57.18** (re-measured, section 2.4b) -- a
     quarter of the stage -- leaving **190 words free** to the `$09BF` ceiling
-    (**173** since 3.12 spent seventeen restoring `command_get_vertices`)
+    (**173** since 3.12 spent seventeen restoring `command_get_vertices`, and
+    **144** since 2.4d's normal-light cache took twenty-nine more)
     against 51 when the audit began, at byte-identical output
     throughout.  The
     prepass cost is hidden by the FINISH window today, and every
@@ -6282,6 +6871,16 @@ The open roadmap, in recommended order (expected effects from the section
     item 12's stage 2 bounded.  Gates as always: DOSBox assembly clean, P
     extent at or below `$09BF`, byte-identical frame-100 `fb.res` against
     the recorded checkpoint.
+22. Cache repeated per-corner normal lighting. **Done and measured** -- see
+    section 2.4d. A 128-entry direct-mapped frame-local cache keeps the two
+    clamped direct-light channel sums before per-triangle depth cueing. Exact
+    full-index tags make collisions harmless; invalidation follows the
+    prepass/order lifetime boundary, and X:R carries each miss result into
+    memory beside its depth operand transfer. Corrected-clock Hatari measures
+    the mixed packet stage 259.8 to 252.1 ms and the frame 534.2 to 526.6 ms
+    over the fixed 265-frame prefix, with byte-identical diagnostic output.
+    Together with the now-default release prepass disarm, `TREX.TOS` measures
+    525.5 ms / 1.90 FPS versus the recorded 536.5 / 1.86.
 
     **Reopened by 2.4c: "not frame rate" was a double-clock artefact.**  The
     "few-milliseconds genuine DSP wait" this item leans on was measured with

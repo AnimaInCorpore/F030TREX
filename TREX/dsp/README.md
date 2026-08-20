@@ -71,7 +71,10 @@ the program.
 | `X:$25E4-$39DE` | 5,115 | X half of the corner-normal table (`corner_normals_x`) |
 | `X:$39DF-$3A1E` | 64 | one BUILD chunk's UV pairs (`chunk_uvs`) |
 | `X:$3A1F-$3C5E` | 576 | 32 packed span records at 18 words each |
-| `X:$3C5F-$3C70` | 18 | phase-local direct-light cache after the prepass |
+| `X:$3C5F-$3C70` | 18 | phase-local paired direct-light vectors after the prepass |
+| `X:$3C71-$3CF0` | 128 | frame-local normal-light cache tags |
+| `X:$3CF1-$3D70` | 128 | cached red direct-light sums |
+| `X:$3D71-$3DF0` | 128 | cached green direct-light sums |
 | `Y:$0096-$00D5` | 64 | on-chip 64-class prepass counters |
 | `Y:$09C0-$29AB` | 8,172 | packed resident triangle indices |
 | `Y:$29AC-$3FFE` | 5,715 | Y half of the corner-normal table (`corner_normals_y`) |
@@ -102,6 +105,15 @@ corresponding Y normal-component fetch. The cache must remain after the
 prepass lifetime boundary and below `prepass_scratch`; it is not a persistent
 third copy of the host protocol payload.
 
+The following 384 words are a separate 128-entry direct-mapped cache keyed by
+the full corner-normal index. A miss performs the normal 3x3 rotation and both
+three-light channel sums, then an X:R dual move stores each clamped direct
+sum. A hit skips that repeated work but still performs the triangle-specific
+depth multiply/round and all level/tint quantization. Only the tag array is
+cleared when the frame's matrix/lights become final. The cache ends at
+`X:$3DF0`, 293 words before `prepass_scratch`; it overlays only the consumed
+order-list tail and does not reduce `PREPASS_MAX`.
+
 The active class-resolution path produces the order with a two-pass counting
 sort into 64 depth classes of 32 OT buckets each: classification runs once to
 count and once to scatter,
@@ -116,7 +128,7 @@ is only its sign extension), and merges pending coverage only for classes
 that stamped anything.
 
 The authored choreography ends at frame 273 and the frontend-added hold
-continues past it. The prepass now stays armed through that hold: the
+continues past it. When enabled, the prepass stays armed through that hold: the
 one-shot disarm the frontend used to send existed to protect the stock DSP
 frame budget from the former full-grid cell cursor, which visited all
 3,360 4x4 cells for every survivor, and the range-restricted sweep removed
@@ -125,12 +137,18 @@ disarmed captures are byte-identical at frame 100 and at hold frame 291,
 with zero prepass protocol failures or capacity overruns across the hold.
 
 The frontend reserves `X:$0000-$3DFF` and `Y:$0000-$3EF7`. The full-mesh
-program occupies P from `$0040` and ends at `$0978`, leaving the words at
-`$0979-$09BF` free before the Y indices at `$09C0` — 70 words, after
-`command_get_vertices` was restored for the span validator at a cost of
-seventeen (`OPTIMIZATION.md` 3.12), the 2.3j diagnostic counters, their
-mode-4 readout and the flow-compare sign fix took 58 more, and the 2.4f
-window-capacity probe took 44. This bound has to
+program occupies P from `$0040` and, in the default build, ends at `$0995`,
+leaving the words at `$0996-$09BF` free before the Y indices at `$09C0` — 42
+words, after `command_get_vertices` was restored for the span validator at a
+cost of seventeen (`OPTIMIZATION.md` 3.12), the 2.3j diagnostic counters,
+their mode-4 readout and the flow-compare sign fix took 58 more, the 2.4f
+window-capacity probe took 44 and 2.4d's normal-light cache took its own
+share. Two instruments are conditionally assembled because they no longer
+both fit: `WINPROBE` (the window burn loop, 44 words, on by default) and
+`SSIPROBE` (the `CMD_SSI_STREAM` transport probe, 103 words, off by default).
+**The SSI bring-up configuration is currently 17 words over the ceiling at
+`$09D0` and must be brought back under it before it can be trusted.** This
+bound has to
 be checked after every DSP change, because an overflow overwrites the index
 list without an assembler error -- recompute it from the assembled `.lod`
 rather than trusting this figure, with the check command in the end-of-file
@@ -203,7 +221,20 @@ PREPASS:
     cmd, mode -> ACK_PREPASS, survivor_count       (modes 0-3)
     cmd, 4    -> ACK_PREPASS, stamp_calls, stamped_cells, query_kills,
                  dirty_merges, query_cells_visited, stamp_cells_visited
+
+SSI_STREAM ($40), only when assembled with SSIPROBE=1:
+    cmd, payload_count, seed, 8 header words, 6 footer words
+    -> ACK_SSI_STREAM, stall_status
 ```
+
+`SSI_STREAM` is the only command that does not answer over the host port
+immediately. It is the DSP half of the Falcon SSI transport probe: it
+configures the SSI for 16-bit transmit, drives PC5 by hand as the DMA-RECORD
+handshake frame line, and transmits the host's envelope with a generated ramp
+between the header and the footer. It answers only once the burst is over,
+so the host must arm the record channel first and collect the reply last.
+Both waits are bounded; a stalled transmitter returns status 1 rather than
+hanging. See OPTIMIZATION.md section 7.4b.
 
 The light payload is six Q1.23 direction-and-intensity vectors (three source
 lights, red channel then green -- green also serves blue in this scene) plus
@@ -267,8 +298,10 @@ make DOSBOX=/Applications/dosbox.app/Contents/MacOS/DOSBox trex_dsp
 make trex_release
 ```
 
-`trex_release` emits `TREX.TOS`, the full-mesh, armed-occlusion viewing
-package with textured Gouraud shading and no per-frame diagnostic writes.  The
+`trex_release` emits `TREX.TOS`, the full-mesh viewing package with textured
+Gouraud shading and no per-frame diagnostic writes. The occlusion code remains
+compiled in, but the release defaults it to disarmed because the current yield
+measures as a 3.5 ms/frame net loss at the corrected DSP clock. The
 frontend copies the same DSP program to `TREX.LOD` beside it, so the
 package can be moved to a Falcon directory without renaming a shared runtime
 file.  No DSP protocol or DSP memory-layout variant is required.
@@ -286,10 +319,11 @@ outstanding. The 128-class/8x8-cell prepass probe was assembler-checked and
 framebuffer-gated, then rejected: on an equal 246-frame Hatari sample it saved
 only 2,516 raster writes (0.030%). The active 64-class build keeps its
 counters on-chip at `Y:$0096-$00D5`; the resident indices start at `Y:$09C0`
-and the last program word is `P:$0978`, below the `$09BF` ceiling. The
-standard host build has
+and the last program word of the default build is `P:$0995`, below the
+`$09BF` ceiling. The diagnostic prepass build has
 `prepass_arm = 1`, so FINISH runs the prepass inline
-and it stays armed through the synthetic hold. With TOS 4.02, Falcon DSP
+and it stays armed through the synthetic hold; `TREX_RELEASE` defaults the
+same longword to 0. With TOS 4.02, Falcon DSP
 emulation, 4 MB ST-RAM and the runtime `.lod` mounted, the armed dumps
 matched the disarmed controls byte-for-byte at frame 100
 (`d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16`) and at
@@ -303,6 +337,12 @@ unmeasured.
 
 The DSP assembler runs under DOSBox; the result is `TREX/dsp/trex_dsp.lod`,
 which is then adopted as the runtime copy at `TREX/m68030/trex_dsp.lod`.
+DOSBox-X needs extra flags to reach `BUILD.BAT` headlessly:
+
+```
+make DOSBOX=dosbox-x DOSBOX_FLAGS='-nopromptfolder -nogui -nomenu -defaultconf' trex_dsp
+```
+
 Hatari measurements and measurements on real Falcon hardware must be
 documented strictly separately.
 

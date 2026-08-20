@@ -1,529 +1,719 @@
 #!/usr/bin/env python3
-"""Executable 16-bit SSI/DMA framing model for the DSP->CPU span-record stream.
+"""Offline model for the Falcon SSI -> DMA-RECORD span stream.
 
-This is step 2 of the SSI/DMA plan: freeze the wire format, prove the decode is
-exact, and size the buffers.  It deliberately does NOT touch Falcon hardware and
-is not imported by any build.  Run it directly:
-
-    python tools/ssi_stream_model.py
-
-WHAT IS AND IS NOT PROVEN HERE
-------------------------------
-The 18-word *packed record* is not invented by this file.  It is the existing
-DSP->host contract (`SPAN_RECORD_WORDS` in `TREX/dsp/trex_dsp.asm`, mirrored at
-`DSP_SPAN_RECORD_WORDS` in `TREX/m68030/trex_m68030.s`), already validated
-field-for-field over two full revolutions -- 852,390 exact comparisons, zero
-mismatches (OPTIMIZATION.md 4.1b/9.2).  This model treats those 18 words as
-opaque 24-bit values and proves only the NEW layer:
-
-  * lossless 24-bit -> 16-bit framing for a DMA channel that frames 16-bit
-    units,
-  * a frame/footer envelope that can tell a complete buffer from a shifted,
-    truncated, duplicated or partially-overwritten one,
-  * capacity behaviour, including the geometric worst case.
-
-It does NOT prove anything about crossbar setup, DMA ownership, cache
-coherency, or achieved bandwidth.  Those are hardware questions and
-OPTIMIZATION.md 7.4/8 and roadmap item 14 own them.
-
-NOTE ON A DOCUMENTATION ERROR THIS FILE CORRECTS
-------------------------------------------------
-OPTIMIZATION.md 9.2 says the record travels "packed at fourteen words" and
-lists `uv0pack`/`uv1pack` as w17/w18 on the wire.  Both are stale.  The current
-contract is EIGHTEEN packed words, and the sorted UV byte pairs are not sent at
-all -- the host rebuilds them from `gpu_texture_meta_buffer` via the two slot
-ids in w0.  Both source files agree on 18; this model follows the source.
+This module deliberately has no Falcon or emulator dependencies.  It is the
+canonical framing/validation model used before the physical transport exists.
+All wire values are 16-bit big-endian words.  The format keeps the CPU-owned
+texture lookup and pixel loop out of the stream: the DSP supplies packet
+metadata, horizontal U/V gradients, and clipped row starts.
 """
 
 from __future__ import annotations
 
-import random
-import struct
-import sys
 from dataclasses import dataclass
-
-# ---------------------------------------------------------------------------
-# The record contract, transcribed from the two source files.
-# ---------------------------------------------------------------------------
-
-SPAN_RECORD_WORDS = 18          # trex_dsp.asm SPAN_RECORD_WORDS
-MAX_CHUNK = 32                  # trex_dsp.asm MAX_CHUNK
-TREX_PRIMITIVES = 2724          # full-mesh triangle count
-
-# Field names in wire order, for readable diagnostics only.  Every one of them
-# is carried as an opaque 24-bit pattern; nothing here interprets them.
-RECORD_FIELDS = (
-    "w0_key",        # slot_mid<<14 | slot_top<<12 | mid<<11 | shade<<5 | index
-    "w1_otkey",      # average-z / Ordering Table key
-    "w2_rowsup_sy0",  # rows_up<<12 | (sy0 & $fff)
-    "w3_sx0_rowslow",  # (sx0 & $fff)<<12 | rows_low
-    "w4_sx1",        # sx1 & $fff
-    "w5_sl_long", "w6_sl_up", "w7_sl_low",
-    "w8_du_dx", "w9_dv_dx",
-    "w10_dul_up", "w11_dvl_up", "w12_dul_low", "w13_dvl_low",
-    "w14_lvl_top_mid",  # lvl_top<<12 | lvl_mid
-    "w15_dlvl_dx", "w16_dlvl_up", "w17_dlvl_low",
-)
-assert len(RECORD_FIELDS) == SPAN_RECORD_WORDS
-
-WORD_MASK = 0xFFFFFF            # DSP56001 words are 24-bit
-UNIT_MASK = 0xFFFF
-
-# ---------------------------------------------------------------------------
-# Framing constants.
-# ---------------------------------------------------------------------------
-
-MAGIC_HEAD = 0x5353             # 'SS'
-MAGIC_FOOT = 0x5AA5
-VERSION = 1
-
-UNITS_PER_WORD = 2              # see design note below
-UNITS_PER_RECORD = SPAN_RECORD_WORDS * UNITS_PER_WORD   # 36
-BYTES_PER_RECORD = UNITS_PER_RECORD * 2                 # 72
-
-HEADER_UNITS = 8
-FOOTER_UNITS = 8
-ENVELOPE_UNITS = HEADER_UNITS + FOOTER_UNITS
-
-STATUS_COMPLETE = 0
-STATUS_OVERFLOW = 1
-
-# DESIGN NOTE -- why two units per word, and not a width-aware packing.
-#
-# Several of the 18 words are provably narrower than 24 bits: w0 is exactly 16,
-# w4 is 12, and w14's two level fields are 12 each.  A width-aware packing would
-# cut the record from 36 to about 31 units, roughly 14%.
-#
-# It is deliberately not taken.  OPTIMIZATION.md 2.4c measures the entire host
-# port at 14.2 ms/frame and shows that deleting it outright is worth +0.06 FPS;
-# transport size is simply not where this pipeline's time is.  A width-aware
-# packing buys ~14% of a term worth 14 ms and pays for it with a silent
-# corruption mode the moment any field outgrows its assumed width -- exactly the
-# class of defect the span validator was built to catch.  Two units per word is
-# lossless for all 2**24 patterns by construction, needs no per-field range
-# assumption, and survives any future change to what the fields mean.
-#
-# If a later measurement ever makes the wire matter, revisit this constant and
-# nothing else: the envelope and the validation below are width-independent.
+import argparse
+from typing import Iterable, List, Sequence, Tuple
 
 
-def crc16_ccitt(data: bytes) -> int:
-    """CRC-16/CCITT-FALSE.  Chosen because it is trivial on the 68030 and on
-    the DSP, and detects all single-bit, double-bit and odd-count errors plus
-    any burst up to 16 bits -- which covers the realistic DMA failure modes
-    (a dropped unit, a shifted buffer, a half-overwritten ping-pong half)."""
-    crc = 0xFFFF
-    for byte in data:
-        crc ^= byte << 8
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
-    return crc
+FRAME_MAGIC = 0x5353
+FRAME_VERSION = 1
+COMPACT_RECORD_FLAG = 0x8000
+FRAME_FOOTER_MAGIC = 0x5AA5
+PACKET_MAGIC = 0xE000
+COMPACT_RECORD_MAGIC = 0xD012
+SHADE_MAGIC = 0xF100
+ROW_SKIP_MAGIC = 0xF200
+RUN_MAGIC = 0xF000
+MAX_SCREEN_WIDTH = 240
+MAX_SHADE_LEVEL = 15
+DSP_SPAN_RECORD_WORDS = 18
 
 
-@dataclass
-class FrameHeader:
+class StreamError(ValueError):
+    """Raised for a malformed, incomplete, or inconsistent stream."""
+
+
+@dataclass(frozen=True)
+class Row:
+    """One clipped row at the first sampled pixel.
+
+    u and v are Q8.8 values carried modulo 16 bits.  shade is the selected
+    CLUT level for the row; tint remains packet state.
+    """
+
+    x0: int
+    count: int
+    u: int
+    v: int
+    shade: int
+
+
+@dataclass(frozen=True)
+class Packet:
+    """One packet; y_start anchors the packet's logical row sequence."""
+
+    source_triangle: int
+    ot_key: int
+    shade_tint: int
+    flags: int
+    du_dx: int
+    dv_dx: int
+    rows: Tuple[Row, ...]
+    y_start: int = 0
+
+
+@dataclass(frozen=True)
+class Frame:
     frame_id: int
     mesh_id: int
     generation: int
-    capacity_units: int
-    flags: int = 0
+    capacity_words: int
+    packets: Tuple[Packet, ...]
+    version_flags: int = FRAME_VERSION
 
 
-class StreamError(Exception):
-    """Any reason a buffer must not be handed to the rasterizer."""
+@dataclass(frozen=True)
+class CompactRecord:
+    """One host-shadowed DSP survivor record.
+
+    The DSP values are native 24-bit words.  source_triangle is supplied by
+    the host while draining a chunk because the DSP's packed w0 carries only
+    the five-bit chunk-local index.
+    """
+
+    source_triangle: int
+    words: Tuple[int, ...]
 
 
-# ---------------------------------------------------------------------------
-# Encode
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class CompactFrame:
+    """A framed mirror of the DSP's packed survivor records."""
 
-def _units_to_bytes(units: list[int]) -> bytes:
-    return struct.pack(">%dH" % len(units), *units)
-
-
-def encode_word(word: int) -> tuple[int, int]:
-    """One 24-bit DSP word -> two big-endian 16-bit units.
-
-    The raw bit pattern travels; no sign extension happens on the wire.  The
-    host already knows which fields are signed and sign-extends them exactly
-    as it does today when unpacking from the host port, so this framing cannot
-    introduce a sign bug that the existing path does not already have."""
-    if not 0 <= word <= WORD_MASK:
-        raise StreamError("word %#x outside 24-bit range" % word)
-    return (word >> 16) & UNIT_MASK, word & UNIT_MASK
+    frame_id: int
+    mesh_id: int
+    generation: int
+    capacity_words: int
+    records: Tuple[CompactRecord, ...]
+    version_flags: int = FRAME_VERSION | COMPACT_RECORD_FLAG
 
 
-def decode_word(hi: int, lo: int) -> int:
-    if hi & ~0xFF:
-        raise StreamError("high unit %#x has bits above the 24-bit word" % hi)
-    return ((hi & 0xFF) << 16) | (lo & UNIT_MASK)
+def _u16(value: int, name: str = "word") -> int:
+    if not 0 <= value <= 0xFFFF:
+        raise StreamError(f"{name} is not a 16-bit value: {value}")
+    return value
 
 
-def encode_frame(header: FrameHeader, records: list[list[int]]) -> tuple[bytes, int]:
-    """Build one complete DMA buffer.
+def _s8(value: int) -> int:
+    return value - 0x100 if value & 0x80 else value
 
-    Returns (buffer_bytes, status).  If the records do not fit in
-    `header.capacity_units`, as many as fit are emitted and the footer carries
-    STATUS_OVERFLOW -- the host must then discard the buffer and fall back to
-    the host-port path, exactly as OPTIMIZATION.md 7.4 requires.  The DSP must
-    reserve the footer space up front, which is why the usable capacity below
-    subtracts ENVELOPE_UNITS before dividing."""
-    usable = header.capacity_units - ENVELOPE_UNITS
-    if usable < 0:
-        raise StreamError("capacity smaller than the envelope")
-    max_records = usable // UNITS_PER_RECORD
 
-    status = STATUS_COMPLETE
-    emitted = records
-    if len(records) > max_records:
-        status = STATUS_OVERFLOW
-        emitted = records[:max_records]
+def _s16(value: int) -> int:
+    return value - 0x10000 if value & 0x8000 else value
 
-    units: list[int] = [
-        MAGIC_HEAD,
-        (VERSION << 8) | (header.flags & 0xFF),
-        (header.frame_id >> 16) & UNIT_MASK,
-        header.frame_id & UNIT_MASK,
-        header.mesh_id & UNIT_MASK,
-        header.generation & UNIT_MASK,
-        (header.capacity_units >> 16) & UNIT_MASK,
-        header.capacity_units & UNIT_MASK,
+
+def _split_u32(value: int, name: str) -> Tuple[int, int]:
+    if not 0 <= value <= 0xFFFFFFFF:
+        raise StreamError(f"{name} is not a 32-bit value: {value}")
+    return value >> 16, value & 0xFFFF
+
+
+def _validate_compact_record(record: CompactRecord) -> None:
+    if not 0 <= record.source_triangle <= 0xFFFFFFFF:
+        raise StreamError("compact source triangle is not a 32-bit value")
+    if len(record.words) != DSP_SPAN_RECORD_WORDS:
+        raise StreamError(
+            "compact record must contain "
+            f"{DSP_SPAN_RECORD_WORDS} native DSP words"
+        )
+    for index, word in enumerate(record.words):
+        if not 0 <= word <= 0xFFFFFF:
+            raise StreamError(f"compact record word {index} is not 24-bit: {word}")
+
+
+def crc16_ccitt(words: Iterable[int]) -> int:
+    """CRC-16/CCITT-FALSE over the big-endian byte representation."""
+
+    crc = 0xFFFF
+    for word in words:
+        _u16(word)
+        for byte in (word >> 8, word & 0xFF):
+            crc ^= byte << 8
+            for _ in range(8):
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
+
+def _validate_row(row: Row) -> None:
+    if not 0 <= row.x0 < MAX_SCREEN_WIDTH:
+        raise StreamError(f"row x0 outside render target: {row.x0}")
+    if not 1 <= row.count <= 256 or row.x0 + row.count > MAX_SCREEN_WIDTH:
+        raise StreamError(f"row span outside render target: x0={row.x0}, count={row.count}")
+    _u16(row.u, "row.u")
+    _u16(row.v, "row.v")
+    if not 0 <= row.shade <= MAX_SHADE_LEVEL:
+        raise StreamError(f"row shade outside 0..15: {row.shade}")
+
+
+def _validate_packet(packet: Packet) -> None:
+    if not 0 <= packet.source_triangle <= 0xFFFF:
+        raise StreamError("source triangle is not a 16-bit value")
+    _u16(packet.shade_tint, "packet.shade_tint")
+    _u16(packet.flags, "packet.flags")
+    _u16(packet.du_dx & 0xFFFF, "packet.du_dx")
+    _u16(packet.dv_dx & 0xFFFF, "packet.dv_dx")
+    if not -32768 <= packet.y_start <= 32767:
+        raise StreamError("packet.y_start is not a signed 16-bit value")
+    if not packet.rows or len(packet.rows) > 0x0FFF:
+        raise StreamError("packet must contain 1..4095 rows")
+    for row in packet.rows:
+        _validate_row(row)
+
+
+def _encode_row_abs(row: Row) -> List[int]:
+    _validate_row(row)
+    return [((row.x0 & 0xFF) << 8) | ((row.count - 1) & 0xFF), row.u, row.v]
+
+
+def _row_delta(a: Row, b: Row) -> Tuple[int, int, int, int] | None:
+    dx = b.x0 - a.x0
+    dcount = b.count - a.count
+    du = _s16((b.u - a.u) & 0xFFFF)
+    dv = _s16((b.v - a.v) & 0xFFFF)
+    if not -128 <= dx <= 127 or not -128 <= dcount <= 127:
+        return None
+    return dx, dcount, du, dv
+
+
+def _shade_groups(rows: Sequence[Row]) -> Iterable[Tuple[int, int]]:
+    start = 0
+    while start < len(rows):
+        end = start + 1
+        while end < len(rows) and rows[end].shade == rows[start].shade:
+            end += 1
+        yield start, end
+        start = end
+
+
+def _encode_packet_body(packet: Packet) -> List[int]:
+    words: List[int] = []
+    current_shade = packet.shade_tint & 0xF
+
+    for group_start, group_end in _shade_groups(packet.rows):
+        group = packet.rows[group_start:group_end]
+        if group[0].shade != current_shade:
+            words.append(SHADE_MAGIC | group[0].shade)
+            current_shade = group[0].shade
+
+        # A RUN16 contains its initial absolute row and at least two following
+        # rows.  Extend only while the same constant modulo-16-bit delta holds.
+        pos = 0
+        while pos < len(group):
+            run_end = pos + 1
+            delta = _row_delta(group[pos], group[pos + 1]) if pos + 1 < len(group) else None
+            if delta is not None:
+                while run_end < len(group) and run_end - pos < 256:
+                    if _row_delta(group[run_end - 1], group[run_end]) != delta:
+                        break
+                    run_end += 1
+            run_length = run_end - pos
+            if run_length >= 3:
+                dx, dcount, du, dv = delta  # type: ignore[misc]
+                words.append(RUN_MAGIC | (run_length - 1))
+                words.extend(_encode_row_abs(group[pos]))
+                words.append(((dx & 0xFF) << 8) | (dcount & 0xFF))
+                words.extend((du & 0xFFFF, dv & 0xFFFF))
+                pos = run_end
+            else:
+                words.extend(_encode_row_abs(group[pos]))
+                pos += 1
+    return words
+
+
+def encode_frame(frame: Frame) -> List[int]:
+    """Encode a frame and return its complete stream as 16-bit words."""
+
+    frame_hi, frame_lo = _split_u32(frame.frame_id, "frame_id")
+    if not 0 <= frame.mesh_id <= 0xFFFF or not 0 <= frame.generation <= 0xFFFF:
+        raise StreamError("mesh_id and generation must be 16-bit values")
+    if not 1 <= frame.capacity_words <= 0xFFFF:
+        raise StreamError("capacity_words must be in 1..65535")
+
+    words = [
+        FRAME_MAGIC,
+        frame.version_flags,
+        frame_hi,
+        frame_lo,
+        frame.mesh_id,
+        frame.generation,
+        frame.capacity_words,
+        0,
     ]
+    for packet in frame.packets:
+        _validate_packet(packet)
+        key_hi, key_lo = _split_u32(packet.ot_key, "packet.ot_key")
+        words.extend(
+            [
+                PACKET_MAGIC | len(packet.rows),
+                packet.source_triangle,
+                key_hi,
+                key_lo,
+                packet.shade_tint,
+                packet.flags,
+                packet.du_dx & 0xFFFF,
+                packet.dv_dx & 0xFFFF,
+                packet.y_start & 0xFFFF,
+            ]
+        )
+        words.extend(_encode_packet_body(packet))
 
-    for rec in emitted:
-        if len(rec) != SPAN_RECORD_WORDS:
-            raise StreamError("record has %d words, expected %d"
-                              % (len(rec), SPAN_RECORD_WORDS))
-        for word in rec:
-            units.extend(encode_word(word))
+    payload_crc = crc16_ccitt(words)
+    total_words = len(words) + 6
+    if total_words > frame.capacity_words:
+        raise StreamError(
+            f"frame requires {total_words} words, capacity is {frame.capacity_words}"
+        )
+    words.extend(
+        [
+            FRAME_FOOTER_MAGIC,
+            frame_hi,
+            frame_lo,
+            len(frame.packets),
+            total_words,
+            payload_crc,
+        ]
+    )
+    return words
 
-    body = _units_to_bytes(units)
-    total_units = len(units) + FOOTER_UNITS
 
-    footer = [
-        MAGIC_FOOT,
-        status,
-        (header.frame_id >> 16) & UNIT_MASK,
-        header.frame_id & UNIT_MASK,
-        len(emitted) & UNIT_MASK,
-        (total_units >> 16) & UNIT_MASK,
-        total_units & UNIT_MASK,
+def encode_compact_frame(frame: CompactFrame) -> List[int]:
+    """Encode the deterministic 24-bit DSP-record shadow stream.
+
+    Each native DSP word is represented by two SSI words: a zero-extended
+    high byte followed by the low 16 bits.  This wastes eight bits per native
+    word, but keeps the stream word-aligned and makes the physical DMA
+    capture directly comparable with the host-port source.
+    """
+
+    frame_hi, frame_lo = _split_u32(frame.frame_id, "frame_id")
+    if not 0 <= frame.mesh_id <= 0xFFFF or not 0 <= frame.generation <= 0xFFFF:
+        raise StreamError("mesh_id and generation must be 16-bit values")
+    if not 1 <= frame.capacity_words <= 0xFFFF:
+        raise StreamError("capacity_words must be in 1..65535")
+    if not frame.version_flags & COMPACT_RECORD_FLAG:
+        raise StreamError("compact frame is missing COMPACT_RECORD_FLAG")
+
+    words = [
+        FRAME_MAGIC,
+        frame.version_flags,
+        frame_hi,
+        frame_lo,
+        frame.mesh_id,
+        frame.generation,
+        frame.capacity_words,
+        0,
     ]
-    # CRC covers header + records + every footer unit before the CRC itself.
-    footer.append(crc16_ccitt(body + _units_to_bytes(footer)))
-    return body + _units_to_bytes(footer), status
+    for record in frame.records:
+        _validate_compact_record(record)
+        source_hi, source_lo = _split_u32(record.source_triangle, "source_triangle")
+        words.extend([COMPACT_RECORD_MAGIC, source_hi, source_lo])
+        for native_word in record.words:
+            words.extend([(native_word >> 16) & 0xFF, native_word & 0xFFFF])
+
+    payload_crc = crc16_ccitt(words)
+    total_words = len(words) + 6
+    if total_words > frame.capacity_words:
+        raise StreamError(
+            f"compact frame requires {total_words} words, capacity is {frame.capacity_words}"
+        )
+    words.extend(
+        [
+            FRAME_FOOTER_MAGIC,
+            frame_hi,
+            frame_lo,
+            len(frame.records),
+            total_words,
+            payload_crc,
+        ]
+    )
+    return words
 
 
-# ---------------------------------------------------------------------------
-# Decode
-# ---------------------------------------------------------------------------
+def _read(words: Sequence[int], index: int, name: str) -> int:
+    if index >= len(words):
+        raise StreamError(f"truncated stream while reading {name}")
+    return _u16(words[index], name)
 
-def decode_frame(buf: bytes, expect_frame_id: int | None = None,
-                 expect_generation: int | None = None) -> tuple[FrameHeader, list[list[int]], int]:
-    """Validate and decode one DMA buffer.
 
-    Every failure raises.  There is no partial success and no resynchronisation:
-    a buffer is consumable or it is discarded and the host-port path runs.  That
-    is the whole point of the ping-pong ownership model -- a half-good buffer
-    silently feeding the rasterizer is the failure this envelope exists to make
-    impossible."""
-    if len(buf) % 2:
-        raise StreamError("buffer length %d is not a whole number of units" % len(buf))
-    units = list(struct.unpack(">%dH" % (len(buf) // 2), buf))
+def _decode_row_abs(words: Sequence[int], index: int, shade: int) -> Tuple[Row, int]:
+    packed = _read(words, index, "ROW_ABS header")
+    if packed >= 0xF000:
+        raise StreamError("ROW_ABS collides with a control word")
+    row = Row(
+        x0=packed >> 8,
+        count=(packed & 0xFF) + 1,
+        u=_read(words, index + 1, "ROW_ABS U"),
+        v=_read(words, index + 2, "ROW_ABS V"),
+        shade=shade,
+    )
+    _validate_row(row)
+    return row, index + 3
 
-    if len(units) < ENVELOPE_UNITS:
-        raise StreamError("buffer shorter than the envelope")
-    if units[0] != MAGIC_HEAD:
-        raise StreamError("bad head magic %#06x" % units[0])
 
-    version = units[1] >> 8
-    if version != VERSION:
-        raise StreamError("unsupported version %d" % version)
+def decode_frame(words: Sequence[int]) -> Frame:
+    """Decode and validate a complete stream."""
 
-    header = FrameHeader(
-        frame_id=(units[2] << 16) | units[3],
-        mesh_id=units[4],
-        generation=units[5],
-        capacity_units=(units[6] << 16) | units[7],
-        flags=units[1] & 0xFF,
+    if len(words) < 8 + 6:
+        raise StreamError("stream is shorter than header plus footer")
+    normalized = [_u16(word, "stream word") for word in words]
+    if normalized[0] != FRAME_MAGIC:
+        raise StreamError("bad frame magic")
+
+    frame_id = (normalized[2] << 16) | normalized[3]
+    capacity = normalized[6]
+    footer = normalized[-6:]
+    if footer[0] != FRAME_FOOTER_MAGIC:
+        raise StreamError("bad frame footer magic")
+    footer_frame_id = (footer[1] << 16) | footer[2]
+    if footer_frame_id != frame_id:
+        raise StreamError("footer frame id does not match header")
+    if footer[4] != len(normalized):
+        raise StreamError("footer word count does not match stream length")
+    if len(normalized) > capacity:
+        raise StreamError("stream exceeds declared DMA capacity")
+    if crc16_ccitt(normalized[:-6]) != footer[5]:
+        raise StreamError("stream CRC mismatch")
+
+    packets: List[Packet] = []
+    index = 8
+    body_end = len(normalized) - 6
+    while index < body_end:
+        marker = _read(normalized, index, "packet marker")
+        if marker < PACKET_MAGIC or marker >= 0xF000:
+            raise StreamError(f"expected packet marker at word {index}")
+        row_count = marker & 0x0FFF
+        if row_count == 0:
+            raise StreamError("packet contains zero rows")
+        source = _read(normalized, index + 1, "packet source")
+        ot_key = (_read(normalized, index + 2, "OT key high") << 16) | _read(
+            normalized, index + 3, "OT key low"
+        )
+        shade_tint = _read(normalized, index + 4, "packet shade/tint")
+        flags = _read(normalized, index + 5, "packet flags")
+        du_dx = _read(normalized, index + 6, "packet du/dx")
+        dv_dx = _read(normalized, index + 7, "packet dv/dx")
+        y_start = _s16(_read(normalized, index + 8, "packet y start"))
+        index += 9
+
+        rows: List[Row] = []
+        shade = shade_tint & 0xF
+        logical_rows = 0
+        while logical_rows < row_count:
+            control = _read(normalized, index, "row/control word")
+            if control & 0xFF00 == SHADE_MAGIC:
+                shade = control & 0xF
+                if control & 0xFFF0 != SHADE_MAGIC:
+                    raise StreamError("invalid SET_SHADE control word")
+                index += 1
+                continue
+            if control & 0xFF00 == ROW_SKIP_MAGIC:
+                skipped = (control & 0xFF) + 1
+                if logical_rows + skipped > row_count:
+                    raise StreamError("ROW_SKIP exceeds packet row count")
+                logical_rows += skipped
+                index += 1
+                continue
+            if control & 0xFF00 == RUN_MAGIC:
+                run_length = (control & 0xFF) + 1
+                if run_length < 3:
+                    raise StreamError("RUN16 is shorter than three rows")
+                if logical_rows + run_length > row_count:
+                    raise StreamError("RUN16 exceeds packet row count")
+                first, index = _decode_row_abs(normalized, index + 1, shade)
+                packed_delta = _read(normalized, index, "RUN16 x/count delta")
+                dx = _s8(packed_delta >> 8)
+                dcount = _s8(packed_delta & 0xFF)
+                du = _s16(_read(normalized, index + 1, "RUN16 du"))
+                dv = _s16(_read(normalized, index + 2, "RUN16 dv"))
+                index += 3
+                rows.append(first)
+                previous = first
+                for _ in range(run_length - 1):
+                    current = Row(
+                        x0=previous.x0 + dx,
+                        count=previous.count + dcount,
+                        u=(previous.u + du) & 0xFFFF,
+                        v=(previous.v + dv) & 0xFFFF,
+                        shade=shade,
+                    )
+                    _validate_row(current)
+                    rows.append(current)
+                    previous = current
+                logical_rows += run_length
+                continue
+            row, index = _decode_row_abs(normalized, index, shade)
+            rows.append(row)
+            logical_rows += 1
+
+        packets.append(
+            Packet(
+                source_triangle=source,
+                ot_key=ot_key,
+                shade_tint=shade_tint,
+                flags=flags,
+                du_dx=du_dx,
+                dv_dx=dv_dx,
+                rows=tuple(rows),
+                y_start=y_start,
+            )
+        )
+
+    if index != body_end:
+        raise StreamError("decoder did not consume the complete frame body")
+    if len(packets) != footer[3]:
+        raise StreamError("footer packet count does not match stream")
+    return Frame(
+        frame_id=frame_id,
+        mesh_id=normalized[4],
+        generation=normalized[5],
+        capacity_words=capacity,
+        packets=tuple(packets),
+        version_flags=normalized[1],
     )
 
-    # The footer is at a declared offset, so find it via the declared length
-    # rather than by scanning for the magic -- scanning would happily lock onto
-    # a stale footer left in the buffer by the previous frame.
-    foot = units[-FOOTER_UNITS:]
-    if foot[0] != MAGIC_FOOT:
-        raise StreamError("bad foot magic %#06x" % foot[0])
 
-    status = foot[1]
-    if status not in (STATUS_COMPLETE, STATUS_OVERFLOW):
-        raise StreamError("unknown status %d" % status)
+def decode_compact_frame(words: Sequence[int]) -> CompactFrame:
+    """Decode and validate a compact DSP-record shadow stream."""
 
-    foot_frame_id = (foot[2] << 16) | foot[3]
-    if foot_frame_id != header.frame_id:
-        raise StreamError("frame id mismatch: header %d, footer %d"
-                          % (header.frame_id, foot_frame_id))
+    if len(words) < 8 + 6:
+        raise StreamError("compact stream is shorter than header plus footer")
+    normalized = [_u16(word, "stream word") for word in words]
+    if normalized[0] != FRAME_MAGIC:
+        raise StreamError("bad compact frame magic")
+    if not normalized[1] & COMPACT_RECORD_FLAG:
+        raise StreamError("stream is not marked as a compact record frame")
 
-    count = foot[4]
-    declared_units = (foot[5] << 16) | foot[6]
-    if declared_units != len(units):
-        raise StreamError("declared %d units, buffer holds %d"
-                          % (declared_units, len(units)))
+    frame_id = (normalized[2] << 16) | normalized[3]
+    capacity = normalized[6]
+    footer = normalized[-6:]
+    if footer[0] != FRAME_FOOTER_MAGIC:
+        raise StreamError("bad compact frame footer magic")
+    if ((footer[1] << 16) | footer[2]) != frame_id:
+        raise StreamError("compact footer frame id does not match header")
+    if footer[4] != len(normalized):
+        raise StreamError("compact footer word count does not match stream length")
+    if len(normalized) > capacity:
+        raise StreamError("compact stream exceeds declared DMA capacity")
+    if crc16_ccitt(normalized[:-6]) != footer[5]:
+        raise StreamError("compact stream CRC mismatch")
 
-    expected_units = ENVELOPE_UNITS + count * UNITS_PER_RECORD
-    if expected_units != len(units):
-        raise StreamError("record count %d implies %d units, buffer holds %d"
-                          % (count, expected_units, len(units)))
+    records: List[CompactRecord] = []
+    index = 8
+    body_end = len(normalized) - 6
+    while index < body_end:
+        if _read(normalized, index, "compact record marker") != COMPACT_RECORD_MAGIC:
+            raise StreamError(f"expected compact record marker at word {index}")
+        source = (_read(normalized, index + 1, "compact source high") << 16) | _read(
+            normalized, index + 2, "compact source low"
+        )
+        index += 3
+        native_words: List[int] = []
+        for native_index in range(DSP_SPAN_RECORD_WORDS):
+            high = _read(normalized, index, f"compact word {native_index} high")
+            if high & 0xFF00:
+                raise StreamError(f"compact word {native_index} high byte is not zero-extended")
+            low = _read(normalized, index + 1, f"compact word {native_index} low")
+            native_words.append((high << 16) | low)
+            index += 2
+        record = CompactRecord(source_triangle=source, words=tuple(native_words))
+        _validate_compact_record(record)
+        records.append(record)
 
-    crc_seen = foot[7]
-    crc_calc = crc16_ccitt(buf[:-2])
-    if crc_seen != crc_calc:
-        raise StreamError("CRC mismatch: got %#06x, computed %#06x" % (crc_seen, crc_calc))
-
-    if status == STATUS_OVERFLOW:
-        raise StreamError("DSP reported overflow after %d records; use the "
-                          "host-port fallback" % count)
-
-    # Cross-frame ownership: a structurally perfect buffer from the WRONG frame
-    # is the ping-pong failure mode, and only the caller knows what it asked
-    # for.  Checked after the structural checks so diagnostics stay useful.
-    if expect_frame_id is not None and header.frame_id != expect_frame_id:
-        raise StreamError("stale buffer: frame %d, expected %d"
-                          % (header.frame_id, expect_frame_id))
-    if expect_generation is not None and header.generation != expect_generation:
-        raise StreamError("stale buffer: generation %d, expected %d"
-                          % (header.generation, expect_generation))
-
-    records = []
-    pos = HEADER_UNITS
-    for _ in range(count):
-        rec = [decode_word(units[pos + 2 * i], units[pos + 2 * i + 1])
-               for i in range(SPAN_RECORD_WORDS)]
-        records.append(rec)
-        pos += UNITS_PER_RECORD
-    return header, records, status
-
-
-# ---------------------------------------------------------------------------
-# Buffer sizing and cost model
-# ---------------------------------------------------------------------------
-
-def buffer_report() -> str:
-    """Size the ping-pong buffers and state the transfer cost honestly.
-
-    Survivor counts are OPTIMIZATION.md 8.2a's recorded full-mesh averages; the
-    timing window is the 2.4c corrected baseline, not the retired stock one."""
-    avg_survivors = 1149          # 8.2a, recorded full-mesh average
-    prepass_cap = 1335            # 2.3f PREPASS_MAX, the armed-path ceiling
-    geometric_max = TREX_PRIMITIVES  # every triangle survives
-
-    def size(n):
-        return ENVELOPE_UNITS * 2 + n * BYTES_PER_RECORD
-
-    avg_b, cap_b, max_b = size(avg_survivors), size(prepass_cap), size(geometric_max)
-    kib = 1024
-    buf = 192 * kib
-
-    # Atari's specified ceiling for DSP-SSI / DMA-record, 32 MHz / 4.
-    rate = 1_000_000.0            # bytes per second
-    window_ms = 535.7 - 260.4     # 2.4c: frame minus the packet stage
-
-    lines = [
-        "Buffer sizing (record stream, %d words x %d units = %d bytes/record)"
-        % (SPAN_RECORD_WORDS, UNITS_PER_WORD, BYTES_PER_RECORD),
-        "",
-        "  %-34s %8d records  %9d B  %7.1f KiB" % ("average frame (8.2a)", avg_survivors, avg_b, avg_b / kib),
-        "  %-34s %8d records  %9d B  %7.1f KiB" % ("armed prepass capacity (2.3f)", prepass_cap, cap_b, cap_b / kib),
-        "  %-34s %8d records  %9d B  %7.1f KiB" % ("GEOMETRIC MAXIMUM (all survive)", geometric_max, max_b, max_b / kib),
-        "",
-        "  Chosen buffer: %d KiB each, %d KiB for the ping-pong pair." % (buf // kib, 2 * buf // kib),
-    ]
-
-    slack = buf - max_b
-    per_word = TREX_PRIMITIVES * UNITS_PER_WORD * 2   # cost of one more record word
-    if max_b <= buf:
-        lines += [
-            "",
-            "  *** The geometric maximum FITS -- but only just. ***",
-            "  %d B of %d B, %.1f%% full at the worst case the mesh can produce,"
-            % (max_b, buf, 100.0 * max_b / buf),
-            "  leaving %d B of slack." % slack,
-            "",
-            "  This is a stronger result in KIND than OPTIMIZATION.md 7.4 could",
-            "  state for the ROW stream, where 192 KiB was an observed-corpus",
-            "  bound and an adversarial mesh could always overflow it.  A record",
-            "  stream is bounded by TRIANGLE COUNT, not by coverage, so the worst",
-            "  case is a fixed number the mesh cannot exceed.",
-            "",
-            "  It is NOT a comfortable fit, and 192 KiB should not be copied over",
-            "  from 7.4 as if it were.  Sensitivity:",
-            "    - one more 24-bit word in the record costs %d B and OVERFLOWS" % per_word,
-            "      (a 19-word record needs %d B, %.1f KiB)."
-            % (max_b + per_word, (max_b + per_word) / kib),
-            "    - the current margin is %d B, i.e. %.1f%% of one buffer."
-            % (slack, 100.0 * slack / buf),
-            "  Recommendation: size the pair at 2 x 256 KiB if the memory map can",
-            "  afford it.  That restores headroom for a record-format change,",
-            "  which this pipeline has made repeatedly (17 -> 18 words for the",
-            "  Gouraud level fields alone).  At 192 KiB the overflow path is",
-            "  unreachable by geometry TODAY and one field away from reachable.",
-            "",
-            "  Either way the overflow path stays implemented and tested below: a",
-            "  wedged DSP or a capacity field corrupted in transit must fail",
-            "  closed rather than silently.",
-        ]
-    else:
-        lines += ["", "  Geometric maximum does NOT fit -- overflow is reachable; keep the fallback hot."]
-
-    lines += [
-        "",
-        "Transfer cost at Atari's specified 1 MB/s SSI/DMA ceiling",
-        "  (a wire limit, NOT achieved bandwidth -- handshaking preserves data by",
-        "   stretching the transfer, not by creating bandwidth):",
-        "",
-        "  %-34s %7.1f ms" % ("average frame", avg_b / rate * 1000.0),
-        "  %-34s %7.1f ms" % ("geometric maximum", max_b / rate * 1000.0),
-        "",
-        "  Window it must hide inside (2.4c: 535.7 ms frame - 260.4 ms packet",
-        "  stage) = %.1f ms." % window_ms,
-        "  Average duty cycle %.0f%%, worst case %.0f%% of that window."
-        % (100.0 * (avg_b / rate * 1000.0) / window_ms,
-           100.0 * (max_b / rate * 1000.0) / window_ms),
-        "",
-        "  READ THIS BEFORE COSTING THE PROJECT ON THOSE NUMBERS:",
-        "  the transfer this replaces is worth 14.2 ms/frame (2.4c, measured by",
-        "  wait-state sweep), and a completely free host port measures 519.7 ms",
-        "  against 535.7 -- i.e. +0.06 FPS.  The case for this stream is the",
-        "  ~173 ms of exposed DSP time it lets the CPU overlap, not the PIO it",
-        "  deletes.  A design that wins the transfer and loses the overlap is a",
-        "  net loss, and OPTIMIZATION.md roadmap item 12 stage 2 already measured",
-        "  one such attempt at 278.0 ms against 263.8.",
-    ]
-    return "\n".join(lines)
+    if index != body_end:
+        raise StreamError("compact decoder did not consume the complete frame body")
+    if len(records) != footer[3]:
+        raise StreamError("compact footer record count does not match stream")
+    return CompactFrame(
+        frame_id=frame_id,
+        mesh_id=normalized[4],
+        generation=normalized[5],
+        capacity_words=capacity,
+        records=tuple(records),
+        version_flags=normalized[1],
+    )
 
 
-# ---------------------------------------------------------------------------
-# Self-tests
-# ---------------------------------------------------------------------------
+def _sample_frame() -> Frame:
+    rows = (
+        Row(12, 8, 0xFFF0, 0x0100, 3),
+        Row(13, 8, 0x0000, 0x0110, 3),
+        Row(14, 8, 0x0010, 0x0120, 3),
+        Row(15, 8, 0x0020, 0x0130, 5),
+        Row(16, 8, 0x0030, 0x0140, 5),
+        Row(17, 8, 0x0040, 0x0150, 5),
+    )
+    return Frame(
+        frame_id=0x12345678,
+        mesh_id=0x42,
+        generation=7,
+        capacity_words=256,
+        packets=(
+            Packet(
+                source_triangle=1723,
+                ot_key=0x000ABCDE,
+                shade_tint=0x0023,
+                flags=0x0005,
+                du_dx=0xFFF0,
+                dv_dx=0x0010,
+                rows=rows,
+            ),
+        ),
+    )
 
-def _rec(seed_words):
-    return list(seed_words)
+
+def _sample_compact_frame() -> CompactFrame:
+    return CompactFrame(
+        frame_id=0x89ABCDEF,
+        mesh_id=0x42,
+        generation=8,
+        capacity_words=256,
+        records=(
+            CompactRecord(
+                source_triangle=0x00001234,
+                words=(
+                    0x000001,
+                    0xFFFFFF,
+                    0x123456,
+                    0x800000,
+                    0x00FF00,
+                    0x000000,
+                    0x654321,
+                    0xFEDCBA,
+                    0x000080,
+                    0xABCDEF,
+                    0x010203,
+                    0x102030,
+                    0xF00000,
+                    0x0F0F0F,
+                    0x00AA55,
+                    0x7FFFFF,
+                    0x800001,
+                    0xFFFFFF,
+                ),
+            ),
+        ),
+    )
 
 
-def _make_records(n, rng):
-    return [[rng.randrange(0, WORD_MASK + 1) for _ in range(SPAN_RECORD_WORDS)]
-            for _ in range(n)]
+def self_test() -> None:
+    frame = _sample_frame()
+    encoded = encode_frame(frame)
+    decoded = decode_frame(encoded)
+    assert decoded == frame, (decoded, frame)
+    assert any(word & 0xFF00 == RUN_MAGIC for word in encoded)
+    assert any(word & 0xFF00 == SHADE_MAGIC for word in encoded)
 
+    # A thin triangle may have a visible Y row with no clipped X span.  The
+    # stream keeps that logical row with a one-word skip control, so the
+    # packet remains aligned without inventing a zero-width ROW_ABS record.
+    skipped = list(encoded)
+    skipped[8] += 1
+    skipped.insert(17, ROW_SKIP_MAGIC)
+    skipped[-2] = len(skipped)
+    skipped[-1] = crc16_ccitt(skipped[:-6])
+    skipped_decoded = decode_frame(skipped)
+    assert skipped_decoded.packets[0].y_start == 0
+    assert skipped_decoded.packets[0].rows == frame.packets[0].rows
 
-def _expect_error(fn, what):
+    corrupted = list(encoded)
+    corrupted[10] ^= 1
     try:
-        fn()
+        decode_frame(corrupted)
     except StreamError:
-        return True
-    raise AssertionError("%s was accepted but must be rejected" % what)
+        pass
+    else:
+        raise AssertionError("CRC corruption was accepted")
+
+    too_small = Frame(
+        frame_id=frame.frame_id,
+        mesh_id=frame.mesh_id,
+        generation=frame.generation,
+        capacity_words=len(encoded) - 1,
+        packets=frame.packets,
+    )
+    try:
+        encode_frame(too_small)
+    except StreamError:
+        pass
+    else:
+        raise AssertionError("capacity overflow was accepted")
+
+    try:
+        decode_frame(encoded[:-1])
+    except StreamError:
+        pass
+    else:
+        raise AssertionError("truncated footer was accepted")
+
+    compact = _sample_compact_frame()
+    compact_encoded = encode_compact_frame(compact)
+    compact_decoded = decode_compact_frame(compact_encoded)
+    assert compact_decoded == compact, (compact_decoded, compact)
+    assert len(compact_encoded) == 8 + 3 + (DSP_SPAN_RECORD_WORDS * 2) + 6
+
+    compact_corrupted = list(compact_encoded)
+    compact_corrupted[10] |= 0x100
+    try:
+        decode_compact_frame(compact_corrupted)
+    except StreamError:
+        pass
+    else:
+        raise AssertionError("non-zero compact high-byte padding was accepted")
+
+    compact_too_small = CompactFrame(
+        frame_id=compact.frame_id,
+        mesh_id=compact.mesh_id,
+        generation=compact.generation,
+        capacity_words=len(compact_encoded) - 1,
+        records=compact.records,
+    )
+    try:
+        encode_compact_frame(compact_too_small)
+    except StreamError:
+        pass
+    else:
+        raise AssertionError("compact capacity overflow was accepted")
 
 
-def run_tests(verbose=True):
-    rng = random.Random(0x5350414E)     # fixed seed: reproducible
-    checks = 0
-
-    # 1. Word codec is lossless over the whole 24-bit domain.  Exhaustive over
-    #    every boundary and every single-bit pattern, plus a large random draw.
-    patterns = {0, WORD_MASK, 0x800000, 0x7FFFFF, 0xFFFF, 0x10000}
-    patterns |= {1 << b for b in range(24)}
-    patterns |= {(1 << b) - 1 for b in range(1, 25)}
-    patterns |= {rng.randrange(0, WORD_MASK + 1) for _ in range(200_000)}
-    for w in patterns:
-        assert decode_word(*encode_word(w)) == w, "word codec lost %#x" % w
-        checks += 1
-
-    # 2. Round-trip whole frames, including the empty and the maximal one.
-    cap = (192 * 1024) // 2
-    for n in (0, 1, 2, 31, 32, 33, 1149, 1335, TREX_PRIMITIVES):
-        recs = _make_records(n, rng)
-        hdr = FrameHeader(frame_id=0x00ABCDEF, mesh_id=1, generation=n & 0xFFFF,
-                          capacity_units=cap)
-        buf, status = encode_frame(hdr, recs)
-        assert status == STATUS_COMPLETE, "n=%d unexpectedly overflowed" % n
-        got_hdr, got_recs, got_status = decode_frame(
-            buf, expect_frame_id=hdr.frame_id, expect_generation=hdr.generation)
-        assert got_recs == recs, "record mismatch at n=%d" % n
-        assert got_hdr.frame_id == hdr.frame_id
-        assert got_status == STATUS_COMPLETE
-        checks += 1
-
-    # 3. Every corruption mode the DMA path can actually produce is rejected.
-    recs = _make_records(64, rng)
-    hdr = FrameHeader(frame_id=42, mesh_id=1, generation=7, capacity_units=cap)
-    good, _ = encode_frame(hdr, recs)
-
-    _expect_error(lambda: decode_frame(good[:-2]), "truncated buffer")
-    _expect_error(lambda: decode_frame(good[2:]), "buffer shifted by one unit")
-    _expect_error(lambda: decode_frame(good + b"\0\0"), "buffer with trailing unit")
-    _expect_error(lambda: decode_frame(good[:1]), "odd-length buffer")
-    _expect_error(lambda: decode_frame(b""), "empty buffer")
-    checks += 5
-
-    for pos in (0, 1, 5, len(good) // 2, len(good) - 3, len(good) - 1):
-        bad = bytearray(good)
-        bad[pos] ^= 0x01                       # single-bit flip anywhere
-        _expect_error(lambda: decode_frame(bytes(bad)), "single-bit flip at byte %d" % pos)
-        checks += 1
-
-    _expect_error(lambda: decode_frame(good, expect_frame_id=43), "stale frame id")
-    _expect_error(lambda: decode_frame(good, expect_generation=8), "stale generation")
-    checks += 2
-
-    # A whole record dropped: count and length disagree, caught before the CRC.
-    dropped = good[:HEADER_UNITS * 2] + good[HEADER_UNITS * 2 + BYTES_PER_RECORD:]
-    _expect_error(lambda: decode_frame(dropped), "buffer with one record dropped")
-    checks += 1
-
-    # Two halves of different frames, the ping-pong tearing mode.
-    other, _ = encode_frame(FrameHeader(frame_id=43, mesh_id=1, generation=8,
-                                        capacity_units=cap),
-                            _make_records(64, rng))
-    torn = good[:len(good) // 2] + other[len(other) // 2:]
-    _expect_error(lambda: decode_frame(torn), "torn ping-pong buffer")
-    checks += 1
-
-    # A stale footer left behind by a shorter previous frame must not be found.
-    stale = bytearray(encode_frame(hdr, _make_records(80, rng))[0])
-    stale[:len(good)] = good
-    _expect_error(lambda: decode_frame(bytes(stale)), "buffer with a stale trailing footer")
-    checks += 1
-
-    # 4. Overflow fails closed rather than delivering a short frame.
-    small = ENVELOPE_UNITS + 10 * UNITS_PER_RECORD
-    buf, status = encode_frame(
-        FrameHeader(frame_id=1, mesh_id=1, generation=0, capacity_units=small),
-        _make_records(40, rng))
-    assert status == STATUS_OVERFLOW, "overflow not reported by the encoder"
-    _expect_error(lambda: decode_frame(buf), "overflow buffer")
-    checks += 2
-
-    # 5. Malformed input to the encoder is refused rather than silently padded.
-    _expect_error(lambda: encode_frame(hdr, [[0] * (SPAN_RECORD_WORDS - 1)]), "short record")
-    _expect_error(lambda: encode_frame(hdr, [[WORD_MASK + 1] * SPAN_RECORD_WORDS]),
-                  "word above 24 bits")
-    _expect_error(lambda: encode_frame(
-        FrameHeader(frame_id=1, mesh_id=1, generation=0, capacity_units=4), []),
-        "capacity below the envelope")
-    checks += 3
-
-    if verbose:
-        print("self-tests: %d checks, all passed" % checks)
-    return checks
+def _print_cost() -> None:
+    rows = 12_439.35
+    packets = 1_018.96
+    uv_only = rows * 4
+    # The packet header is nine words: the last two carry du/dx and dv/dx,
+    # and the ninth anchors the packet's first visible Y row.
+    abs_stream = rows * 6 + packets * 18
+    shade_bound = rows * 8 + packets * 18
+    compact_records = packets * (1 + 2 + (DSP_SPAN_RECORD_WORDS * 2)) * 2 + 28
+    print(f"rows/frame: {rows:.2f}")
+    print(f"packets/frame: {packets:.2f}")
+    print(f"U/V-only bytes/frame: {uv_only:.0f}")
+    print(f"ABS span bytes/frame: {abs_stream:.0f}")
+    print(f"shade-change bound bytes/frame: {shade_bound:.0f}")
+    print(f"compact-record shadow bytes/frame: {compact_records:.0f}")
 
 
-def main(argv):
-    print(__doc__.strip().split("\n")[0])
-    print()
-    run_tests()
-    print()
-    print(buffer_report())
-    return 0
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--self-test", action="store_true", help="run protocol fixtures")
+    parser.add_argument("--cost", action="store_true", help="print the documented full-mesh cost model")
+    args = parser.parse_args()
+    if not args.self_test and not args.cost:
+        parser.error("select --self-test or --cost")
+    if args.self_test:
+        self_test()
+        print("ssi_stream_model: self-test passed")
+    if args.cost:
+        _print_cost()
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    main()
