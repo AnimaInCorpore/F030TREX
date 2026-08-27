@@ -65,7 +65,7 @@ rasterizer failure.
 
 ### Hatari capture
 
-![Side-leaning T-Rex head running under Hatari](docs/screenshots/trex-hatari-side-lean.png)
+![Texture-mapped T-Rex head in three-quarter view, running under Hatari](docs/screenshots/trex-hatari-three-quarter.png)
 
 ## Required reading
 
