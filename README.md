@@ -93,7 +93,7 @@ timing remains unmeasured.
 
 The DSP program is the post-harvest build of OPTIMIZATION.md section 2.3h:
 nine sites reworked for size and speed at byte-identical output, with the
-armed occlusion prepass measured 21.5% cheaper in Hatari and the freed
+armed occlusion prepass measured 25.6% cheaper in Hatari and the freed
 program memory documented as the budget for future occlusion-yield work
 (section 2.3i records why finer coverage cells alone were measured out and
 what the actual binding constraint is).

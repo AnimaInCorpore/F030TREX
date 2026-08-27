@@ -1282,8 +1282,11 @@ the program-size change in words (negative frees words):
 The audit estimated 120-180 recoverable words against the 51 free at its
 time.  All nine sites have since landed: **179 words freed, 40 of them
 spent back on the two speed sites, the free window at 190, and the
-freestanding prepass measured 16.5 ms/frame (21.5%) cheaper** -- every
-step at byte-identical output against the recorded checkpoints.  The
+freestanding prepass measured 19.7 ms/frame (25.6%) cheaper** -- every
+step at byte-identical output against the recorded checkpoints.  That
+delta was re-measured end to end on 2026-08-27, 76.88 -> 57.18 ms/frame
+(section 2.4b); the 16.5 ms recorded here previously stopped at site 3,
+and the later size sites turned out to buy time as well as words.  The
 harvest is complete; program memory is no longer a constraint on item
 19's yield work, and further P recovery would have to come from
 structural changes (the chain-slope table-driving the audit deferred),
@@ -1394,10 +1397,13 @@ satisfy a full campaign and silently dump only the pilot's frames.
 
 ### 2.4a What the measuring emulator actually charges for
 
-Every millisecond in this document comes from Hatari 2.6.1-devel, and the
-question of what its timing model contains had never been asked. It was, at the
-source. The findings below are verified in `tools/hatari`; they do not make the
-figures wrong, but they bound what may be concluded from them.
+Every millisecond in this document outside section 2.4b comes from the stock
+Hatari **v2.6.1** release binary (compiled 2025-08-15 — the version banner
+recorded in every `hatari_runs/` log), and the question of what its timing model
+contains had never been asked. It was, at the source. The findings below are
+verified against the Hatari source tree, which is not vendored into this
+repository; the checkout used is `../F030Arcade/third_party/hatari`. They do not
+make the figures wrong, but they bound what may be concluded from them.
 
 **The core used charges no instruction execution time.** `--mmu true` selects
 `m68k_run_mmu030` and opcode table 35. `cpuemu_35.c` contains zero calls to
@@ -1427,15 +1433,27 @@ Consequences, in order of how much they matter here:
   access, but no display-driven contention. A 256x224 true-colour mode reads
   114,688 bytes per display refresh on real hardware and that cost is absent
   here.
-- **The DSP ratio is as intended, contrary to first impression.**
-  `DSP_CPU_FREQ_RATIO` **is** defined — `src/falcon/dsp.h:29`, value 2, with a
-  comment naming the Falcon's 32/16 MHz. The active `DSP_Run(2 * cpu_cycles ...)`
-  and the commented-out `DSP_Run(DSP_CPU_FREQ_RATIO * ...)` produce the same
-  rate; the `FIXME` beside them is about catch-up granularity (per-instruction
-  burst versus global clock counter), not about the rate. What remains open is
-  the unit of `dsp_cpu.c`'s `instr_cycle`, and that `dsp_cpu.c:66` states
-  outright that cycle counting was simplified and the external DSP RAM's BCR
-  wait states ignored — this program lives in that external RAM.
+- **The DSP ran at twice its real clock.** This bullet previously recorded the
+  opposite — "the DSP ratio is as intended, contrary to first impression" — and
+  that was wrong; it is corrected here (2026-08-27). The earlier reading stopped
+  at the call sites, which do look correct: `newcpu.c` passes
+  `2 * cpu_cycles * 2 / CYCLE_UNIT` from ten sites and `blitter.c` passes
+  `2 * BlitterVars.op_cycles`, all already scaled to the DSP clock. But
+  `DSP_Run()` then applied `DSP_CPU_FREQ_RATIO` (`src/falcon/dsp.h:29`, value 2)
+  a **second** time, so the DSP56001 received 4 clocks per 68030 clock instead
+  of the Falcon's 2 — 32 MIPS instead of 16. DSPBench v3.0b (dml) measured ~200%
+  of a real Falcon on all four of its ALU/SRAM tests before the fix and ~100%
+  after, in every P/X/Y internal/external combination; that the factor is
+  uniform confirms the per-instruction cycle model and its external-memory
+  penalty were already exact, and only the rate at which cycles were handed out
+  was wrong. The same fix replaces the host-port wait-state model — the entire
+  CPU-to-DSP timing model, since `dsp_core.c` has no cycle accounting — with a
+  per-direction, per-size table charged once per access, read {3, 7, 10} and
+  write {4, 3, 7} for byte/word/long, dropping RMS error over the eleven
+  DSPBench host tests from 28.3pp to 10.4pp. What remains open is unchanged:
+  `dsp_cpu.c:66` still states outright that cycle counting was simplified and
+  the external DSP RAM's BCR wait states ignored — this program lives in that
+  external RAM. Section 2.4b measures what the correction costs.
 - **The per-frame GEMDOS writes are free here and would not be on hardware.**
   `OpCode_GemDos` costs a flat 4 cycles (`src/cpu/hatari-glue.c:291`) and the
   file work happens host-side outside emulated time, yet the writes sit inside
@@ -1456,6 +1474,47 @@ One free experiment follows directly: re-run the same binary **without**
 instead of 34 raw units. The difference brackets the word MUL/DIV share of the
 frame and shows how much of the layout sensitivity is a property of the core
 rather than of the program. It needs no hardware and no code change.
+
+### 2.4b What the DSP-clock fix costs, measured
+
+The corrected emulator of 2.4a was run against the freestanding prepass
+configuration used throughout 2.3h: arm-2, dump frame 100, 11,500 VBLs, TOS
+4.02, 4 MB, one host binary (`PREPASS.TOS`) with only the `.lod` swapped.
+"Stock" is Hatari v2.6.1, the release binary; "fixed" is v2.6.1-devel carrying
+the DSP clock and host-port change. Both emulators produce a **byte-identical**
+frame-100 `fb.res` (`ef53b8c2…69a6`) from the same `.lod`, so the change moves
+timing only — no rendering decision depends on it.
+
+| `.lod` | Stock v2.6.1 | Fixed v2.6.1-devel | Ratio |
+|---|---|---|---|
+| pre-harvest, `596fc74` | 76.88 ms/frame | not run | |
+| pass-2 classify cache, `5e6428a` | 60.24 ms/frame | not run | |
+| post-harvest HEAD, `261c3d3` | **57.18 ms/frame** | **117.70 ms/frame** | **2.058** |
+
+The two stock re-measurements reproduce figures already recorded in 2.3h to
+within 0.16% (76.88 against 76.76) and 0.07% (60.24 against 60.28). That
+agreement is what licenses reading the fixed column against the rest of this
+document rather than treating it as a separate harness.
+
+Three results follow:
+
+- **Every DSP-side figure in this document is optimistic by ~2.06x.** The factor
+  sits slightly above the 2.00 of the clock fix alone because the host-port
+  recalibration ships in the same build and the prepass is host-port heavy. The
+  68030-side figures are untouched: the fix does not reach the CPU core.
+- **Whole-frame cost rises by only 23.9%.** The same VBL budget completes 321
+  frames under stock and 259 under the fixed build. The DSP is a minority of
+  frame time — the rasterizer still dominates — so doubling DSP time does not
+  double the frame. This is the number that bounds how much the correction
+  actually changes the optimization picture, and it is much smaller than 2x.
+- **The harvest of 2.3h is worth more than recorded, not less.** HEAD measures
+  57.18 ms/frame against the 60.28 recorded at site 3, so the size sites bought
+  time as well as words; 2.3h and roadmap item 21 are corrected accordingly.
+
+These remain emulator timings, not physical-Falcon timings, and the separation
+required by `AGENTS.md` still applies. What the fix buys is that the DSP side is
+now calibrated against DSPBench on real hardware instead of running at double
+rate; the 68030 side carries every caveat of 2.4a unchanged.
 
 ### 2.5 Delta clearing: built, measured, rejected
 
@@ -4476,8 +4535,9 @@ The open roadmap, in recommended order (expected effects from the section
     sites implemented**; see section 2.3h.  The seven size sites freed
     179 words, and sites 2 and 3 (O(1) kill-bit addressing, the pass-2
     classify cache) spent 40 of them back to take the freestanding
-    prepass from 76.76 to a measured **60.28 ms/frame** -- a fifth of
-    the stage -- leaving **190 words free** to the `$09BF` ceiling
+    prepass from 76.76 to a measured **60.28 ms/frame**, which the size
+    sites then carried to **57.18** (re-measured, section 2.4b) -- a
+    quarter of the stage -- leaving **190 words free** to the `$09BF` ceiling
     against 51 when the audit began, at byte-identical output
     throughout.  The
     prepass cost is hidden by the FINISH window today, and every
