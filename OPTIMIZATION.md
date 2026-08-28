@@ -1924,7 +1924,7 @@ version of the warning section 2 already gives about layout.
 | Why not hidden today? | DSP cannot buffer a frame: 20,682 words against a full 16,384-word X space | memory map |
 | Does a cold DMA buffer cost extra? | No, bounded at ~0 | data-cache A/B, above |
 | What is the transport worth? | 14.2 ms | 2.4c wait-state sweep |
-| What is the overlap worth? | up to ~173 ms: **362.7 ms / 2.76 FPS** | 2.4c stock/corrected pair |
+| What is the overlap worth? | ~~up to ~173 ms: 362.7 ms / 2.76 FPS~~ **corrected by 2.4f: capped by the window at 112.5 ms, so 423.2 ms / 2.36 FPS** | 2.4f capacity sweep |
 
 **Every emulator-answerable objection to the overlap design has now been
 tested, and none of them killed it.**
@@ -2009,6 +2009,155 @@ is legible, so this also confirms the release path end to end -- prepass armed,
 
 The caveats of 2.4a apply unchanged, and this is still an emulator figure: no
 release timing has been taken on a Falcon either.
+
+### 2.4f The cross-frame window, sized: 112.5 ms spare with the prepass armed
+
+2.4d proved the FINISH window absorbs DSP work — 114.7 ms of the prepass's
+117.70 — but it could not say **how much room is left**, and that number is
+what decides roadmap item 15. A window with a few spare milliseconds makes
+SSI/DMA pointless; a window with a hundred makes it the largest remaining item.
+The prepass A/B cannot answer it, because it reports one point on a curve and
+leaks 3.0 ms, which is equally consistent with "just barely fits" and "fits ten
+times over".
+
+#### The instrument
+
+A calibrated load of settable size, hooked at the very END of
+`command_finish_animated_frame`, after `prepass_run` and
+`cache_light_directions_x` have both released the `prepass_order` overlay so it
+can interact with neither. It touches **no memory at all**:
+`PROBE_OUTER` x 32 NOPs per unit under a hardware `DO`. That is deliberate — a
+load with its own X/Y traffic would confound window capacity with bus
+contention, so this measures the window's **time** capacity and says nothing
+about contention.
+
+`y:probe_units` is a `dc` sitting in one of the four retired pad words after
+`prepass_tp_save`, so **no other symbol moves** and the assembler emits it as
+its own one-word `_DATA Y 00DB` block. The whole sweep is therefore driven by
+patching **one word of the linked `.lod`**
+([`tools/probe_units.py`](tools/probe_units.py)): every point shares a
+byte-identical host binary *and* a byte-identical DSP program. That is a
+stronger equal-layout guarantee than the one-byte host patches of 2.3f and
+2.4e, which at least changed a host data byte.
+
+A shipping build sets `probe_units = 0` and pays three instructions per frame,
+the same contract the prepass hook states. Program extent moved `P:$094D` ->
+`P:$0979`, leaving **70 words** below the `P:$09BF` ceiling of 4.2.
+
+#### Why the sweep needs no freestanding mode
+
+Let frame *i* have spare capacity *W_i*. A load *L* leaks `max(0, L - W_i)`, so
+
+```text
+leak(L) = E[max(0, L - W_i)]
+```
+
+which is convex, lies **above** its own asymptote everywhere, and tends to
+`L - E[W]` once *L* exceeds every frame's capacity. The saturated tail is a
+straight line whose **slope calibrates the millisecond axis** and whose negated
+intercept **is the mean spare capacity**. Both fall out of data taken in the
+measurement's own configuration, so there is no run-now mode, no new host
+command, and no host code at all — the reason this probe adds nothing to the
+68030 side that could move its layout.
+
+#### Method
+
+`trex_prepass.tos`, corrected emulator, `--mmu true`, `prepass_arm` patched at
+file offset 10053 and read back. Frame-mix contamination is the trap here: the
+choreography's per-frame pixel workload varies by an order of magnitude, so a
+mean over 117 frames is not comparable with one over 108. The driver therefore
+**searches the VBL budget until every point lands on exactly 200 frames**
+rather than fixing the budget. All points below report **200 frames and an
+identical 29,101 px/frame** (29,110 disarmed), and **every run in all four
+sweeps produced the same `fb.res` hash `d89958b3…3d16`** — the probe changes
+timing and nothing else, at loads up to 523 ms.
+
+#### The measurement
+
+Prepass **armed**, the shipping configuration, 128-cycle unit:
+
+| units | load ms | frame ms | leak ms | absorbed | absorbed % |
+|---:|---:|---:|---:|---:|---:|
+| 0 | 0.0 | 502.45 | 0.00 | — | — |
+| 8,000 | 63.9 | 503.57 | 1.12 | 62.7 | 98.2% |
+| 16,000 | 127.7 | 523.75 | 21.30 | 106.4 | 83.3% |
+| 24,000 | 191.6 | 581.52 | 79.07 | 112.5 | 58.7% |
+| 32,000 | 255.4 | 645.42 | 142.97 | 112.5 | 44.0% |
+| 48,000 | 383.1 | 773.10 | 270.65 | 112.5 | 29.4% |
+| 65,535 | 523.1 | 913.08 | 410.63 | 112.5 | 21.5% |
+
+A finer sweep on the 32-cycle build maps the region that matters:
+
+| load ms | 8.0 | 16.0 | 23.9 | 31.9 | 47.9 | 63.9 | 79.8 | 95.8 | 111.8 | 130.8 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| leak ms | 0.07 | 0.05 | 0.12 | 0.15 | 0.32 | 1.15 | 2.45 | 6.22 | 12.67 | 23.20 |
+| absorbed % | 99.1 | 99.7 | 99.5 | 99.5 | **99.3** | 98.2 | 96.9 | **93.5** | 88.7 | **82.3** |
+
+**The rasterizer reads 230.57–231.25 ms across all 25 runs** — flat to 0.3%
+while frame time nearly doubles. That is this sweep's control, and it is the
+same control 2.4c's wait-state sweep used.
+
+#### Results
+
+- **Mean spare capacity with the prepass armed: 112.5 ms/frame.** Fitted from
+  the saturated tail; the four tail points recover it as 112.53, 112.53, 112.48
+  and 112.52.
+- **With the prepass disarmed: 221.3 ms/frame** (tail points 221.36, 221.30,
+  221.30, 221.34).
+- **The millisecond axis is measured, not modelled: 7.982 and 7.981 us/unit on
+  the two sweeps against a nominal 8.000** (128 cycles at 16 MIPS) — **−0.22%
+  and −0.24%.** This is also an independent confirmation of commit `d9c734ca`'s
+  corrected DSP clock, arrived at from frame times rather than from the
+  emulator's own cycle accounting.
+- **The two independently assembled probe builds agree.** 63.9 ms of load
+  absorbs 62.7 ms on the 32-cycle build and 62.7 ms on the 128-cycle build.
+
+#### Two cross-checks against previously published numbers
+
+`E[W]` disarmed minus armed is **108.8 ms** against the prepass's 117.70 ms
+freestanding cost (2.4b). These are **not** required to be equal and the
+direction is predicted: since `E[max(0, W-P)] >= E[W] - P`, the apparent
+reduction must be **less** than the true cost, bounded below by
+221.3 − 117.7 = 103.6 ms. The measured 112.5 sits inside that bound.
+
+Arming the prepass costs **+4.35 ms** here (498.10 -> 502.45) against 2.4d's
++3.0 ms on the hold-291 prefix — same sign, same order, different frame mix.
+Armed also writes fewer pixels (29,101 against 29,110), the direction 2.3f
+requires of sound culling.
+
+#### What this changes
+
+**The knee is soft, and that is a result, not noise.** Absorption degrades from
+99% to 82% over the 48–131 ms range rather than falling off a cliff, because
+window capacity varies frame to frame with the rasterizer's own load. There is
+a *distribution* of capacity, not a number, and 112.5 ms is its mean. Anything
+scheduled into the window should be sized against the **99% column (~48 ms)**,
+not against the mean.
+
+**2.4d's overlap ceiling is not reachable.** Its table offers "up to ~173 ms:
+362.7 ms / 2.76 FPS" for a perfect transport, on the assumption that the
+exposed DSP term can go to zero. It cannot: the window caps what any transport
+can hide at 112.5 ms, against ~246 ms of total record compute. That row is
+corrected in place. A perfect SSI/DMA transport on this workload is worth
+**535.7 − 112.5 = 423.2 ms / 2.36 FPS**, not 2.76 — still the largest single
+item on the open roadmap, but 0.4 FPS smaller than advertised, and that is
+before the DMA bus contention of item 14, which remains unmeasured.
+
+**The window is made of rasterizer time, so item 11 spends it.** Every
+millisecond the rasterizer gives up is a millisecond of window gone. The
+campaign that took the rasterizer from 517.3 to 319.8 ms also cut the capacity
+of the window that item 15 wants to fill. The two items are in direct
+competition and this had not been stated.
+
+#### Caveats
+
+- The load has **no memory traffic**. Real record work would contend with the
+  host for ST-RAM through the same 16-bit bus, so 112.5 ms is an upper bound on
+  what real DSP work would fit. Bounding that gap needs item 14's hardware.
+- 2.4a applies unchanged: this core charges no instruction execution time, and
+  none of this is a Falcon measurement.
+- Measured on `trex_prepass.tos` over frames 0–199, not on the release binary
+  over the full choreography.
 
 ### 2.5 Delta clearing: built, measured, rejected
 
@@ -3608,14 +3757,15 @@ normal array at the bottom of Y overwrote the program: the DSP executed
 `normal[151].z` as an instruction at `P:$0202` and faulted immediately.
 
 Both arrays therefore start above the program. The tracked LOD's first free P
-address is currently `P:$075B`:
+address is currently **`P:$0979`** — `$094D` before 2.4f's window-capacity
+probe added 44 words for its burn loop and hook:
 
 | Array | Range | Words |
 |---|---|---:|
 | `triangle_indices` | `Y:$09C0-$1F07` | 5,448 |
 | `face_normals` | `Y:$1F08-$3EF3` | 8,172 |
 
-`Y:$09C0` leaves 613 external words (`$075B-$09BF`) free above the current
+`Y:$09C0` leaves **70** external words (`$0979-$09BF`) free above the current
 program for code growth. The frontend reserves 16,120 Y words through
 `Y:$3EF7`, so only four reserved words remain above `face_normals`. X memory
 is unaffected by the P/Y overlay: its external portion maps to
@@ -5384,6 +5534,13 @@ The open roadmap, in recommended order (expected effects from the section
    not scheduling and not caches: it is that the DSP cannot buffer a frame of
    records (20,682 words against a full 16,384-word X space), which is item
    15's job to fix.
+
+   **Sized in 2.4f.**  The window holds **112.5 ms/frame spare with the prepass
+   armed**, ~48 ms of it at 99% absorption, against ~246 ms of total record
+   compute.  The capacity is real but bounded: it can hide well under half the
+   record work, not all of it, and the 2.76 FPS ceiling above is corrected to
+   **2.36**.  2.4f also records the coupling nothing had stated — the window IS
+   rasterizer time, so items 11 and 15 compete for the same milliseconds.
 13. Per-corner Gouraud lighting. **Done as the span-level variant** — the
    DSP lights all three TMD corner normals (recovered offline, section
    4.4a's split layout for both mesh variants), ships three sorted Q4.8

@@ -125,15 +125,25 @@ disarmed captures are byte-identical at frame 100 and at hold frame 291,
 with zero prepass protocol failures or capacity overruns across the hold.
 
 The frontend reserves `X:$0000-$3DFF` and `Y:$0000-$3EF7`. The full-mesh
-program occupies P from `$0040` and ends at `$094C`, leaving the words at
-`$094D-$09BF` free before the Y indices at `$09C0` — 115 words, after
+program occupies P from `$0040` and ends at `$0978`, leaving the words at
+`$0979-$09BF` free before the Y indices at `$09C0` — 70 words, after
 `command_get_vertices` was restored for the span validator at a cost of
-seventeen (`OPTIMIZATION.md` 3.12) and the 2.3j diagnostic counters, their
-mode-4 readout and the flow-compare sign fix took 58 more. This bound has to
+seventeen (`OPTIMIZATION.md` 3.12), the 2.3j diagnostic counters, their
+mode-4 readout and the flow-compare sign fix took 58 more, and the 2.4f
+window-capacity probe took 44. This bound has to
 be checked after every DSP change, because an overflow overwrites the index
 list without an assembler error -- recompute it from the assembled `.lod`
 rather than trusting this figure, with the check command in the end-of-file
 comment of `trex_dsp.asm`.
+
+`command_finish_animated_frame` ends with the **cross-frame window capacity
+probe** (`OPTIMIZATION.md` 2.4f): `y:probe_units` iterations of a memory-free
+32-NOP burn loop, run inside the window the host spends rasterizing. It is
+`dc 0` in a retired pad word, so a shipping build pays three instructions per
+frame and the cell is the only thing that changes across a whole capacity
+sweep — patch it with `tools/probe_units.py` rather than rebuilding, which
+keeps the DSP program and the host binary byte-identical at every point.
+Leave it at 0 in anything shipped or timed for another purpose.
 
 The `TREX.TOS` release keeps the full-mesh DSP occlusion path while
 disabling the host-side diagnostic flushes. It reads `TREX.LOD` once during
@@ -276,7 +286,7 @@ outstanding. The 128-class/8x8-cell prepass probe was assembler-checked and
 framebuffer-gated, then rejected: on an equal 246-frame Hatari sample it saved
 only 2,516 raster writes (0.030%). The active 64-class build keeps its
 counters on-chip at `Y:$0096-$00D5`; the resident indices start at `Y:$09C0`
-and the last program word is `P:$094C`, below the `$09BF` ceiling. The
+and the last program word is `P:$0978`, below the `$09BF` ceiling. The
 standard host build has
 `prepass_arm = 1`, so FINISH runs the prepass inline
 and it stays armed through the synthetic hold. With TOS 4.02, Falcon DSP

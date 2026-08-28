@@ -219,6 +219,13 @@ ACK_ANIMATION_TARGET	= $70000e
 ACK_PREPASS		= $70000f
 ERR_BAD_COMMAND		= $7fffff
 
+; Cross-frame window capacity probe: outer repeats of the 32-cycle inner burn
+; loop, so one probe_units step costs PROBE_OUTER*32 DSP cycles.  At the
+; Falcon's 16 MIPS that is 8 us per unit and a 0..524 ms range, which has to
+; overshoot the window by a wide margin -- the ms axis is only measured in the
+; saturated region, where leak rises one-for-one with the load.
+PROBE_OUTER	= 4
+
 ; -----------------------------------------------------------------------------
 ; Occlusion prepass constants
 ;
@@ -711,6 +718,85 @@ finish_no_prepass
 	; stream their normal components from Y.  It must follow prepass_run:
 	; that pass owns the same overlay until it has consumed prepass_order.
 	jsr	<cache_light_directions_x
+
+	; ---- cross-frame window capacity probe ------------------------------
+	; A calibrated load of settable size, placed at the very END of the
+	; window so it cannot interact with the prepass/lighting overlay
+	; ordering above -- prepass_run owns prepass_order until
+	; cache_light_directions_x has consumed it, and this runs after both.
+	; It touches NO memory: the question is how much wall-clock DSP work the
+	; window absorbs, and a load with its own X/Y traffic would confound
+	; that with contention.  It therefore measures the window's TIME
+	; capacity and says nothing about bus effects.
+	;
+	; y:probe_units is dc 0, so a shipping build pays three instructions per
+	; frame here and nothing else -- the same contract the prepass hook
+	; above states, and the reason this can stay in the tree.
+	;
+	; What the sweep reads is the SHAPE of leak(units) = frame(units) -
+	; frame(0), not any single run.  Below the window's spare capacity the
+	; load is absorbed and the frame is flat; above it the frame rises one
+	; for one with the load.  The knee is the spare capacity and the slope
+	; is the per-unit cost, so the sweep calibrates its own time axis and
+	; needs no freestanding run-now mode, no new host command, and no host
+	; code at all.
+	;
+	; Thirty-two NOPs per unit rather than a REP: the 56001 forbids REP (and
+	; DO) in the last three instruction words of a DO loop, and LC is
+	; sixteen bits, so a one-word body would cap the probe at 65,535 cycles
+	; -- 4 ms, far under the 117.7 ms the prepass already proved absorbable.
+	;
+	; PROBE_OUTER then multiplies the range without spending 32 more program
+	; words per doubling.  The reason it must reach far past any plausible
+	; window: the ms axis is only MEASURED where the load saturates the
+	; window and leak rises 1:1 with it.  A 32-cycle unit alone tops out at
+	; ~131 ms, which the window still partly absorbs, so that build could
+	; only ever report a modelled axis.  The inner DO is the outer loop's
+	; FIRST word, well clear of the last three the 56001 reserves.
+	move	y:probe_units,a
+	tst	a
+	jeq	<finish_no_probe
+	move	a1,x0
+	do	#PROBE_OUTER,probe_burn_outer
+	do	x0,probe_burn_loop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+probe_burn_loop
+	nop
+	nop
+	nop
+probe_burn_outer
+finish_no_probe
 
 	move	#ACK_FRAME,x0
 	jsr	<send_word
@@ -3606,7 +3692,17 @@ prepass_overflow
 ; cell: it lives in R3 for the length of the classification loop.
 prepass_tp_save
 	ds	1
-	ds	4
+; Cross-frame window capacity probe.  Units of the fixed-cost burn loop that
+; command_finish_animated_frame runs at the end of the window; 0 disables it
+; and is what every shipping build ships.  It sits in one of the four retired
+; pad words above so no other symbol moves, and it is a `dc` rather than a
+; `ds` so the whole sweep is driven by patching ONE word of the .lod -- the
+; DSP program and the host binary then stay byte-identical across every point
+; of the sweep, which is a stronger equal-layout guarantee than the one-byte
+; host patches of 2.3f and 2.4e.
+probe_units
+	dc	0
+	ds	3
 
 ; -----------------------------------------------------------------------------
 ; Large Y allocations and the P-memory overlay
