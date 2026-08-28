@@ -1708,6 +1708,135 @@ the 14.2 ms measured here. Those passages are corrected in place.
   `DspInstr` variable reads 0, and enabling either profiler makes the corrected
   build die on continue. The wait-state sweep replaced them.
 
+### 2.4d The scheduling question, answered: what the window absorbs, and what a cold buffer costs
+
+2.4c showed the packet stage is ~173 ms of exposed DSP compute, and that the
+case for SSI/DMA is therefore overlap rather than transport. That raised two
+objections which decide whether overlap is worth building, and **both are
+answerable without a Falcon**. Both were run.
+
+#### Can the schedule hide DSP work at all? Yes -- 97.5% of it
+
+The occlusion prepass is an ideal probe: a known quantity of DSP work, with a
+known freestanding cost, switched into the FINISH window by a single byte.
+`hatari_runs/arm0_fixed` and `arm1_fixed` are the same `PREPASS.TOS` differing
+in exactly one byte at file offset 9604 (`prepass_arm`, 0 against 1) -- the
+equal-layout A/B this document requires -- on the corrected emulator with
+`--mmu true`, both reproducing the recorded hold-frame hash `e66d4d43...`:
+
+| Stage | Disarmed (407 fr) | Armed (408 fr) | Delta |
+|---|---:|---:|---:|
+| DSP readback + packet build | 241.77 ms | 245.15 ms | +3.38 |
+| Rasterizer | 234.32 ms | 233.65 ms | -0.67 |
+| Framebuffer clear | 14.53 ms | 14.57 ms | +0.04 |
+| DSP set_frame | 12.64 ms | 12.77 ms | +0.13 |
+| Ordering Table insertion | 2.20 ms | 2.30 ms | +0.10 |
+| **Frame** | **505.9 ms / 1.977 FPS** | **508.9 ms / 1.965 FPS** | **+3.0** |
+
+Workloads match to 0.02% (38,510 against 38,518 pixels per frame).
+
+The same prepass, the same `.lod`, costs **117.70 ms/frame** freestanding in
+arm-2 (2.4b). Scheduled into the FINISH window it costs **3.0 ms of frame
+time**: **114.7 ms hidden, 97.5% absorbed.** The window has deep spare DSP
+capacity and the mechanism that exploits it -- the FINISH hook plus roadmap
+item 12 stage 1's cross-frame animation send -- already exists and needed no
+new transport.
+
+#### Then why is the record work exposed? Because the DSP cannot buffer a frame
+
+Not for want of window: the rasterizer is ~234 ms here and the record work is
+~173 ms, so it would fit. The obstacle is memory. One frame of records is
+**1,149 survivors x 18 words = 20,682 words**, against a *total* X space of
+16,384 words that 4.2 and the DSP README show is already allocated to the top;
+`triangle_out` is 576 words, exactly one 32-triangle chunk. The DSP physically
+cannot hold a frame's records, which is why the chunk protocol exists.
+
+So the records must leave the DSP as they are produced, and during the
+rasterization window the host is busy and cannot service that transfer. **That
+is the case for SSI/DMA, and it is a structural one rather than an arithmetic
+one**: it is the only mechanism that can drain the DSP into host memory while
+the CPU rasterizes. The 14.2 ms of PIO it also deletes is incidental.
+
+#### Does a cold DMA buffer cost extra? No -- bounded at approximately zero
+
+Roadmap item 12 stage 2 attributes its regression partly to "a deferred unpack
+re-reads 59 KB cold", and an SSI record stream would hand the CPU 80.8 KiB to
+read cold at the frame boundary. Disabling the 68030 data cache entirely
+(`--data-cache false`, which the `--mmu` core honours through
+`read_dcache030_mmu_*`) is a **stronger** perturbation than a cold buffer --
+every read misses, always -- so it bounds the penalty from above. Same
+`TREX_M68.TOS`, same `.lod`, gate hash clean on both:
+
+| Stage | D-cache on (272 fr) | D-cache off (268 fr) | Delta |
+|---|---:|---:|---:|
+| DSP readback + packet build | 260.40 ms | 258.60 ms | **-1.80** |
+| Rasterizer | 244.61 ms | **316.53 ms** | **+71.92** |
+| Framebuffer clear | 14.58 ms | 14.78 ms | +0.20 |
+| DSP set_frame | 12.90 ms | 12.76 ms | -0.14 |
+| Ordering Table insertion | 2.78 ms | 2.74 ms | -0.04 |
+| **Frame** | **535.7 ms / 1.867 FPS** | **605.8 ms / 1.651 FPS** | **+70.1** |
+
+Workloads match to 0.04% (34,121 against 34,109 pixels per frame, 1,160 against
+1,161 packets).
+
+**The packet stage does not use the data cache.** Removing it moves the
+unpack/packet-build path by -1.8 ms -- negative, inside frame-mix noise -- in
+the same run where the rasterizer loses 71.9 ms. That 71.9 ms is the control:
+it proves the knob works and that the model is sensitive to exactly this
+effect.
+
+The mechanism is plain once measured: the unpack writes a 2.3 KB chunk and
+reads it back through a **256-byte** data cache, so by the time the read
+reaches the start, the end has evicted it. Every read misses today. A DMA'd
+80.8 KiB buffer read cold also misses every read. There is no cache benefit to
+lose, so there is no penalty to pay.
+
+**Consequence for item 12.** Its stated cold-re-read cause does not survive
+measurement. Stage 2's 14.2 ms must come from the other causes it names -- the
+service-hook overhead added to the rasterizer, and breaking 4.1d's DSP/host
+chunk interleave. Both are *scheduling* effects, and neither is inherited by a
+design where the transfer is done by hardware and the unpack happens in one
+block at the frame boundary.
+
+#### Separate finding: the data cache is worth 71.9 ms to the rasterizer
+
+That is 29% of the rasterizer and 13% of the frame, and it had never been
+measured. Two consequences. The rasterizer's remaining time is substantially
+data-cache-bound, which is a lead for the next pass in the series of item 11
+and section 3.9 -- and unlike the instruction-cache work, nothing has yet been
+done about data locality in the texture/CLUT path. And any change that
+disturbs that locality is expensive by the same amount, which is a sharper
+version of the warning section 2 already gives about layout.
+
+#### Where the SSI case stands after both experiments
+
+| Question | Answer | Basis |
+|---|---|---|
+| Can the schedule hide DSP work? | Yes, 97.5% of 117.7 ms | prepass A/B, above |
+| Is there window capacity? | ~234 ms rasterizer against ~173 ms record work | 2.4c stages |
+| Why not hidden today? | DSP cannot buffer a frame: 20,682 words against a full 16,384-word X space | memory map |
+| Does a cold DMA buffer cost extra? | No, bounded at ~0 | data-cache A/B, above |
+| What is the transport worth? | 14.2 ms | 2.4c wait-state sweep |
+| What is the overlap worth? | up to ~173 ms: **362.7 ms / 2.76 FPS** | 2.4c stock/corrected pair |
+
+**Every emulator-answerable objection to the overlap design has now been
+tested, and none of them killed it.**
+
+#### What is still not answered
+
+- **DMA bus contention is untouched and is now the only significant unknown on
+  this path.** The 68030 and the DMA channel would contend for ST-RAM, and
+  2.4a records that this emulator models no Videl contention either. Hardware
+  only; roadmap item 14.
+- **The cold-read bound is a statement about this memory model.** 2.4a notes
+  ST-RAM is modelled without burst, so a line miss fetches 4 bytes rather than
+  16. A real Falcon that bursts would give sequential reads a line-fill benefit
+  the model does not show -- which would help the current path and a DMA'd
+  buffer roughly equally, since a burst rewards sequentiality rather than
+  warmth, but the "approximately zero" is not a Falcon measurement.
+- The 2.76 FPS ceiling assumes the exposed DSP term goes to zero. Any real
+  design leaves some of it, and pays whatever contention costs.
+
 ### 2.5 Delta clearing: built, measured, rejected
 
 Roadmap item 20 said the clear wipes 240x224 while only 32.5% of it is ever
@@ -4690,6 +4819,15 @@ The open roadmap, in recommended order (expected effects from the section
    `rasterize_packet` loads its class state with one MOVEM.  Campaign total
    **302.6 ms / 3.30 FPS on the LOD 0-263 and 436.0 ms / 2.29 FPS on the
    full mesh 0-101**, byte-identical throughout.
+   **A sixth pass now has a measured target: the DATA cache.**  Section 2.4d
+   ran the rasterizer with the 68030 data cache disabled and it went
+   **244.61 -> 316.53 ms**, so the data cache is currently worth **71.9 ms per
+   frame -- 29% of the rasterizer and 13% of the frame**.  Where 3.9 and its
+   successors were entirely instruction-cache work, nothing in this series has
+   yet attacked data locality in the texture/CLUT/span-state path, and that
+   figure is what is at stake there in both directions: it is the size of the
+   prize and the size of the damage any change that disturbs the layout can do.
+   The equal-layout discipline of 2.1 applies with the usual force.
 12. Cross-frame pipelining. **Stage 1 done, stage 2 measured and rejected.**
    Stage 1 sends frame N+1's animation after frame N is fully unpacked and
    defers the FINISH ack to the next slot's `dsp_packets_begin`, so the
@@ -4720,11 +4858,23 @@ The open roadmap, in recommended order (expected effects from the section
    exposed DSP compute against ~73 ms host CPU work and 14.2 ms of wire — so
    **most of what stage 2 tried to hide is exactly the kind of thing scheduling
    can hide**, and this item is not exhausted.  What stage 2 measured remains
-   valid as a *mechanism* result: its accumulator lost more to cold re-reads
-   and hook overhead than it won.  The open question this item should now carry
-   is whether any overlap scheme can expose the ~173 ms without paying that
-   cold-read penalty — which is the same question item 15 has to answer, and
-   the reason the two items should be planned together rather than in sequence.
+   valid as a *mechanism* result: its accumulator lost more than it won.
+
+   **The cold-re-read attribution is now measured out (2.4d).**  Disabling the
+   68030 data cache entirely -- a stronger perturbation than any cold buffer --
+   moves the packet stage by **-1.8 ms** while moving the rasterizer by
+   **+71.9 ms** in the same run.  The unpack writes a 2.3 KB chunk and reads it
+   back through a 256-byte cache, so every read misses today and a cold DMA
+   buffer would miss no more.  Stage 2's 14.2 ms therefore came from the other
+   causes this item names -- the service-hook overhead added to the rasterizer,
+   and breaking 4.1d's cache-warm chunk interleave -- both scheduling effects,
+   and neither inherited by a design whose transfer is done by hardware and
+   whose unpack happens in one block at the frame boundary.  2.4d also shows
+   the FINISH window absorbs **97.5%** of 117.7 ms of added DSP work, so the
+   scheduling capacity this item needs demonstrably exists.  What blocks it is
+   not scheduling and not caches: it is that the DSP cannot buffer a frame of
+   records (20,682 words against a full 16,384-word X space), which is item
+   15's job to fix.
 13. Per-corner Gouraud lighting. **Done as the span-level variant** — the
    DSP lights all three TMD corner normals (recovered offline, section
    4.4a's split layout for both mesh variants), ships three sorted Q4.8
@@ -4787,8 +4937,21 @@ The open roadmap, in recommended order (expected effects from the section
    save/restore owner, handshaked DSP-XMIT -> DMA-RECORD, cache coherency
    without an ad-hoc CACR write, and a field-for-field bring-up comparison
    against host-port-delivered records.  **None of those can be validated in
-   Hatari**, and the scheduling question above should be answered before any of
-   them is built.
+   Hatari.**
+
+   **The scheduling question is now answered, and it clears this item (2.4d).**
+   The FINISH window absorbs 97.5% of 117.7 ms of added DSP work, so overlap
+   capacity exists; the cold-buffer penalty that item 12 stage 2 was blamed on
+   is bounded at approximately zero; and the reason record work cannot use that
+   capacity today is structural rather than economic -- **the DSP cannot hold a
+   frame of records** (20,682 words against a 16,384-word X space that is
+   already allocated to the top), so they must leave as they are produced,
+   during a window in which the host is rasterizing and cannot service a
+   transfer.  Draining the DSP autonomously in that window is the one thing
+   only DMA can do, and it is the justification to build this on -- worth up to
+   ~173 ms, or **362.7 ms / 2.76 FPS** if the exposed term went to zero, against
+   the 14.2 ms the transport itself is worth.  Remaining unknown, hardware only:
+   DMA/68030 ST-RAM contention, which no Hatari result can bound.
 16. **Closed to a measured mechanism.**  Three findings, each by scan:
    the Gouraud buffer growth moved the unpinned preshaded CLUT banks and
    cost 80 ms at an unchanged instruction stream — they are pinned now.
@@ -4897,6 +5060,24 @@ The open roadmap, in recommended order (expected effects from the section
     its counter bank out of on-chip RAM (section 2.3i). Raising the yield
     further needs a substantially different occlusion strategy; finer cells
     or classes by themselves are no longer justified by the measurements.
+
+    **Production cost measured at last (2.4d), and it is not milliseconds.**
+    Armed against disarmed on the corrected emulator, one byte apart, matched
+    to 0.02% of pixels: **505.9 -> 508.9 ms/frame, +3.0 ms.**  The prepass is
+    therefore *not* a frame-rate regression in the release, and the earlier
+    worry that it might be one at the corrected clock is answered: the FINISH
+    window absorbs 114.7 of its 117.7 ms.  Leave it armed.
+
+    Its real price is the one that does not appear in that table.  It consumes
+    **~118 ms of FINISH-window DSP capacity** -- the same resource item 15's
+    record overlap needs, which 2.4d sizes at ~173 ms against a ~234 ms window.
+    The two cannot both have it.  At the currently measured yield -- 0.02%
+    fewer pixels per frame in the equal-frame pair above, consistent with the
+    half-a-percent 2.3f recorded -- **the prepass loses that contest by three
+    orders of magnitude** and should be disarmed the moment record overlap is
+    built.  Until then it costs 3.0 ms and may stay.  This also sharpens what
+    a yield-raising experiment has to beat: not 3 ms of frame time, but the
+    window capacity it denies to a much larger optimization.
 20. Delta clearing instead of the full-window clear. **Built, measured,
     REJECTED — see section 2.5.** It saves 8.0 ms in the clear and costs
     14.4 ms in bookkeeping, a net +6.1 ms, plus 13.5 ms of layout cost merely
