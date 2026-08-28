@@ -147,7 +147,13 @@ OT_KEY_SHIFT		= 8
 ; Longwords 0-25 are the built packet; longwords 26-31 are the RESOLVE SLOTS
 ; the per-frame packet resolve pass fills before the OT walk (3.9c): span
 ; entry, texture base, tint base/flat colour, bank stride, shade, spare.
+; Longwords 4-25 are the span block.  The chunk unpack writes it in place
+; (section 3.11) instead of expanding into dsp_triangle_rx_buffer for the
+; builder to copy out again, and it borrows resolve slots 0 and 1 for the
+; source index and shade while it does -- legal only because the resolve pass
+; that owns those slots runs inside gpu_rasterize_ot, after the builder.
 GPU_PACKET_WORDS	= 32
+GPU_PACKET_SPAN		= 4*4
 GPU_PACKET_RESOLVE	= 26*4
 GPU_PACKET_BYTES	= GPU_PACKET_WORDS*4
 GPU_OT_NODE_WORDS	= 2
@@ -1846,7 +1852,16 @@ dsp_packets_begin
 	ifd	TREX_PREPASS
 	bsr	prepass_frame_call
 	endc
-	lea	dsp_triangle_rx_buffer+8,a1
+	; The chunk unpack writes STRAIGHT INTO THE PACKET BUFFER (section 3.11).
+	; It used to expand into dsp_triangle_rx_buffer and let
+	; build_gpu_shadow_packets copy all 22 span longwords out again through two
+	; MOVEM pairs -- 44 longword bus accesses per survivor that produced no new
+	; value.  The unpack now lands each field in its final packet slot and
+	; parks the source index and shade in two of the 3.9c resolve slots, which
+	; nothing reads until the resolve sweep inside gpu_rasterize_ot, long after
+	; build_gpu_packet_heads has consumed them.  rx_buffer survives for the
+	; no-DSP fallback, which still uses the copying builder.
+	lea	gpu_packet_buffer,a1
 	move.l	a1,dsp_triangle_output_ptr
 	clr.l	dsp_triangle_output_count
 	move.l	#TREX_PRIMITIVES,dsp_triangles_remaining
@@ -1909,11 +1924,18 @@ dsp_packets_finish
 	tst.l	d0
 	beq	.finish_shadow
 .finish_have_vertices
+	; No-DSP fallback: build_host_triangle_stream still produces the old
+	; contiguous 25-longword records in dsp_triangle_rx_buffer, so this arm
+	; keeps the copying builder.  Only the DSP path unpacks in place.
 	bsr	build_host_triangle_stream
-.finish_build
 	lea	gpu_packet_buffer,a1
 	move.l	a1,gpu_packet_ptr
 	bsr	build_gpu_shadow_packets
+	rts
+.finish_build
+	lea	gpu_packet_buffer,a1
+	move.l	a1,gpu_packet_ptr
+	bsr	build_gpu_packet_heads
 .finish_shadow
 	rts
 
@@ -2096,16 +2118,21 @@ dsp_drain_chunk_pipeline
 	; this cnop repairs).
 	cnop	0,16
 .dsp_cull_copy_output
+	; A1 is the PACKET base here.  The three head values go to their final
+	; homes by fixed offset -- OT key straight into packet word 2, source index
+	; and shade into resolve slots 0 and 1 -- and A1 then steps to word 4 so
+	; the twenty-two span fields below stay a plain (a1)+ run.
 	move.l	(a2)+,d1			; w0: slots | mid | shade | local
 	move.l	d1,d2
 	andi.l	#$1f,d2
 	add.l	d6,d2
-	move.l	d2,(a1)+			; global source index
-	move.l	(a2)+,(a1)+			; w1: average-z key
+	move.l	d2,GPU_PACKET_RESOLVE(a1)	; global source index -> slot 0
+	move.l	(a2)+,8(a1)			; w1: average-z key -> packet word 2
 	move.l	d1,d2
 	lsr.l	#5,d2
 	andi.l	#$3f,d2
-	move.l	d2,(a1)+			; tint<<4 | brightness level
+	move.l	d2,GPU_PACKET_RESOLVE+4(a1)	; tint<<4 | level -> slot 1
+	lea	GPU_PACKET_SPAN(a1),a1
 
 	; Expand the packed geometry into the seventeen-field block the packet
 	; builder and rasterizer consume, sign-extending each signed field
@@ -2159,10 +2186,12 @@ dsp_drain_chunk_pipeline
 
 	; UV start packs from the resident texture metadata via the slot ids --
 	; they never travel the wire.  Meta layout: u,v longs per vertex slot.
-	; A1 is 18 longs into the record here (head plus fields 0..14), so the
-	; source index sits at -72, not the -80 it reaches once both packs are
-	; stored -- the validator caught the difference on first contact.
-	move.l	-72(a1),d3			; global source index
+	; A1 is 15 longs into the span block here (fields 0..14), i.e. packet+76,
+	; so the source index in resolve slot 0 sits at +28 -- not the +20 it
+	; reaches once both packs are stored.  These two offsets were -72 and -80
+	; while the unpack still wrote a contiguous record; the validator caught
+	; the difference between them on first contact, so keep them distinct.
+	move.l	28(a1),d3			; global source index
 	lsl.l	#5,d3
 	lea	(a0,d3.l),a3
 	move.l	d1,d2
@@ -2213,6 +2242,9 @@ dsp_drain_chunk_pipeline
 	sub.l	d5,d3
 	move.l	d3,(a1)+			; 19..21: dlvl_dx, dlvl_up, dlvl_low
 	dbra	d2,.ux_lgrad
+	; A1 has reached packet+104, the end of the span block; step it over the
+	; six resolve slots to the next packet base.
+	lea	GPU_PACKET_BYTES-(GPU_PACKET_SPAN+22*4)(a1),a1
 	dbra	d0,.dsp_cull_copy_output
 	bra	.dsp_cull_unpack_done
 
@@ -2220,7 +2252,7 @@ dsp_drain_chunk_pipeline
 	; validate_span_record owns d0-d7, so the two sign-extension constants
 	; are re-established before the body resumes.
 .dsp_cull_validate
-	move.l	-80(a1),d1			; global source index
+	move.l	20(a1),d1			; global source index, resolve slot 0
 	movem.l	d0/a2,-(sp)
 	lea	-68(a1),a2			; the seventeen unpacked fields
 	bsr	validate_span_record
@@ -2323,6 +2355,71 @@ build_gpu_shadow_packets
 	lea	64(a1),a1			; 10 written + the 6 resolve slots
 	dbra	d7,.build_gpu_packet
 .build_gpu_packets_count
+	move.l	dsp_packet_count_shadow,ot_primitive_count
+	move.l	a1,gpu_packet_ptr
+	rts
+
+; The DSP path's builder (section 3.11).  The chunk unpack has already written
+; every packet's OT key and its whole 22-longword span block in place, and left
+; the source index and shade in resolve slots 0 and 1, so there is nothing to
+; copy: this fills in the three head words the span block cannot supply --
+; command|shade, flat colour or page-table token, and native texture page.
+;
+; The classification body below is deliberately a duplicate of the copying
+; builder's rather than a shared subroutine.  A BSR per survivor costs more
+; than the bytes save, and section 3.9's whole result says a per-item loop body
+; wants to be straight-line and inside the 256-byte instruction cache.  The two
+; must stay in step: any change to the material or opaque-hint rules belongs in
+; BOTH, and the fallback builder is the one the span validator exercises.
+build_gpu_packet_heads
+	move.l	gpu_packet_ptr,a1
+	clr.l	dsp_packet_count_shadow
+	move.l	dsp_triangle_output_count,d7
+	beq	.build_heads_count
+	subq.l	#1,d7
+	cnop	0,16
+.build_gpu_head
+	move.l	GPU_PACKET_RESOLVE(a1),d6	; source index, parked by the unpack
+	move.l	GPU_PACKET_RESOLVE+4(a1),d1	; shade, parked by the unpack
+	addq.l	#1,dsp_packet_count_shadow
+	ifd	TREX_OCCL
+	bsr	occl_note_source
+	endc
+	move.l	d6,d5
+	lsl.l	#5,d5
+	lea	gpu_texture_meta_buffer,a3
+	adda.l	d5,a3
+	move.l	28(a3),d5			; native TPAGE, retained in packet word 3
+	tst.l	d5
+	beq	.flat_gpu_head
+	move.l	24(a3),d4			; page-table byte offset in high word
+	move.l	#$34000000,d2
+	bra	.gpu_head_command_done
+.flat_gpu_head
+	move.l	d6,d4
+	lsl.l	#2,d4
+	lea	trex_face_colour_data,a2
+	move.l	(a2,d4.l),d4			; native Falcon base colour
+	move.l	#$30000000,d2
+.gpu_head_command_done
+	tst.l	d5
+	beq	.gpu_head_opaque_done
+	tst.l	opaque_path_enabled
+	beq	.gpu_head_opaque_done
+	lea	trex_opaque_triangle_data,a2
+	tst.b	(a2,d6.l)
+	beq	.gpu_head_opaque_done
+	ori.l	#OPAQUE_PACKET_BIT,d2
+.gpu_head_opaque_done
+	or.l	d1,d2
+	move.l	d2,(a1)				; w0 command | shade
+	move.l	d4,4(a1)			; w1 flat colour / page-table token
+	move.l	d5,12(a1)			; w3 native texture page
+						; w2 (OT key) already written by
+						; the unpack, and words 4-25 with it
+	lea	GPU_PACKET_BYTES(a1),a1
+	dbra	d7,.build_gpu_head
+.build_heads_count
 	move.l	dsp_packet_count_shadow,ot_primitive_count
 	move.l	a1,gpu_packet_ptr
 	rts

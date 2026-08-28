@@ -103,16 +103,23 @@ bus-dominated stages the trustworthy ones and the arithmetic-heavy rasterizer
 the least trustworthy. No figure in this document has ever been taken on a
 Falcon.
 
-**The current baseline is 532.6 ms / 1.878 FPS** (section 3.10, corrected
-emulator). Every figure in this document except 2.4b, 2.4c, 2.4d and 3.10 was
-taken on a stock Hatari that ran the DSP at twice a Falcon's clock (2.4a).
+**The current baseline is 506.4 ms / 1.975 FPS**, corrected emulator, after
+sections 3.10 and 3.11. Every figure in this document except 2.4b, 2.4c, 2.4d,
+3.10 and 3.11 was taken on a stock Hatari that ran the DSP at twice a Falcon's
+clock (2.4a).
+
+| Step | Frame | FPS |
+|---|---:|---:|
+| Corrected-clock baseline, as measured (2.4c) | 535.7 ms | 1.867 |
+| + word CLUT data-cache phase 128 (3.10) | 532.6 ms | 1.878 |
+| + unpack writes into the packet (3.11) | **506.4 ms** | **1.975** |
 
 The table below is the corrected baseline **at the shipped-then layout**,
-`OPAQUE_CLUT_PHASE = 0`: **535.7 ms / 1.867 FPS**. Section 3.10 later moved the
-word CLUT's data-cache phase to 128 and took the rasterizer to 241.25 ms for a
-532.6 ms frame at byte-identical output. Sections 2.4c and 2.4d were all
-measured at phase 0 and remain internally consistent pairs; subtract 3.1 ms of
-rasterizer to place any of them against the shipped binary.
+`OPAQUE_CLUT_PHASE = 0` and the copying builder: **535.7 ms / 1.867 FPS**.
+Sections 2.4c and 2.4d were all measured there and remain internally consistent
+pairs; the two changes above move the rasterizer by -3.1 ms and the packet
+stage by -25.2 ms respectively when placing any of them against the shipped
+binary.
 
 Re-measured on the corrected emulator, the same binary reads
 **535.7 ms / 1.867 FPS**, and the whole difference from the stock ledger lands
@@ -2855,6 +2862,86 @@ Anyone hoping to repeat 3.9's order-of-magnitude result on the data side
 should read that ratio first -- the instruction cache was 552 bytes of loop
 against 256 and could be *made* to fit, and this cannot.
 
+### 3.11 The unpack writes into the packet -- implemented, -25.2 ms
+
+Section 8.2a named this and costed it; it is now built and measured. **Every
+survivor's span record was handled twice.** The chunk unpack expanded the
+eighteen packed wire words into 22 longwords in `dsp_triangle_rx_buffer`, and
+`build_gpu_shadow_packets` then read all 22 back and wrote them again into the
+packet through two MOVEM pairs -- 44 longword bus accesses per survivor,
+50,556 per frame, producing no new value.
+
+**The change.** The unpack now lands each field in its final packet slot. Its
+output pointer starts at `gpu_packet_buffer` instead of the record buffer and
+strides `GPU_PACKET_BYTES`; the OT key goes straight to packet word 2, the 22
+span longwords to words 4--25, and the two head values the span block cannot
+carry -- the global source index and the shade -- are parked in **resolve
+slots 0 and 1**. `build_gpu_packet_heads` then fills only the three words that
+remain: command|shade, flat colour or page-table token, and native texture
+page. Nothing is copied.
+
+**Why borrowing the resolve slots is legal.** The per-frame order is unpack ->
+`build_gpu_packet_heads` -> `gpu_submit_ot` -> the 3.9c resolve sweep -> the OT
+walk, and the sweep lives *inside* `gpu_rasterize_ot`. The slots are therefore
+dead through the first three stages and are overwritten by the sweep before
+anything reads them as resolve state. This is an ordering contract, not an
+accident: moving the resolve sweep earlier, or the builder later, breaks it
+silently, so both ends carry a comment saying so.
+
+**Two builders, deliberately.** The no-DSP fallback still produces the old
+contiguous 25-longword records through `build_host_triangle_stream`, so
+`build_gpu_shadow_packets` survives unchanged for that arm and the DSP arm uses
+the lean one. The classification body -- material lookup, flat/textured split,
+opaque hint -- is duplicated rather than shared: a BSR per survivor costs more
+than the bytes save, and 3.9's result is that a per-item loop body wants to be
+straight-line and inside the 256-byte instruction cache. **The two must stay in
+step**; any change to the material or opaque-hint rules belongs in both.
+
+Measured on the corrected emulator, `--mmu true`, frame-100 `fb.res` equal to
+`d89958b3...` on both sides, workloads matched to 0.1% (34,136 against 34,103
+pixels per frame):
+
+| Stage | Before (273 fr) | After (270 fr) | Delta |
+|---|---:|---:|---:|
+| **DSP readback + packet build** | 260.51 ms | **235.31 ms** | **-25.20** |
+| Rasterizer | 241.25 ms | 240.65 ms | -0.60 |
+| Framebuffer clear | 14.54 ms | 14.56 ms | +0.02 |
+| DSP set_frame | 13.08 ms | 13.07 ms | -0.01 |
+| Ordering Table insertion | 2.71 ms | 2.39 ms | -0.32 |
+| **Frame** | **532.6 ms / 1.878 FPS** | **506.4 ms / 1.975 FPS** | **-26.2** |
+
+**-25.20 ms against 8.2a's ~25 ms prediction**, which is the closest this
+document has come to costing a change before building it. The rasterizer moves
+-0.60 ms, inside frame mix, which is the control: this change must not touch
+it. 2.4c's split predicted the result too -- it put ~73 ms of host CPU work in
+the packet stage, and this removes about a third of it.
+
+#### The span validator is dead, and it did not die here
+
+`span_validate_enabled` was turned on to exercise the one offset in the
+validator arm that this change moved. It reports **every record as a
+mismatch**: `val_records` = `val_mismatch_total`, `val_first_captured` = 0 and
+all seventeen per-field counts zero -- the signature of every call taking
+`validate_span_record`'s early-out, where `compute_span_reference` returns
+degenerate, rather than reaching the field compare.
+
+**Unmodified HEAD does exactly the same thing** (181,601 of 181,601, same
+signature), so this is pre-existing rot and not a consequence of 3.11. It is
+recorded here because two other sections rely on the tool: 4.1b calls it "the
+on-demand field-for-field regression gate" and both 7.4 and roadmap item 15
+name it as the bring-up instrument that will field-compare SSI/DMA-delivered
+records against host-port-delivered ones. **It cannot do that job today**, and
+whoever starts the SSI work needs to repair it first.
+
+What validates 3.11 in the meantime is the stronger gate anyway: byte-identical
+frame-100 output over 270 frames exercises every survivor's span fields through
+the rasterizer, and a misplaced field would change the image. The one offset
+that could not be exercised -- the source index the validator arm reads -- is
+proven indirectly: it is the same address as the UV-lookup offset eight bytes
+earlier in the same run of stores, and that one *is* exercised, because the
+uv0/uv1 packs are built from the texture metadata it indexes and the image is
+byte-identical.
+
 ## 4. Work already assigned to the DSP
 
 The current DSP program keeps the static vertex mesh, the packed triangle
@@ -4634,6 +4721,15 @@ exhibits.  It is not free to build: the projected-vertex fallback and the span
 validator both consume the old `rx_buffer` layout, so the copying builder has
 to survive for them.
 
+**Built and measured: -25.20 ms (section 3.11).**  The estimate above is the
+closest this document has come to costing a change before making it.  The
+caveat held exactly as written -- the copying builder survives for the no-DSP
+fallback and the DSP arm got a lean one -- and the packet stage went
+260.51 -> 235.31 ms for a 532.6 -> 506.4 ms frame at byte-identical output.
+Turning the span validator on to check the change also found it **dead on
+unmodified HEAD**, reporting 100% mismatches while comparing nothing; 3.11 has
+the detail, and it matters most to item 15, which had planned to use it.
+
 **The honest arithmetic for three FPS on the full mesh.**  That 25 ms and the
 occlusion stage of item 19 are the only two levers with a named mechanism.
 Occlusion at the DSP-buildable variant culls 10.5% of survivors and 11.24% of
@@ -5035,6 +5131,15 @@ The open roadmap, in recommended order (expected effects from the section
    without an ad-hoc CACR write, and a field-for-field bring-up comparison
    against host-port-delivered records.  **None of those can be validated in
    Hatari.**
+
+   **The bring-up instrument this item names is broken and must be repaired
+   first.**  Section 3.11 turned `span_validate_enabled` on and found it
+   reporting 100% mismatches on unmodified HEAD while comparing nothing -- every
+   call takes `validate_span_record`'s degenerate early-out.  7.4 and this item
+   both plan to field-compare stream-delivered records against host-port ones
+   "exactly as during the record migration"; that comparison is not currently
+   available, and discovering it during hardware bring-up would be the worst
+   possible time.
 
    **The scheduling question is now answered, and it clears this item (2.4d).**
    The FINISH window absorbs 97.5% of 117.7 ms of added DSP work, so overlap
