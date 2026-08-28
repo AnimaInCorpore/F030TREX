@@ -12,9 +12,9 @@ Prebuilt release archives are on the
 `TREX.ZIP` contains `TREX.TOS`, `TREX.LOD` and the 40-column `README.TXT`,
 ready to unpack and run on a stock Falcon030 or under Hatari.  The current
 release is
-[v1.1](https://github.com/AnimaInCorpore/F030TREX/releases/tag/v1.1) --
-the same image as v1.0 to the byte, with a leaner and faster DSP program
-underneath.
+[v1.2](https://github.com/AnimaInCorpore/F030TREX/releases/tag/v1.2) --
+the full-mesh package rebuilt from the post-v1.1 DSP and M68030 sources,
+with the corrected release benchmark and validation fixes included.
 
 ## Building
 
@@ -91,7 +91,7 @@ and its build assets have been removed. Performance figures in
 OPTIMIZATION.md are identified as Hatari/emulator results; physical Falcon030
 timing remains unmeasured.
 
-The release itself now has a measured figure: **511.2 ms per frame, 1.956 FPS**
+The v1.2 release has a measured figure: **511.2 ms per frame, 1.956 FPS**
 under a Hatari corrected to run the DSP at the Falcon's real clock
 (OPTIMIZATION.md 2.4e). Older figures in that file were taken on a stock
 emulator that ran the DSP at twice its rate and are ~24% optimistic on the

@@ -3,6 +3,8 @@
   DSP56001 geometry + 68030 raster
 ========================================
 
+Release v1.2
+
 A Falcon030 port of the T-Rex sequence
 from the PlayStation disc "Demo One"
 (SCES-00048).  The model, the morph
@@ -138,13 +140,11 @@ slide show, and it is meant to be one:
 filled in software every single frame.
 
 The only figures recorded so far come
-from Hatari, whose timing only
-approximates a real machine: about 2.3
-frames per second for this build, with
-roughly half the frame spent in the
-rasterizer and about 40 percent in DSP
-readback and packet building.
-
+from corrected Hatari, whose timing only
+approximates a real machine: 1.956
+frames per second for this build
+(511.2 ms/frame).  Older emulator
+figures used twice the Falcon DSP clock.
 Nothing has been measured on real
 hardware yet.  The number on your own
 Falcon is the interesting one.
