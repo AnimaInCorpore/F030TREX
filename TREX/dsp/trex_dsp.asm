@@ -247,12 +247,12 @@ PREPASS_ENTRY_BUCKET_MASK	= $000fff
 PREPASS_MAX	= 1335
 
 ; Depth classes for the counting sort.  The sweep does not need the full
-; eleven-bucket-bit order: it only ever compares neighbouring entries for
-; INEQUALITY, to know when to seal pending coverage.  Coarsening the classes
-; to 32 OT buckets each keeps that relation a subset of the host's draw
-; order -- sealing strictly-nearer classes can only under-approximate
-; strictly-nearer buckets, so kills stay sound -- and 64 classes are exactly
-; what the on-chip counter bank holds.
+; eleven-bucket-bit order: it only compares neighbouring entries for
+; INEQUALITY, to know when to seal pending coverage.  Sixty-four classes of
+; 32 OT buckets keep sealing strictly nearer than the host draw order and
+; therefore only under-approximate kills.  The 64-word counter bank fits in
+; on-chip Y RAM; the 128-class/external-SRAM experiment is rejected in
+; OPTIMIZATION.md section 2.3i.
 PREPASS_COARSE_BITS	= 5
 PREPASS_CNT_COUNT	= OT_LENGTH/(1<<PREPASS_COARSE_BITS)
 
@@ -2300,8 +2300,8 @@ lookup_projected_z
 ; construction, and the host's cross-check has something to fail on rather
 ; than a tautology.
 ;
-; The order is a two-pass counting sort into 64 coarse depth classes of 32
-; OT buckets each (see PREPASS_COARSE_BITS): classification runs once to
+; The order is a two-pass counting sort into 64 coarse depth classes of 32 OT
+; buckets each (see PREPASS_COARSE_BITS): classification runs once to
 ; count, once more to scatter, and needs no second list -- the ping-pong
 ; scratch of the earlier radix sort is what limited the order list to 723
 ; entries, under the full mesh's real survivor count, which disabled the
@@ -3473,7 +3473,8 @@ prepass_cls_bit	= shade_sum_r
 ; Occlusion prepass state.  The class counter bank MUST stay here in on-chip
 ; Y RAM: it is written once per survivor in each classification pass and
 ; walked by the prefix, while X and Y above $01FF are external SRAM with
-; wait states.
+; wait states.  It precedes the command-persistent state below so the bank
+; does not overlap it.
 prepass_cnt_lo
 	ds	PREPASS_CNT_COUNT
 
@@ -3522,24 +3523,24 @@ prepass_tp_save
 ; in X (corner_normals_x), where the resident UV pairs used to be.
 ;
 ; Anything that grows the program past P:$09BF silently corrupts the first
-; triangle indices instead of failing to assemble.  Check the P extent in the
-; assembled DSP program after adding code (strtonum, not "0x" concatenation:
-; plain awk reads a concatenated hex string as 0 and the old one-liner
-; therefore printed only the word count):
+; triangle index.  Check the P extent in the assembled DSP program
+; after adding code (strtonum, not "0x" concatenation: plain awk reads a
+; concatenated hex string as 0 and the old one-liner therefore printed only
+; the word count):
 ;
 ;   tr -d '\r' < TREX/dsp/trex_dsp.lod | awk '/^_DATA P/{s=strtonum("0x" $3); \
 ;     n=0;i=1;next} /^_/{if(i&&n)printf "last P = $%04X\n",s+n-1;i=0;next} \
 ;     {if(i)n+=NF}'
 ;
 ; The instrumented diagnostic builds are bound by the same ceiling: a
-; temporary counter that pushes the extent past P:$09BF gets overwritten by
-; the index upload and reports garbage, which cost this stage one full round
-; of contradictory measurements once.
+; temporary counter that pushes the extent past its active overlay gets
+; overwritten by the next upload and reports garbage, which cost this stage
+; one full round of contradictory measurements once.
 ;
 ; The current full-mesh program ends at P:$0901, leaving P:$0902-$09BF free
-; before the resident indices.  Keep the "<" prefix on jumps and the short
+; before the resident index list.  Keep the "<" prefix on jumps and the short
 ; Y-scalar forms on any code added later, or the program will overwrite the
-; first triangle indices without an assembler error.
+; index list without an assembler error.
 ; Absolute-short addressing is the largest single contributor: every data
 ; reference to a Y scalar below $40 carries the "<" prefix, which is the
 ; one-word form.  ASM56000 sizes an absolute data address long by default,

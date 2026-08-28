@@ -103,6 +103,30 @@ bus-dominated stages the trustworthy ones and the arithmetic-heavy rasterizer
 the least trustworthy. No figure in this document has ever been taken on a
 Falcon.
 
+**The current baseline is section 2.4c's, not the table below.** Every figure
+in this document except 2.4b and 2.4c was taken on a stock Hatari that ran the
+DSP at twice a Falcon's clock (2.4a). Re-measured on the corrected emulator,
+the same binary reads **535.7 ms / 1.867 FPS**, and the whole difference lands
+in one stage:
+
+| Stage | Corrected time per frame | Share of frame |
+|---|---:|---:|
+| DSP triangle setup/readback and packet build | **260.40 ms** | 48.6% |
+| Rasterizer (row/span walk, per-packet setup, pixel loops) | 244.61 ms | 45.7% |
+| Framebuffer clear | 14.58 ms | 2.7% |
+| DSP set_frame | 12.90 ms | 2.4% |
+| Ordering Table insertion | 2.78 ms | 0.5% |
+| **Total** | **535.7 ms / 1.867 FPS** | **100.0%** |
+
+The packet stage is now the largest item in the frame, and section 2.4c splits
+it: ~173 ms exposed DSP compute, ~73 ms host CPU work, 14.2 ms host-port wait
+states. Read the stock-clock table below for the rasterizer decomposition,
+which the correction does not touch, and 2.4c for anything about the packet
+stage, the wire or the optimization ranking.
+
+The stock-clock table, retained because the rasterizer split is still current
+and because the rest of this document is written against it:
+
 | Stage | Time per frame | Share of frame |
 |---|---:|---:|
 | DSP triangle setup/readback and packet build | 185.7 ms | 40.4% |
@@ -1041,15 +1065,14 @@ binary -- emulator correctness results, not physical-Falcon measurements:
 
 The pixel deltas confirm the kill bitmap is live end-to-end (sweep, bitmap,
 BUILD skip, host packet stream) and that its kills are invisible, as the
-sealing rule requires.  The yield with 8x8 cells and 64 depth classes is
-deliberately conservative -- tens of triangles per frame in the second half
-of the choreography, near zero in the close-up frames whose depth spread
-collapses into one or two classes.  Raising the yield (finer classes via a
-segmented sort, 4x4 cells if X memory is found for the larger masks) is
-future work.  The arm-2 freestanding prepass costs 75.6 ms/frame in Hatari
--- the two classification passes dominate -- which the production arm-1
-inline mode hides inside the FINISH window as before; these are emulator
-figures under the 2.4a caveats.
+sealing rule requires.  The 64-class result remains the active and
+measured-yield authority.  The isolated 128-class/8x8-cell probe of section
+2.3i was correct but rejected: its only equal-frame sample saved 2,516 writes
+over 246 frames (0.030%), far below the established 64-class yield.  The
+arm-2 freestanding 64-class prepass cost
+75.6 ms/frame in Hatari -- the two classification passes dominate -- which
+the production arm-1 inline mode hid inside the FINISH window; these are
+emulator figures under the 2.4a caveats.
 
 One methodological note for future diagnostic work: instrumented DSP builds
 are bound by the same `P:$09BF` ceiling as the shipping program.  A
@@ -1351,16 +1374,45 @@ there is nothing strictly nearer to seal against, no matter how fine the
 coverage quantum.  The code is reverted; the stock 8x8/64-class
 configuration stands.
 
-What would move the yield is both levers together -- finer cells AND
-finer classes -- which needs the 336-word mask pair plus a 128-word
-counter bank: ~296 overlay words against the 190 the harvest freed.  The
-`Y:$0100-$01FF` probe (256 words, mapping contested, hardware-gated) or
-a further ~106-word program harvest is therefore the prerequisite, and a
-classes-only experiment (128 classes in the overlay, stock 8x8 masks,
-ceiling `P:$093F`) is the cheap next probe of the hypothesis.  Until one
-of those runs, item 19's yield stands where 2.3f left it, now with the
-mechanism named and the metric corrected: compare yields only between
-equal-frame pairs.
+The cheap first probe was built: **128 classes with the stock 8x8 masks.**
+It changes `PREPASS_COARSE_BITS` from 5 to 4, so each class spans 16 host OT
+buckets rather than 32; `PREPASS_MAX`, the two 56-word masks and the kill
+bitmap are unchanged.  A naïve in-place 128-word counter bank would extend
+from `Y:$0096` through `Y:$0115` and overwrite program memory through the
+P/Y overlay.  The probe instead keeps small prepass state on-chip and places
+the complete counter bank at `Y:$0940-$09BF`, immediately before the resident
+indices at `Y:$09C0`.  Its active program ceiling is therefore `P:$093F`; the
+candidate assembles at `P:$0901`, leaving 62 words of margin.
+
+DOSBox assembly was clean (0 errors, 0 warnings).  A Hatari/TOS 4.02,
+4-MiB-ST-RAM, DSP-emulation **correctness** gate ran 8,000 VBLs in arm-2
+freestanding mode: 178 completed frames, frame-100 `fb.res` SHA-256
+`d89958b3…3d16`, 741 last / 1,194 maximum area-and-box survivors, zero
+prepass overflows and zero protocol failures.  This validates the counter
+placement and stricter ordering rule; it was not yet a culling-yield or FPS
+measurement.  The required next comparison was then run on 2026-08-28 with
+the same `PREPASS.TOS`, candidate `.lod`, TOS 4.02, Falcon DSP emulation and
+4 MiB ST-RAM.  Arm 0 and arm 1 were the same binary with only `prepass_arm`
+patched, each under `--run-vbls 11500`.  At exactly 246 completed frames, arm
+0 had written 8,355,471 pixels and arm 1 had written 8,352,955: **2,516 fewer
+writes (0.030%)**.  Both had 981 packets in that final matched frame.  The
+final framebuffer captures were byte-identical at SHA-256
+`d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16`; both
+runs reported zero overflow and zero protocol failures.
+
+The fixed-VBL stop landed on 311 arm-0 frames and 309 arm-1 frames, so its
+timers are not an equal-frame performance measurement.  They are nevertheless
+an adverse indication for the external-SRAM bank: `t_packets/frame` was
+50.54 versus 51.29 200-Hz ticks (about 3.7 ms/frame difference).  No physical
+Falcon conclusion follows.  The negligible equal-frame yield, together with
+that non-gated timing indication, does not justify the loss of on-chip memory
+or the reduced P-memory ceiling.  The source and runtime LOD are therefore
+reverted to the 64-class, on-chip-counter configuration.
+
+Finer cells and finer classes together are no longer a priority: the
+class-only experiment did not earn its external-memory cost.  Any later
+occlusion work must use a substantially different coverage or ordering
+strategy, and compare yield only between equal-frame pairs.
 
 ### 2.4 The occlusion binary is not a timing source
 
@@ -1475,6 +1527,33 @@ instead of 34 raw units. The difference brackets the word MUL/DIV share of the
 frame and shows how much of the layout sensitivity is a property of the core
 rather than of the program. It needs no hardware and no code change.
 
+**Run, 2026-08-28.** Stock v2.6.1, `trex_fullm.tos`, full mesh, frame-100
+`fb.res` byte-identical either way; 266 frames without `--mmu` against 274 with
+it, 34,134 against 34,153 pixels per frame, so the ranges are comparable to
+0.1%:
+
+| Stage | with `--mmu` | without `--mmu` | Delta |
+|---|---:|---:|---:|
+| DSP readback + packet build | 176.19 ms | 178.82 ms | +2.63 |
+| Rasterizer | 244.93 ms | 381.35 ms | **+136.42** |
+| Framebuffer clear | 14.51 ms | 14.72 ms | +0.21 |
+| DSP set_frame | 12.76 ms | 14.04 ms | +1.28 |
+| Ordering Table insertion | 2.55 ms | 4.29 ms | +1.74 |
+| **Total** | **451.4 ms** | **593.6 ms** | **+142.2** |
+
+**The charge lands almost entirely on the rasterizer**, exactly where this
+section predicted: +55.7% on that stage against +1.5% on the packet stage.
+That is the bracket the experiment was proposed to produce. It is *not* proof
+that the whole 136.4 ms is word MUL/DIV — table 23's cost model was not read,
+only its effect measured — but it bounds how much arithmetic table 35 gives
+away, and it says the give-away is concentrated in the one stage 2.4a already
+called the least trustworthy.
+
+**Operational consequence: `--mmu true` is load-bearing.** Every millisecond in
+this document was taken with it, and omitting it inflates the full-mesh
+baseline from 451.4 to 593.6 ms in a way that looks like a broken build rather
+than a different core. Any run compared against a figure here must pass it.
+
 ### 2.4b What the DSP-clock fix costs, measured
 
 The corrected emulator of 2.4a was run against the freestanding prepass
@@ -1515,6 +1594,119 @@ These remain emulator timings, not physical-Falcon timings, and the separation
 required by `AGENTS.md` still applies. What the fix buys is that the DSP side is
 now calibrated against DSPBench on real hardware instead of running at double
 rate; the 68030 side carries every caveat of 2.4a unchanged.
+
+### 2.4c The whole-frame baseline at the corrected clock, and what the packet stage is made of
+
+2.4b corrected only the freestanding prepass configuration. The **whole-frame
+full-mesh baseline had never been re-taken**, so every stage share, every
+optimization ranking and every SSI argument in this document rested on a ledger
+where the DSP ran at twice a Falcon's clock. It has now been re-taken, and the
+result reorders the roadmap.
+
+Method: one binary, `hatari_runs/gate/TREX_M68.TOS`, byte-identical to
+`TREX/m68030/trex_fullm.tos` — the binary 8.2a measured — with the committed
+`trex_dsp.lod`, `--mmu true`, matched frame counts, and the frame-100 `fb.res`
+reproducing `d89958b3…3d16` on every run reported here.
+
+| Stage | Stock, DSP at 2x (274 fr) | **Corrected (272 fr)** | Delta |
+|---|---:|---:|---:|
+| DSP readback + packet build | 176.19 ms | **260.40 ms** | **+84.21** |
+| Rasterizer | 244.93 ms | 244.61 ms | -0.32 |
+| Framebuffer clear | 14.51 ms | 14.58 ms | +0.07 |
+| DSP set_frame | 12.76 ms | 12.90 ms | +0.14 |
+| Ordering Table insertion | 2.55 ms | 2.78 ms | +0.23 |
+| **Total** | **451.4 ms / 2.215 FPS** | **535.7 ms / 1.867 FPS** | **+84.3** |
+
+Workloads match to 0.09% (34,153 against 34,121 pixels per frame). The stock
+column reproduces the 460.0 ms baseline of section 2 to 1.9% and its 243.9 ms
+rasterizer to 0.4%, which is what licenses reading the corrected column against
+the rest of this document.
+
+**Every 68030-side stage is flat and the entire +84.2 ms lands in one stage.**
+That is 2.4b's "the fix does not reach the CPU core" confirmed on the whole
+renderer instead of one command, and it is the measurement's own control: a
+result that moved the rasterizer would have meant the pair was not comparable.
+A corroborating detail is that `set_frame` barely moves (+0.14 ms) while the
+readback moves +84.2 — the recalibrated host-port table charges reads far more
+than writes (word: read 7, write 3), the animation send is write-dominated and
+the readback is read-dominated.
+
+**The packet stage is now the largest single item in the frame — 48.6%, ahead
+of the entire rasterizer at 45.7%.** On the stock ledger it was 40.4% against
+59.6%.
+
+#### The wire, measured rather than inferred
+
+Commit `d9c734ca` exposes the host-port wait-state table through the
+environment (`HATARI_DSP_WS_R1/_R2/_R4/_W1/_W2/_W4`, byte/word/long, read and
+write). Sweeping it isolates the wire directly. Same binary, same `.lod`,
+`--mmu true`, corrected emulator:
+
+| Host-port wait states | frames | px/frame | packet stage | set_frame | rasterizer | frame |
+|---|---:|---:|---:|---:|---:|---:|
+| all 0 | 272 | 34,121 | 246.25 ms | 11.53 ms | 244.67 ms | **519.7 ms** |
+| calibrated (3,7,10 / 4,3,7) | 272 | 34,121 | 260.40 ms | 12.90 ms | 244.61 ms | **535.7 ms** |
+| all 10 | 270 | 34,103 | 261.87 ms | 15.31 ms | 244.39 ms | **539.4 ms** |
+
+The rasterizer reads 244.67 / 244.61 / 244.39 and the clear 14.60 / 14.58 /
+14.69 across all three — flat to 0.1%, which is the control for this sweep too.
+
+Two numbers fall straight out:
+
+- **The host-port wait-state budget for the entire frame is 15.5 ms** (14.15 in
+  the packet stage, 1.37 in `set_frame`). A completely free host port measures
+  **519.7 ms / 1.924 FPS** against 535.7 / 1.867: transport work of any kind is
+  worth **+0.06 FPS** in this model.
+- The 0-to-10 slope gives the access count, since each unit is one 16 MHz cycle
+  charged once per access: **~25,000 host-port accesses per frame in the packet
+  stage and ~6,050 in `set_frame`**. That corroborates 8.2a's ~26,800-word
+  estimate and section 8's 4,933-word animation figure by an independent route,
+  and it puts the calibrated cost at 9.06 cycles (0.566 us) per access.
+
+#### The resulting split
+
+Upstream's replaced model charged 4 per byte after the first (byte 0, word 4,
+long 12) against the calibrated 3/7/10. At the measured 9.06-cycle average the
+mix is long-dominated, where upstream was the *more* expensive of the two, so
+the host-port recalibration accounts for roughly -2 ms and **the DSP clock
+accounts for essentially all of the +84.2 ms**:
+
+| Component of the 260.40 ms packet stage | ms | share |
+|---|---:|---:|
+| **Exposed DSP compute / stall** | **~173** | **66%** |
+| Host CPU work: record unpack and packet build | ~73 | 28% |
+| Host-port wait states | 14.2 | 5% |
+
+The DSP figure is 168-173 ms depending on the access-size mix assumed for the
+upstream comparison; the conclusion does not turn on which end is taken.
+**Exposed DSP time is ~32% of the whole frame** — larger than the row/span
+walk, larger than the pixel loops, second only to the rasterizer as a whole.
+
+#### What this supersedes
+
+**The 2.3 us/word host-port calibration is not a transport cost and must stop
+being used as one.** It comes from roadmap item 3, where making the index list
+resident removed 25.0 ms; that change removed the DSP's receive-and-store work
+along with the wire, so the figure is an end-to-end stage delta, not a wire
+rate. Multiplying it by a word count — as sections 8, 8.2 and 8.2a all do to
+reach a "~62 ms wire" — overstates the transport share by roughly 4x against
+the 14.2 ms measured here. Those passages are corrected in place.
+
+#### Caveats
+
+- 2.4a's bound is unchanged and now matters more, not less: this core charges
+  **no instruction execution time**, so the TOS `Dsp_BlkUnpacked` loop's own
+  instruction cost is invisible. **The 14.2 ms is the modelled wire cost and is
+  therefore a floor**, not a physical-Falcon transport figure. Roadmap item 14
+  remains the only thing that can size the real PIO cost.
+- Neither Videl bus contention nor ST-RAM burst behaviour is modelled, so the
+  ~73 ms host CPU term carries 2.4a's usual caveats in the other direction.
+- The measured binary carries **no occlusion prepass**. The release adds one
+  whose corrected freestanding cost is 117.70 ms/frame (2.4b), against a
+  FINISH window that this section shows is DSP-bound already.
+- Hatari's CPU and DSP profilers were tried first and are unusable here: the
+  `DspInstr` variable reads 0, and enabling either profiler makes the corrected
+  build die on continue. The wait-state sweep replaced them.
 
 ### 2.5 Delta clearing: built, measured, rejected
 
@@ -2589,6 +2781,19 @@ including the per-call `Dsp_BlkUnpacked` XBIOS overhead. This replaces the
 contained the sign-extension pass and the host packet build. Use 2.3 µs/word
 when costing a wider result record: the 17-word setup record sketched in
 section 9.2 would cost about 29 ms per frame for 752 survivors.
+
+**Superseded as a transport rate by 2.4c; still valid as a protocol-change
+rate.** The 25.0 ms above is a *stage* delta: removing 10,896 words per frame
+removed the wire traffic **and** the DSP's work to receive, unpack and store
+them, and it did so on an emulator running the DSP at twice its real clock. A
+direct wait-state sweep on the corrected emulator prices the entire host port
+at **14.2 ms/frame in the packet stage** against ~25,000 accesses — about
+0.57 µs per access, roughly a quarter of 2.3 µs. Every later section that
+multiplies a word count by 2.3 µs to size *transport* therefore overstates it
+by ~4x; the figures affected are flagged in sections 8, 8.2a and this document's
+roadmap items 14 and 15. Use 2.3 µs/word only for what it actually measures —
+the end-to-end cost of adding or removing words from the protocol, DSP-side
+handling included — and 2.4c for anything that asks what the wire alone costs.
 
 ### 4.1a Survivors-only records with the clipped bounding box
 
@@ -3772,7 +3977,13 @@ timeout rejects it; a Hatari timing alone cannot select it.
 ### 7.4 Concrete SSI/DMA span-stream contract -- offline prototype
 
 [`tools/ssi_stream_model.py`](tools/ssi_stream_model.py) is an executable
-16-bit protocol prototype and full-mesh cost/buffer model.  It deliberately
+16-bit protocol prototype and full-mesh cost/buffer model.  **It is not present
+in this repository** -- `tools/` holds only `asm56k`, the O3D/TMD converters,
+`vasm` and `vlink` -- so this section is a specification and a record of what
+the coder established, not something that can be re-run here; treat it the way
+the README's note treats every other tool named but not shipped.  Anyone
+implementing step 2 of an SSI plan is writing that prototype, not re-running it.
+It deliberately
 does **not** touch Falcon hardware yet.  The target hardware configuration is
 nevertheless exact enough to implement without rediscovering ownership:
 
@@ -3873,6 +4084,18 @@ of the measured 112.7 ms triangle/readback/packet stage; exact unpack, DSP and
 wire shares have not been isolated in the choreography build. Animation input
 (4,933 words/frame average) would still use the host port unless a separate
 host-to-DSP DMA design were added.
+
+**Those shares have since been isolated, and they invert this section's
+premise (2.4c).** In the corrected-clock full-mesh frame the 260.40 ms packet
+stage is ~173 ms exposed DSP compute, ~73 ms host CPU unpack/packet-build and
+**14.2 ms of host-port wait states**. Zeroing the host port entirely measures
+519.7 ms against 535.7 — transport work of any kind is worth **+0.06 FPS**.
+What SSI/DMA is worth here is therefore **not the transfer it removes but the
+overlap it enables**: hiding ~173 ms of DSP time behind CPU rasterization is an
+order of magnitude larger than the wire. Every paragraph below that sizes this
+optimization by multiplying a word count by 2.3 us understates the DSP term and
+overstates the wire by roughly 4x; they are retained as the reasoning of their
+epoch, with the arithmetic corrected in 8.2a.
 
 ### The arithmetic, and its open question
 
@@ -4082,7 +4305,16 @@ loop-body eviction.
 **What it is, in the part that can be named:** the wire is about 26,800 words
 per frame (1,149 survivor records at eighteen words, plus 5,448 UV words for
 all 2,724 triangles, plus chunk headers and acks), or roughly 62 ms at the
-2.3 us/word calibration.  Of the remainder, one item is pure duplicated work:
+2.3 us/word calibration.  **That 62 ms is wrong and the word count is right**
+(2.4c): a wait-state sweep on the corrected emulator counts ~25,000 host-port
+accesses per frame in this stage -- corroborating the ~26,800 words by an
+independent route -- but prices the whole host port at **14.2 ms**, not 62.
+The 2.3 us/word figure is an end-to-end stage delta from roadmap item 3, which
+removed the DSP's receive-and-store work along with the wire, so it was never a
+transport rate.  Read this paragraph as the word count it establishes; the
+timing conclusion below is re-derived in 2.4c, where the stage is ~173 ms
+exposed DSP compute, ~73 ms host CPU work and 14.2 ms wire.
+Of the remainder, one item is pure duplicated work:
 **every survivor's span record is handled twice.**  The unpack writes 22
 expanded longwords into `dsp_triangle_rx_buffer`, and `build_gpu_shadow_packets`
 then reads those 22 and writes them again into the packet through two MOVEM
@@ -4100,18 +4332,37 @@ Occlusion at the DSP-buildable variant culls 10.5% of survivors and 11.24% of
 writes (2.3a), which against the split above is roughly 14 ms of packet stage,
 7 ms of per-packet setup and 20 ms of row/pixel work -- about **41 ms**, and
 less than that at the 4x4 cells item 19 would have to fall back to.  The
-prepass as shipped sits far below either figure: 2.3f's deliberately
-conservative 8x8-cell, 64-class configuration kills tens of triangles per
-frame -- about half a percent of writes -- so the 41 ms is conditional on
-item 19's yield work (finer classes and larger masks; section 2.3h's
-data-memory note is where the mask words would come from), none of which is
-built.  Both
+last measured prepass configuration sat far below either figure: 2.3f's
+deliberately conservative 8x8-cell, 64-class configuration killed tens of
+triangles per frame -- about half a percent of writes. The 128-class/8x8-cell
+probe is now rejected: its 0.030% equal-frame yield did not improve that
+result. The 41 ms remains conditional on a substantially different occlusion
+strategy, not a class-count-only change. Both
 together are about 66 ms of the 126.7 needed, landing near **395 ms / 2.53
 FPS**.  **Three FPS on the full mesh therefore does not follow from any
 optimization currently identified**, and the residual ~60 ms has no mechanism
 short of moving the record stream off host-port PIO entirely (item 15), which
 Hatari cannot validate and which section 7.4 shows is not a small piece of
 work. The retired LOD's 3-FPS result is not a supported-performance claim.
+
+**Re-derived on the corrected clock (2.4c).** The gate this section computes is
+a stock-clock gate: the real baseline is 535.7 ms / 1.867 FPS, so the distance
+to 333.3 ms is **202.4 ms**, not 126.7. The conclusion above survives the
+correction and hardens:
+
+- **"Moving the record stream off host-port PIO" is not the residual's
+  mechanism.** The whole host port prices at 14.2 ms; deleting it entirely
+  measures 519.7 ms / 1.924 FPS. This sentence should be read as naming item 15
+  for the *overlap* it enables, not the transfer it removes.
+- **The residual has a mechanism after all, and it is DSP time.** ~173 ms of
+  the frame is exposed DSP compute. It is the largest single term outside the
+  rasterizer, it was invisible while the DSP ran at double rate, and it is
+  attackable two ways: making the DSP program faster (item 21's territory,
+  every saving now worth 2x its recorded value), or overlapping it with CPU
+  rasterization (item 15's cross-frame stage).
+- The ~25 ms unpack fix is unchanged in absolute terms -- 2.4c's sweep shows
+  the host CPU stages are emulator-invariant -- but it is now ~34% of the
+  ~73 ms host CPU term rather than a fraction of a 185.7 ms mystery.
 
 ### Why this must be prototyped on hardware first
 
@@ -4362,6 +4613,19 @@ The open roadmap, in recommended order (expected effects from the section
    packet build and wire PIO — which no scheduling can hide.  Conclusion:
    after stage 1 this roadmap item is exhausted on the host port; only the
    SSI/DMA transport (item 15) could remove the PIO share itself.
+
+   **Both of those sentences are wrong at the corrected clock (2.4c), and the
+   stage-2 measurement is still right.**  "The remaining genuine DSP wait is
+   only a few milliseconds" and "the remaining readback stage is CPU work" were
+   concluded with the DSP at 32 MIPS.  At the real clock the stage is ~173 ms
+   exposed DSP compute against ~73 ms host CPU work and 14.2 ms of wire — so
+   **most of what stage 2 tried to hide is exactly the kind of thing scheduling
+   can hide**, and this item is not exhausted.  What stage 2 measured remains
+   valid as a *mechanism* result: its accumulator lost more to cold re-reads
+   and hook overhead than it won.  The open question this item should now carry
+   is whether any overlap scheme can expose the ~173 ms without paying that
+   cold-read penalty — which is the same question item 15 has to answer, and
+   the reason the two items should be planned together rather than in sequence.
 13. Per-corner Gouraud lighting. **Done as the span-level variant** — the
    DSP lights all three TMD corner normals (recovered offline, section
    4.4a's split layout for both mesh variants), ships three sorted Q4.8
@@ -4384,6 +4648,13 @@ The open roadmap, in recommended order (expected effects from the section
    additionally record rasterizer slowdown with DMA active, DMA completion
    latency, buffer coherency, DSP production time and end-to-end frame time;
    transfer microbenchmarks alone cannot select the 3-FPS path.
+   **Sharpened by 2.4c.**  The emulator now prices its own host port at
+   **14.2 ms/frame** and counts ~25,000 accesses/frame in the packet stage, so
+   the bench's job is no longer "how fast is each transport" -- it is whether a
+   physical Falcon's PIO loop costs materially more than the emulator's
+   wait-state-only model, which charges the loop's instructions nothing (2.4a).
+   Add one measurement to the list: **CPU-busy time with the DSP deliberately
+   ahead of the host**, which separates real transfer cost from DSP stall.
 15. SSI/crossbar streaming per sections 7.4/8. **Protocol prototype done,
    hardware activation pending.**  Full mesh makes U/V 49.8 KB/frame and the
    complete no-RLE stream 86.9 KB average (111.8 KB shade bound), not the old
@@ -4393,6 +4664,18 @@ The open roadmap, in recommended order (expected effects from the section
    save/restore, handshaked DSP-XMIT -> DMA-RECORD, and cache coherency without
    an ad-hoc CACR write.  Only then may cross-frame span consumption replace
    the CPU row walker.  U/V-only is explicitly insufficient for three FPS.
+   **Re-motivated by 2.4c, and for a different reason than this item was
+   written for.**  The transfer it removes is worth 14.2 ms; a free host port
+   measures 519.7 ms against 535.7, i.e. **+0.06 FPS**.  The overlap it enables
+   is worth up to **~173 ms**, the exposed DSP term.  This item should therefore
+   be scoped and judged as a *scheduling* change whose transport is the enabling
+   mechanism -- cross-frame DSP/CPU overlap first, wire saving as a rounding
+   term -- and not as a transport optimization.  That also raises the bar on
+   section 7.4's ownership work: it must buy real overlap, because it can no
+   longer be justified by the PIO it deletes.  Note item 12 stage 2 already
+   measured one host-port attempt at overlap **slower**, and its stated cause --
+   a deferred unpack re-reading 59 KB cold -- applies with more force to an
+   82-107 KB DMA buffer the CPU reads cold.
 16. **Closed to a measured mechanism.**  Three findings, each by scan:
    the Gouraud buffer growth moved the unpinned preshaded CLUT banks and
    cost 80 ms at an unchanged instruction stream — they are pinned now.
@@ -4474,11 +4757,12 @@ The open roadmap, in recommended order (expected effects from the section
 
     Mode 1 runs in the existing FINISH window and stays armed through both the
     274 authored records and the frontend's continuing gait/turn hold. Modes 2
-    and 3 remain fixed two-word run-now commands for measurement. The current
-    full-mesh program ends at `P:$0963`, leaving `$0964-$09BF` free before the
-    resident indices at `Y:$09C0`; the X overlay ends exactly at `X:$3FFF`, and
-    resident Y data ends at `Y:$3FFE`. No LOD-only relocation or alternate
-    hardware map is used.
+    and 3 remain fixed two-word run-now commands for measurement. The 64-word
+    counter bank is on-chip at `Y:$0096-$00D5`; the program ends at `P:$0901`,
+    leaving `$0902-$09BF` free before the resident indices at `Y:$09C0`. The X
+    overlay ends exactly at
+    `X:$3FFF`, and resident Y data ends at `Y:$3FFE`. No LOD-only relocation or
+    alternate hardware map is used.
 
     The occluder qualification still rides in bit 23 of packed index word A,
     sourced from the same opaque sidecar as `OPAQUE_PACKET_BIT`; all DSP vertex
@@ -4495,12 +4779,11 @@ The open roadmap, in recommended order (expected effects from the section
     current memory or algorithm contract.
 
     The first yield-raising experiment is measured and rejected: 4x4 cells
-    alone bought nothing, because the 64 coarse depth classes -- not the
-    cell size -- are the binding constraint (section 2.3i has the build,
-    the equal-frame metric correction, and the reverted layout).  Raising
-    the yield needs finer classes, alone as a cheap probe or jointly with
-    finer cells, and the joint variant is gated on the `Y:$0100-$01FF`
-    probe or a further program-word harvest.
+    alone bought nothing. The 128-class/8x8-cell probe was then measured and
+    rejected: it saved only 0.030% of equal-frame raster writes while moving
+    its counter bank out of on-chip RAM (section 2.3i). Raising the yield
+    further needs a substantially different occlusion strategy; finer cells
+    or classes by themselves are no longer justified by the measurements.
 20. Delta clearing instead of the full-window clear. **Built, measured,
     REJECTED — see section 2.5.** It saves 8.0 ms in the clear and costs
     14.4 ms in bookkeeping, a net +6.1 ms, plus 13.5 ms of layout cost merely
@@ -4547,6 +4830,20 @@ The open roadmap, in recommended order (expected effects from the section
     item 12's stage 2 bounded.  Gates as always: DOSBox assembly clean, P
     extent at or below `$09BF`, byte-identical frame-100 `fb.res` against
     the recorded checkpoint.
+
+    **Reopened by 2.4c: "not frame rate" was a double-clock artefact.**  The
+    "few-milliseconds genuine DSP wait" this item leans on was measured with
+    the DSP running at 32 MIPS.  At the real clock the exposed DSP term is
+    **~173 ms per frame, 32% of the whole frame** and the largest single item
+    outside the rasterizer.  DSP instruction-stream work is therefore a
+    frame-rate lever after all, and every millisecond the nine sites bought is
+    worth **2x** its recorded value.  Two consequences: the 190 free P words
+    are now contested between item 19's yield work and new DSP-side speed work,
+    and any further harvest must be measured on the corrected emulator from the
+    start.  Note the 2.4c baseline binary carries **no prepass** -- the release
+    adds one costing 117.70 ms/frame freestanding (2.4b) into a FINISH window
+    that is already DSP-bound, so whether it still hides is an open
+    measurement, and `arm0/`/`arm1/` can answer it without new code.
 
 ## 11. References
 

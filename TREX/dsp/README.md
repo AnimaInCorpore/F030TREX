@@ -72,6 +72,7 @@ the program.
 | `X:$39DF-$3A1E` | 64 | one BUILD chunk's UV pairs (`chunk_uvs`) |
 | `X:$3A1F-$3C5E` | 576 | 32 packed span records at 18 words each |
 | `X:$3C5F-$3C70` | 18 | phase-local direct-light cache after the prepass |
+| `Y:$0096-$00D5` | 64 | on-chip 64-class prepass counters |
 | `Y:$09C0-$29AB` | 8,172 | packed resident triangle indices |
 | `Y:$29AC-$3FFE` | 5,715 | Y half of the corner-normal table (`corner_normals_y`) |
 
@@ -99,8 +100,9 @@ corresponding Y normal-component fetch. The cache must remain after the
 prepass lifetime boundary and below `prepass_scratch`; it is not a persistent
 third copy of the host protocol payload.
 
-The order is produced by a two-pass counting sort into 64 depth classes of
-32 OT buckets each: classification runs once to count and once to scatter,
+The active class-resolution path produces the order with a two-pass counting
+sort into 64 depth classes of 32 OT buckets each: classification runs once to
+count and once to scatter,
 so no radix ping-pong list exists. That second list is what previously
 capped the order list at 723 entries -- below the full mesh's real
 1,100-1,200 area/box survivor count, so the old classification overflowed
@@ -122,7 +124,7 @@ with zero prepass protocol failures or capacity overruns across the hold.
 
 The frontend reserves `X:$0000-$3DFF` and `Y:$0000-$3EF7`. The full-mesh
 program occupies P from `$0040` and ends at `$0901`, leaving the words at
-`$0902-$09BF` free before the Y indices begin at `$09C0`. This bound has to
+`$0902-$09BF` free before the Y indices at `$09C0`. This bound has to
 be checked after every DSP change, because an overflow overwrites the index
 list without an assembler error -- recompute it from the assembled `.lod`
 rather than trusting this figure, with the check command in the end-of-file
@@ -211,8 +213,8 @@ does scale with chunk size even though the header does not.
 
 `PREPASS` mode 0 disarms, 1 arms the FINISH hook, and 2/3 run the prepass
 immediately. Both acting modes return only the fixed two-word acknowledgement.
-The pass sorts the full 2,724-triangle survivor list by the exact 2,048-bucket
-OT key, queries sealed 4x4-cell coverage, and stamps only qualified opaque
+The pass sorts the full 2,724-triangle survivor list into conservative
+16-bucket depth classes, queries sealed 8x8-cell coverage, and stamps only qualified opaque
 triangles when all four cell corners are inside the front-facing triangle.
 BUILD skips the resulting global kill flags. Command code 10 was `LOAD_UVS`
 until the corner-normal table displaced the resident UV table that command
@@ -258,9 +260,13 @@ back face, matching the handedness of the PS1 camera matrix. A headless
 Hatari 2.6.1 run on 2026-08-06 wrote `P` to `dsp_test.res`; in addition, the
 enabled span validator compared 9,003 records with zero field mismatches.
 That is emulator validation; a run on real Falcon hardware is still
-outstanding. The current full-mesh prepass has been assembler-checked with
-zero errors and warnings and its P/X/Y extents fit the stock overlay. The
-standard host build has `prepass_arm = 1`, so FINISH runs the prepass inline
+outstanding. The 128-class/8x8-cell prepass probe was assembler-checked and
+framebuffer-gated, then rejected: on an equal 246-frame Hatari sample it saved
+only 2,516 raster writes (0.030%). The active 64-class build keeps its
+counters on-chip at `Y:$0096-$00D5`; the resident indices start at `Y:$09C0`
+and the last program word is `P:$0901`, below the `$09BF` ceiling. The
+standard host build has
+`prepass_arm = 1`, so FINISH runs the prepass inline
 and it stays armed through the synthetic hold. With TOS 4.02, Falcon DSP
 emulation, 4 MB ST-RAM and the runtime `.lod` mounted, the armed dumps
 matched the disarmed controls byte-for-byte at frame 100
@@ -277,3 +283,20 @@ The DSP assembler runs under DOSBox; the result is `TREX/dsp/trex_dsp.lod`,
 which is then adopted as the runtime copy at `TREX/m68030/trex_dsp.lod`.
 Hatari measurements and measurements on real Falcon hardware must be
 documented strictly separately.
+
+## Measuring this program
+
+Use the DSP-cycle-corrected Hatari, not stock 2.6.1: stock double-applies
+`DSP_CPU_FREQ_RATIO` and runs the DSP at 32 MIPS instead of the Falcon's 16, so
+**every DSP timing taken on it is about 2x optimistic** (`OPTIMIZATION.md`
+2.4a/2.4b). `--mmu true` is also mandatory for any figure compared against
+`OPTIMIZATION.md`; without it the CPU core changes and the rasterizer inflates
+by ~136 ms/frame (2.4a).
+
+This matters more than it used to. `OPTIMIZATION.md` 2.4c re-took the
+whole-frame full-mesh baseline on the corrected emulator and measured
+**535.7 ms/frame, of which ~173 ms is exposed DSP time -- about 32% of the
+frame and the largest single term outside the rasterizer.** The earlier
+conclusion that DSP-side savings buy program words rather than frame rate was
+an artefact of the double clock; at the real clock, work removed from this
+program is frame time removed from the render.
