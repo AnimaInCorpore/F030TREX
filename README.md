@@ -91,6 +91,13 @@ and its build assets have been removed. Performance figures in
 OPTIMIZATION.md are identified as Hatari/emulator results; physical Falcon030
 timing remains unmeasured.
 
+The release itself now has a measured figure: **511.2 ms per frame, 1.956 FPS**
+under a Hatari corrected to run the DSP at the Falcon's real clock
+(OPTIMIZATION.md 2.4e). Older figures in that file were taken on a stock
+emulator that ran the DSP at twice its rate and are ~24% optimistic on the
+whole frame; sections 2.4b--2.4e are the corrected ones. Still not a Falcon
+measurement.
+
 The DSP program is the post-harvest build of OPTIMIZATION.md section 2.3h:
 nine sites reworked for size and speed at byte-identical output, with the
 armed occlusion prepass measured 25.6% cheaper in Hatari and the freed

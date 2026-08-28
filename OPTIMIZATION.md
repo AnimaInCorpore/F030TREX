@@ -93,7 +93,9 @@ its `focal_x=746`/`focal_y=933` projection, the source light model, span-start
 sub-pixel prestep, shade floor and jaw vocalisation envelope. It is the former
 `trex_m68030_fullm` configuration; after this revision, `make trex_m68030`
 builds the same full-mesh diagnostic configuration. The release adds its
-prepass/FPS options, so this table is not a release timing claim.
+prepass/FPS options, so this table is not a release timing claim -- **the
+release itself is now measured separately in section 2.4e: 511.2 ms /
+1.956 FPS**, 4.8 ms behind the diagnostic build.
 
 These are emulator timings, not a cycle-accurate benchmark and not a
 measurement on physical Falcon030 hardware. **Section 2.4a is the bound on how
@@ -1854,6 +1856,70 @@ tested, and none of them killed it.**
   It remains an emulator result, not a Falcon measurement.
 - The 2.76 FPS ceiling assumes the exposed DSP term goes to zero. Any real
   design leaves some of it, and pays whatever contention costs.
+
+### 2.4e The release build, measured at last
+
+Every timing in this document up to here belongs to a *diagnostic* build.
+`TREX.TOS` adds `-DTREX_PREPASS -DTREX_RELEASE -DTREX_FPS` on top of
+`-DTREX_RUN`, and section 2 has said since the release existed that its table
+"is not a release timing claim". It is measured here.
+
+**How, and why not the obvious way.** The release defines `TREX_RUN`, which
+zeroes `stats_flush_enabled`, so it writes no `render_stats.res` and cannot be
+timed as it ships. The obvious move -- rebuild without `TREX_RUN` -- is
+**unsound**, and the Makefile comment asserting otherwise was wrong (it is
+corrected in the same change as this section). `TREX_RUN` does keep the two
+flags at equal `dc.l` size, but it *also* drops the
+`bsr trex_write_render_stats` from `trex_shutdown`, which shifts the text after
+it: `cmp -l` between `TREX.TOS` and the same source without `TREX_RUN` reports
+**3,681 differing bytes in a 9,948-byte text section**, mostly address operands
+moved by two. Section 2 records eight bytes of text moving the rasterizer
+28.1 ms, so that comparison cannot carry a timing.
+
+What is sound is patching the linked binary. `stats_flush_enabled` is file
+offset **1,177,883** in `TREX.TOS` and `framebuffer_dump_enabled` is
+**1,177,887**; setting the first to 1 gives a binary differing from the shipped
+release in **exactly one byte**, layout-identical by construction -- the same
+discipline as 2.3f's `prepass_arm` patch and 3.8's one-byte opaque gate. (Both
+offsets are build-specific: re-derive them with `cmp -l` against a
+no-`TREX_RUN` build after any source change.)
+
+Measured on the corrected emulator, `--mmu true`, 270 frames on both sides,
+workloads matched to 0.04% (34,103 against 34,091 pixels per frame):
+
+| Stage | Diagnostic (3.11) | **Release** | Delta |
+|---|---:|---:|---:|
+| DSP readback + packet build | 235.31 ms | 239.04 ms | +3.72 |
+| Rasterizer | 240.65 ms | 241.46 ms | +0.81 |
+| Framebuffer clear | 14.56 ms | 14.59 ms | +0.04 |
+| DSP set_frame | 13.07 ms | 13.24 ms | +0.17 |
+| Ordering Table insertion | 2.39 ms | 2.39 ms | +0.00 |
+| present + FPS overlay | 0.02 ms | 0.06 ms | +0.04 |
+| **Frame** | **506.4 ms / 1.975 FPS** | **511.2 ms / 1.956 FPS** | **+4.8** |
+
+**The release costs 4.8 ms over the diagnostic build**, and **3.72 ms of that
+is the occlusion prepass** -- independently consistent with 2.4d's armed/
+disarmed A/B, which put it at +3.38 ms in the packet stage and +3.0 ms overall
+on a different binary pair. **The FPS overlay costs 0.04 ms per frame**, which
+is what the design intended: it draws into the present stage, after the
+rasterizer timer closes. The rasterizer's +0.81 ms is not the prepass making
+work (armed culling makes slightly *less*, as 2.4d shows) but the release's own
+text layout -- `TREX_RELEASE` alone changes the `.LOD` filename literal from
+twelve bytes to nine -- and it sits well inside the band section 2 documents
+for layout effects.
+
+**Cross-checked against the program's own readout.** `gpu_draw_fps` is
+instantaneous, `20000/ticks` at the 200 Hz tick's 5 ms resolution. Dumping
+frame 100 from the release (both flag bytes patched) shows **01.86**, i.e. a
+~537 ms frame, against the 511.2 ms mean over 270. That is the expected
+relationship rather than a discrepancy: frame 100 is the close-up checkpoint,
+chosen as the `fb.res` gate precisely because it covers an order of magnitude
+more pixels than the rest of the sequence. The render is intact and the overlay
+is legible, so this also confirms the release path end to end -- prepass armed,
+`TREX.LOD` loaded under its release filename, page flip and overlay all working.
+
+The caveats of 2.4a apply unchanged, and this is still an emulator figure: no
+release timing has been taken on a Falcon either.
 
 ### 2.5 Delta clearing: built, measured, rejected
 
@@ -5352,7 +5418,10 @@ The open roadmap, in recommended order (expected effects from the section
     to 0.02% of pixels: **505.9 -> 508.9 ms/frame, +3.0 ms.**  The prepass is
     therefore *not* a frame-rate regression in the release, and the earlier
     worry that it might be one at the corrected clock is answered: the FINISH
-    window absorbs 114.7 of its 117.7 ms.  Leave it armed.
+    window absorbs 114.7 of its 117.7 ms.  Leave it armed.  Confirmed
+    independently on the shipping binary in 2.4e: the release costs **+3.72 ms
+    of packet stage** against the diagnostic build -- a different binary pair
+    reaching the same figure.
 
     Its real price is the one that does not appear in that table.  It consumes
     **~118 ms of FINISH-window DSP capacity** -- the same resource item 15's

@@ -80,9 +80,19 @@ TREX_MESH_DEPS = ./TREX/model/trex.o3d ./TREX/model/trex_facenormals.bin \
 
 # Viewing build: -DTREX_RUN zeroes stats_flush_enabled and
 # framebuffer_dump_enabled, so the frame loop performs no GEMDOS writes.
-# Same dc.l sizes on both branches -- the binary is layout-identical to
-# trex_m68030.tos except for those two data longwords (verify with cmp -l),
-# so every timing measured against the main build carries over.
+#
+# NOT layout-identical, and this comment used to claim it was.  The two flags
+# do assemble the same dc.l on both branches, but TREX_RUN ALSO drops the
+# `bsr trex_write_render_stats` from trex_shutdown, and that shifts the text
+# after it: cmp -l between TREX.TOS and the same source built without
+# TREX_RUN reports 3,681 differing bytes in a 9,948-byte text section, mostly
+# address operands moved by two.  Section 2 of OPTIMIZATION.md records eight
+# bytes of text moving the rasterizer 28.1 ms, so timings must NOT be carried
+# across this flag.
+#
+# To time a build whose shipping form defines TREX_RUN, patch the flag byte in
+# the linked binary instead -- one byte, layout-identical by construction.
+# OPTIMIZATION.md 2.4e does exactly that for the release and gives the offsets.
 ./TREX/m68030/build/trex_run.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
 	$(VASM) $< -quiet -Felf -m68030 -DTREX_RUN -o $@ -L ./TREX/m68030/build/trex_run.lst
 
