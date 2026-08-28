@@ -23,3 +23,12 @@ forum-post.txt
 # Machine-local and large; every figure it produced is reproducible from the
 # commands recorded in OPTIMIZATION.md.
 hatari_runs/
+
+# Editor settings, per developer.
+.vscode/
+
+# DOSBox scratch directory for the DSP assembly: copies of trex_dsp.asm,
+# BUILD.BAT, ioequ.inc and the asm56k executables, plus the .CLD/.LOD/.LST it
+# produces.  The build output that matters is committed at
+# TREX/dsp/trex_dsp.lod; this is the working copy it is taken from.
+TREX/dsp/build/
