@@ -1965,13 +1965,33 @@ it: `cmp -l` between `TREX.TOS` and the same source without `TREX_RUN` reports
 moved by two. Section 2 records eight bytes of text moving the rasterizer
 28.1 ms, so that comparison cannot carry a timing.
 
-What is sound is patching the linked binary. `stats_flush_enabled` is file
-offset **1,177,883** in `TREX.TOS` and `framebuffer_dump_enabled` is
-**1,177,887**; setting the first to 1 gives a binary differing from the shipped
-release in **exactly one byte**, layout-identical by construction -- the same
-discipline as 2.3f's `prepass_arm` patch and 3.8's one-byte opaque gate. (Both
-offsets are build-specific: re-derive them with `cmp -l` against a
-no-`TREX_RUN` build after any source change.)
+What is sound is patching the linked binary: setting `stats_flush_enabled` to 1
+gives a binary differing from the shipped release in **exactly one byte**,
+layout-identical by construction -- the same discipline as 2.3f's `prepass_arm`
+patch and 3.8's one-byte opaque gate.
+
+**The offsets are build-specific, and the ones first published here are now
+stale.** They read 1,177,883 and 1,177,887 when this section was written; on
+the current `TREX.TOS` the correct bytes are **1,178,137**
+(`stats_flush_enabled`) and **1,178,141** (`framebuffer_dump_enabled`), 254
+further on. Following the old numbers patches unrelated data, and the run then
+writes no `.res` at all rather than failing loudly.
+
+Re-derive from the link map rather than by `cmp -l` against a no-`TREX_RUN`
+build -- it is cheaper, and it does not rest on a second build's layout:
+
+```bash
+./tools/vlink/vlink TREX/m68030/build/TREX.o -tos-fastload -b ataritos -s \
+  -e start -M/tmp/trex.map -o /tmp/TREX_relink.TOS
+cmp /tmp/TREX_relink.TOS TREX/m68030/TREX.TOS   # must be identical
+grep stats_flush_enabled /tmp/trex.map          # linked address
+```
+
+File offset = linked address + 28 for the TOS header, and the flag is the
+**low byte** of that longword (+3). The two flags are adjacent zero longwords,
+which identifies them on sight; and a run whose patch landed writes
+`render_stats.res`, which is the functional check to take before trusting any
+number from it.
 
 Measured on the corrected emulator, `--mmu true`, 270 frames on both sides,
 workloads matched to 0.04% (34,103 against 34,091 pixels per frame):
@@ -2148,6 +2168,29 @@ millisecond the rasterizer gives up is a millisecond of window gone. The
 campaign that took the rasterizer from 517.3 to 319.8 ms also cut the capacity
 of the window that item 15 wants to fill. The two items are in direct
 competition and this had not been stated.
+
+#### The resident probe costs nothing, re-measured on the release
+
+The probe stays in the shipping `.lod` at `probe_units = 0`, so its cost had to
+be shown rather than argued. The release re-measured by 2.4e's method on the
+**current** artefacts -- `TREX.TOS` unchanged, `TREX.LOD` carrying the probe --
+at a matched frame count:
+
+| | 2.4e (before) | with the probe `.lod` |
+|---|---:|---:|
+| frames | 270 | 270 |
+| px/frame | 34,103 | 34,094 |
+| DSP readback + packet build | 239.04 ms | 239.87 ms |
+| Rasterizer | 241.46 ms | 240.20 ms |
+| Framebuffer clear | 14.59 ms | 14.52 ms |
+| DSP set_frame | 13.24 ms | 13.00 ms |
+| Ordering Table insertion | 2.39 ms | 2.63 ms |
+| **Frame** | **511.2 ms / 1.956 FPS** | **510.83 ms / 1.958 FPS** |
+
+Workloads match to 0.03%; the frame moves **−0.37 ms, or −0.07%**, which is
+inside the run-to-run band. The neighbouring 271-frame point reads 511.13 ms /
+1.956 FPS, reproducing 2.4e's figure exactly. Three DSP instructions per frame
+is what it costs, as the hook's comment claims.
 
 #### Caveats
 
