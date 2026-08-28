@@ -3083,6 +3083,77 @@ that names the callers it breaks is not enough; the callers have to be made to
 say so at runtime.** Nothing here changes rendering, and none of it would have
 been found without turning the tool on for an unrelated change.
 
+### 3.13 The row/span walk: split re-taken, phase re-confirmed, one candidate rejected
+
+The row walker is the largest rasterizer term and had not been split since
+before 3.9c, 3.10 and 3.11. Re-taken with 3.5's method -- three binaries of
+**identical size**, the profile patches preserving instruction lengths -- on the
+current build and the corrected emulator:
+
+| Component | ms/frame | of rasterizer | of frame |
+|---|---:|---:|---:|
+| **Row/span walk** | **110.88** | 46.1% | 21.9% |
+| Per-packet setup | 68.45 | 28.4% | 13.5% |
+| Pixel loops | 61.32 | 25.5% | 12.1% |
+
+Close to 8.2a's 113.4 / 68.3 / 62.2, as it must be: 2.4c showed the 68030 side
+is emulator-invariant, and 3.10/3.11 moved the rasterizer by well under a
+millisecond between them.
+
+**`RASTER_STATE_PHASE` re-scanned, and 32 survives.** Item 16 set it by a scan
+taken before 3.10 moved the word CLUT to phase 128, and both stream through the
+same sixteen data-cache lines, so the optimum could have moved with it. All
+eight points across the period, frame-100 `fb.res` equal at every one:
+
+| Phase | 0 | **32** | 64 | 96 | 128 | 160 | 192 | 224 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Rasterizer, ms | 241.93 | **240.67** | 242.68 | 243.02 | 247.35 | 249.75 | 250.36 | 244.22 |
+
+Range **9.7 ms**, minimum still at 32. The two phases do not interact the way
+the hypothesis expected; the shipped setting is re-validated rather than
+improved.
+
+#### Hoisting the chain advance -- built, measured, REJECTED
+
+The walker reads `raster_ul`, `raster_vl` and `raster_lvl` at the top of each
+row and then reads each a *second* time, as the read half of the RMW that
+advanced them in `.span_row_advance`. Loading each cell once and storing its
+next-row value back immediately -- while the value is already in a register --
+removes one access per chain per row, 3 per row, 37,317 per frame. At the
+~7.5 clocks per access the row cost implies, that predicted roughly **17 ms**.
+
+Built, and the loop stayed inside the instruction cache: `.span_row_loop` grew
+**228 to 234 bytes** against the 256-byte line, exactly the +6 predicted.
+Measured at an identical workload -- 270 frames and 34,103 pixels per frame on
+both sides, `fb.res` byte-identical:
+
+| | Baseline | Hoisted | Delta |
+|---|---:|---:|---:|
+| Rasterizer | 240.67 ms | 240.76 ms | **+0.09** |
+
+**Nothing. Reverted.**
+
+**Why, and this is the useful part.** The prediction assumed both reads miss,
+because the pixel loop runs between them and sweeps the data cache. It does
+not -- and the reason is the phase scan immediately above. Phase 32 is the
+minimum precisely because it places the state cells in the lines the pixel
+loop's three streams disturb *least*, so the cells largely survive the pixel
+loop and the second read was already a cache hit. Removing a hit buys nothing
+in a model that charges bus traffic. The 9.7 ms range of that scan is the
+measure of what the conflict costs when the phase is wrong; at the right phase
+it is already paid down.
+
+**So the 110.88 ms is not chain-cell read traffic**, and the next attempt on
+this term should not assume it is. What remains named and untested inside the
+row body: four write-through stores per row (`raster_ul`, `raster_vl`,
+`raster_lvl`, `raster_rows` -- the 68030 data cache is write-through, so these
+reach memory whatever the phase), the memory-indirect `jmp ([raster_span_entry])`,
+and instruction fetch across a 234-byte hot path that has only 22 bytes of
+headroom left. Item 11's per-row ceil incrementalization is **not** a candidate
+here for a different reason: it removes arithmetic, and 2.4a's core charges
+instruction execution nothing, so it would measure as zero regardless of what
+it is worth on a Falcon.
+
 ## 4. Work already assigned to the DSP
 
 The current DSP program keeps the static vertex mesh, the packed triangle
@@ -5166,6 +5237,17 @@ The open roadmap, in recommended order (expected effects from the section
    CLUT read and word framebuffer write are one aligned bus cycle each.  **Do
    not expect a 3.9-sized result on the data side** -- that loop was 552 bytes
    against a 256-byte cache and could be made to fit; this working set cannot.
+   **Seventh pass, on the row walk: one confirmation and one rejection
+   (3.13).**  The split is re-taken at 110.88 / 68.45 / 61.32 ms;
+   `RASTER_STATE_PHASE = 32` is re-scanned and survives at the new CLUT phase
+   (9.7 ms range across the period); and hoisting the three chain-cell RMWs to
+   their load sites -- predicted ~17 ms from removing 37,317 accesses per frame
+   -- measured **+0.09 ms and was reverted**.  The reason is worth carrying
+   forward: at the tuned phase those cells are already cache-RESIDENT across
+   the pixel loop, so the second access was a hit, and the row walk is
+   therefore **not** chain-cell read traffic.  The untested remainder is the
+   four write-throughs per row, the memory-indirect span-entry jump, and
+   instruction fetch across a hot path with 22 bytes of headroom.
 12. Cross-frame pipelining. **Stage 1 done, stage 2 measured and rejected.**
    Stage 1 sends frame N+1's animation after frame N is fully unpacked and
    defers the FINISH ack to the next slot's `dsp_packets_begin`, so the
