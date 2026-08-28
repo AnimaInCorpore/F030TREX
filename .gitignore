@@ -17,3 +17,9 @@ __pycache__/
 
 # announcement draft, kept locally
 forum-post.txt
+
+# Hatari measurement harness: one directory per configuration, each holding an
+# 8.3-named .TOS, its .lod and the run's dumps plus emulator/debugger logs.
+# Machine-local and large; every figure it produced is reproducible from the
+# commands recorded in OPTIMIZATION.md.
+hatari_runs/
