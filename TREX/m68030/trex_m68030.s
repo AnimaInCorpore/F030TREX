@@ -534,19 +534,25 @@ OCCL_RECORD_BYTES	= 48
 ; its value with the retired DSP_CMD_LOAD_UVS above, which no longer has a
 ; handler.
 ;
-; Wire format, always exactly two words each way:
+; Wire format, two words in each way:
 ;   host -> DSP : 10, mode
 ;   DSP  -> host: DSP_ACK_PREPASS, N_s        (N_s = $ffffff on overflow)
 ; Mode 3 is accepted by the DSP as a second run-now selector for legacy
 ; measurement binaries, but returns only the fixed two-word acknowledgement.
 ;
 ; Modes: 0 = disarm, 1 = arm every following FINISH (sticky), 2/3 = compute
-; now.  Every mode returns the same fixed two-word acknowledgement.
+; now.  Modes 0-3 return the same fixed two-word acknowledgement.  Mode 4
+; is the diagnostic counter readout: it computes nothing and replies
+; DSP_ACK_PREPASS plus the six per-run counters of the LAST run (stamp
+; calls, stamped cells, query kills, dirty merges, query cells visited,
+; stamp cells visited) -- seven words, read only by this measurement build.
 DSP_CMD_PREPASS		= 10
 DSP_ACK_PREPASS		= $0070000f
 PREPASS_MODE_DISARM	= 0
 PREPASS_MODE_ARM	= 1
 PREPASS_MODE_RUN	= 2
+PREPASS_MODE_STATS	= 4
+PREPASS_STATS_REPLY_LONGS	= 7
 ; N_s sentinel the DSP reports when the classification exceeded its 723-entry
 ; capacity.  The prepass then leaves its kill bitmap zeroed, so the frame is
 ; bit-identical to one without a prepass -- it is counted, not repaired.
@@ -554,8 +560,10 @@ PREPASS_OVERFLOW_MARK	= $00ffffff
 ; Entry packing, mirrored from the DSP side.  Bucket is 11 bits inside a
 ; 12-bit field; the mask is the full field so a stray bit 11 is caught rather
 ; than masked away.
-; Magic plus seven counters, written next to render_stats.res.
-PREPASS_STATS_LONGS	= 9
+; Magic, the seven campaign counters, then the six cumulative diagnostic
+; sums and two per-run maxima appended by the 'PRE1' revision -- written
+; next to render_stats.res.
+PREPASS_STATS_LONGS	= 17
 	endc
 
 O3D_HEADER_BYTES	= 24
@@ -927,10 +935,10 @@ trex_write_render_stats
 	; Prepass campaign counters, in their own file for the same reason
 	; val_stats.res exists: render_stats.res is a positional format with a
 	; decoder and a baseline archive behind it, and a measurement-only
-	; build has no business widening it by nine longwords.
+	; build has no business widening it by seventeen longwords.
 	ifd	TREX_PREPASS
 	lea	prepass_stats_buffer,a0
-	move.l	#$50524530,(a0)+		; 'PRE0'
+	move.l	#$50524531,(a0)+		; 'PRE1'
 	move.l	stat_frames,(a0)+
 	move.l	stat_t_prepass,(a0)+
 	move.l	prepass_run_count,(a0)+
@@ -945,6 +953,16 @@ trex_write_render_stats
 	; This counter is the only thing that separates that from the real
 	; result, so it is written out and the decoder gates on it.
 	move.l	prepass_fail_count,(a0)+
+	; 'PRE1' extension: the six cumulative diagnostic sums (arm-2 runs
+	; only) and the two per-run maxima -- OPTIMIZATION.md 2.3j.
+	move.l	prepass_c_stamp_calls,(a0)+
+	move.l	prepass_c_stamp_cells,(a0)+
+	move.l	prepass_c_kills,(a0)+
+	move.l	prepass_c_merges,(a0)+
+	move.l	prepass_c_query_cells,(a0)+
+	move.l	prepass_c_stamp_visits,(a0)+
+	move.l	prepass_stamp_cells_max,(a0)+
+	move.l	prepass_kills_max,(a0)+
 	Fcreate	prepass_stats_path,#0
 	tst.l	d0
 	bmi	.trex_prepass_done
@@ -4814,6 +4832,47 @@ prepass_send_mode
 	moveq	#0,d0
 	rts
 
+; Fetch the six diagnostic counters of the last prepass run (mode 4) and
+; accumulate them on the host.  Untimed on purpose: stat_t_prepass keeps its
+; recorded meaning, and this exchange is measurement traffic, not prepass
+; cost.  A wrong ack lands in the same fail counter the campaign gates on.
+; Clobbers D0/D1/A0/A1/A5.
+prepass_read_stats
+	move.l	dsp_animation_tx_ptr,a5
+	move.l	#DSP_CMD_PREPASS,(a5)
+	move.l	#PREPASS_MODE_STATS,4(a5)
+	move.l	a5,a0
+	moveq	#2,d0
+	lea	prepass_stats_rx,a1
+	moveq	#PREPASS_STATS_REPLY_LONGS,d1
+	bsr	dsp_block_handshake
+	cmpi.l	#DSP_ACK_PREPASS,prepass_stats_rx
+	beq	.prepass_stats_ok
+	addq.l	#1,prepass_fail_count
+	rts
+.prepass_stats_ok
+	move.l	prepass_stats_rx+4,d0
+	add.l	d0,prepass_c_stamp_calls
+	move.l	prepass_stats_rx+8,d0
+	add.l	d0,prepass_c_stamp_cells
+	cmp.l	prepass_stamp_cells_max,d0
+	bls	.prepass_stats_cells_ok
+	move.l	d0,prepass_stamp_cells_max
+.prepass_stats_cells_ok
+	move.l	prepass_stats_rx+12,d0
+	add.l	d0,prepass_c_kills
+	cmp.l	prepass_kills_max,d0
+	bls	.prepass_stats_kills_ok
+	move.l	d0,prepass_kills_max
+.prepass_stats_kills_ok
+	move.l	prepass_stats_rx+16,d0
+	add.l	d0,prepass_c_merges
+	move.l	prepass_stats_rx+20,d0
+	add.l	d0,prepass_c_query_cells
+	move.l	prepass_stats_rx+24,d0
+	add.l	d0,prepass_c_stamp_visits
+	rts
+
 ; One-off arming, called from trex_init.  Only arm 1 arms the DSP; every other
 ; arm explicitly disarms it, so a binary switched from 1 to 0 by a byte patch
 ; does not inherit a sticky flag from a previous run's DSP state.
@@ -4849,6 +4908,12 @@ prepass_frame_call
 	bsr	prepass_send_mode
 	TimeAdd	stat_mark_prepass,stat_t_prepass
 	addq.l	#1,prepass_run_count
+	; Arm 2 only: collect the run's diagnostic counters, outside the
+	; timed bracket.  Arm 3 reaches here too but never ran a prepass, so
+	; there is nothing to read.
+	cmpi.l	#2,prepass_arm
+	bne	.prepass_call_done
+	bsr	prepass_read_stats
 .prepass_call_done
 	movem.l	(sp)+,d0-d7/a0-a6
 	rts
@@ -5055,6 +5120,27 @@ prepass_arm
 ; arming time would be erased before the first frame -- exactly the failure
 ; the counter exists to catch.
 prepass_fail_count
+	dc.l	0
+
+; Cumulative sums of the DSP's six per-run diagnostic counters (PREPASS
+; mode 4), plus per-run maxima for the two that decide the stamp question.
+; Outside stat_block for prepass_fail_count's reason: they accumulate across
+; the whole run and must survive the one-time block clear.
+prepass_c_stamp_calls
+	dc.l	0
+prepass_c_stamp_cells
+	dc.l	0
+prepass_c_kills
+	dc.l	0
+prepass_c_merges
+	dc.l	0
+prepass_c_query_cells
+	dc.l	0
+prepass_c_stamp_visits
+	dc.l	0
+prepass_stamp_cells_max
+	dc.l	0
+prepass_kills_max
 	dc.l	0
 
 prepass_stats_path
@@ -6542,6 +6628,11 @@ occl_frame_dropped_mark
 ;
 prepass_stats_buffer
 	ds.l	PREPASS_STATS_LONGS
+
+; Mode-4 reply landing zone: ack plus six counters.  dsp_rx_buffer is two
+; longs and stays that way -- every other command's reply fits it.
+prepass_stats_rx
+	ds.l	PREPASS_STATS_REPLY_LONGS
 	endc
 
 	ifd	TREX_FPS

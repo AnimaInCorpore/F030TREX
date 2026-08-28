@@ -1432,6 +1432,95 @@ class-only experiment did not earn its external-memory cost.  Any later
 occlusion work must use a substantially different coverage or ordering
 strategy, and compare yield only between equal-frame pairs.
 
+### 2.3j The sweep, instrumented -- why the yield is zero, and the defect the counters caught
+
+2.3i ended with "a substantially different coverage or ordering strategy" and
+no mechanism.  Before building any candidate, the sweep itself was
+instrumented: six per-run counters in the previously unused prepass status
+tail (`X:$3FFA-$3FFF`, `prepass_status+2..+7`), zeroed by every run and read
+out by the new `CMD_PREPASS` **mode 4** (reply: `ACK_PREPASS` plus the six
+words; modes 5-7 alias it; nothing is computed).  The counters are stamp
+calls, stamped cells, query kills, dirty merges, query cells visited, and
+stamp cells visited -- the last computed at stamp entry as ncx*nrows rather
+than in the cell loop, since that walk has no early exit.  The
+`-DTREX_PREPASS` host reads mode 4 after each arm-2 run, outside the
+`stat_t_prepass` bracket, and writes the cumulative sums plus per-run maxima
+of stamped cells and kills into `prep_sta.res`, whose magic moves to `PRE1`:
+magic, frames, t_prepass, runs, surv_last, surv_max, overflow, arm, fail,
+then the six sums, then the two maxima -- 17 longs.  The counter code costs
+57 P words (5 of them in the query's inner loop) and is present in every
+build; arms 0/1/3 never issue mode 4.
+
+The first instrumented run measured the sweep doing something the sorted
+list makes impossible, which is the second thing this section records.
+Corrected emulator, `--mmu true`, arm-2, 11,500 VBLs, frame-100 `fb.res`
+reproducing `d89958b3…3d16`, zero overflow, zero protocol failures; per-frame
+values are the sums divided by the runs:
+
+| per frame | pre-fix (346 fr) | **post-fix (353 fr)** |
+|---|---:|---:|
+| stamp calls (qualified visible survivors) | 851.0 | 842.8 |
+| stamp cells visited | 5,131.6 | 5,129.5 |
+| **stamp cells actually sealed** | **59.0** | **60.9** |
+| query cells visited | 968.5 | 954.3 |
+| query kills | 1.38 | 1.10 |
+| dirty merges | **245.6** | **7.5** |
+| best frame: stamped cells / kills | 194 / 31 | 194 / 31 |
+
+**The defect: 245.6 dirty merges per run against a sorted list's possible
+63.**  The sweep's class-change compare loaded the packed entry, `tfr`red it
+to B and masked with `AND` -- but AND is a 24-bit operation that clears only
+B1, while the full-width `CMP` against the previous class compares all 56
+bits.  Entry bit 23 is triangle-index bit 11, so for the 676 triangles with
+indices 2,048-2,723 the `TFR` had copied a $FF sign extension into B2, the
+compare could never match, and every survivor among them spuriously took the
+class-change path and merged pending coverage mid-class.  That is 2.3f
+defect 2's sign-extension trap in compare form.  Beyond the wasted 112-word
+merge walks, a mid-class merge is an ordering-soundness hole: it lets a
+same-class, possibly farther triangle's coverage seal against a nearer
+victim.  No gated frame ever showed a wrong kill -- the seal is too sparse
+to reach the hazard -- but the fix is one word (`move b1,b` after the AND
+rebuilds the clean extension) and it is in.  Under the standard harness form
+-- same host binary, only the `.lod` swapped -- the fix moved the
+freestanding instrumented prepass from 114.36 to **105.24 ms/frame**
+(-9.1 ms, and 353 frames complete against 346 in the same VBL budget).
+Neither figure is comparable to 2.4b's 117.70: this host binary and `.lod`
+both differ from that pair, so only the delta is a result.  Kills dropped
+from 1.38 to 1.10 per frame -- the removed kills are ones the premature
+merges had enabled, i.e. exactly the unsound class.
+
+**The finding item 19 needed: the stamp is the binding constraint, and it is
+structural.**  843 qualified visible survivors attempt to stamp every frame;
+they visit 5,130 cells and seal 61 -- 1.2% of visits, and at most 7% of the
+attempting triangles can have sealed even one cell.  The mesh draws ~29
+pixels per packet (2.4c) against 64-pixel cells, and triangles tile
+edge-to-edge, so a cell straddling any interior mesh edge is fully inside
+NEITHER neighbour: single-triangle full-cell coverage is rare at 8x8 and
+does not compose across shared edges at any cell size.  The consequences are
+all in the table: the seal stays so sparse that the query's
+first-unsealed-cell exit fires almost immediately (954 query cells for ~900
+average survivors, about 1.07 cells per query), only ~7.5 of the 64 classes
+carry any pending coverage per frame, and 1.1 triangles die.  This is the
+mechanical explanation for both 2.3i null results -- 4x4 cells and 128
+classes each refine a mask that almost nothing can write into -- and it
+disqualifies every remaining refinement of the current stamp.  A yield
+mechanism has to make coverage compose across triangles (the offline model's
+per-pixel union, reachable only at pixel-exact granularity, e.g. row-run
+stamping with the host's own fill rule) or make single triangles big enough
+to stamp (authored interior proxy occluders).  Anything else re-measures
+zero.
+
+Gates for both the instrumentation and the fix, all on the corrected
+emulator with `--mmu true` and fresh result files: DOSBox assembly 0/0;
+P extent `$094B` instrumented, `$094C` with the fix, against the `$09BF`
+ceiling; plain-build frame-100 `fb.res` at `d89958b3…3d16` with the new
+`.lod`; arm-2 frame-100 identical; armed and disarmed hold runs (dump frame
+291, single-byte-verified patches at the re-derived offsets) both at
+`e66d4d43…b00486` with zero failures -- armed kills stay invisible across
+the fix.  The 441/437-frame pixel counters (17,534,226 disarmed,
+17,318,713 armed) are not an equal-frame pair and are recorded only as the
+usual armed-writes-fewer direction check.
+
 ### 2.4 The occlusion binary is not a timing source
 
 `trex_occl.tos` moves text and adds ~371 KB of BSS, and it stores an owner id
@@ -5515,6 +5604,20 @@ The open roadmap, in recommended order (expected effects from the section
     built.  Until then it costs 3.0 ms and may stay.  This also sharpens what
     a yield-raising experiment has to beat: not 3 ms of frame time, but the
     window capacity it denies to a much larger optimization.
+
+    **The yield question is now answered mechanically (2.3j).**  Six per-run
+    counters in the status tail, read by the new PREPASS mode 4, measured the
+    stamp sealing 61 of 5,130 visited cells per frame (1.2%), queries exiting
+    at their first cell, and 1.1 kills per frame: the single-triangle
+    full-cell stamp cannot compose coverage across the mesh's shared edges,
+    which is why 2.3i's finer cells and finer classes both measured zero.
+    Raising the yield requires pixel-exact coverage union or authored proxy
+    occluders; every refinement of the current stamp is disqualified.  The
+    same counters caught a latent sweep defect -- the class-change compare
+    read B2's sign extension of entry bit 23, so the 676 triangles with
+    indices >= 2,048 merged pending coverage mid-class, an ordering-soundness
+    hole and ~9 ms/frame of waste -- fixed one word (`move b1,b`), all gates
+    byte-identical, dirty merges 245.6 -> 7.5 per frame.
 20. Delta clearing instead of the full-window clear. **Built, measured,
     REJECTED — see section 2.5.** It saves 8.0 ms in the clear and costs
     14.4 ms in bookkeeping, a net +6.1 ms, plus 13.5 ms of layout cost merely

@@ -84,7 +84,9 @@ The `-DTREX_PREPASS` overlay uses the same X window before BUILD traffic:
 `X:$39DF-$3F15` is the 1,335-word phase-local order list, `X:$3F16-$3F85`
 holds the two 56-word coverage masks (seal, then pending), `X:$3F86-$3FF7`
 is the 114-word full-mesh kill bitmap (one bit per 2,724 triangles), and
-`X:$3FF8-$3FFF` holds prepass status; the four allocations fill the window
+`X:$3FF8-$3FFF` holds prepass status — `+0/+1` are BUILD's streaming kill
+cursor, `+2..+7` the six per-run diagnostic counters mode 4 reads out; the
+four allocations fill the window
 to the top of physical X memory exactly. The order list overlays the dead
 UV/output window deliberately: the occlusion sweep consumes it before the
 first BUILD chunk, so no sorted-list storage is needed after that point.
@@ -123,10 +125,11 @@ disarmed captures are byte-identical at frame 100 and at hold frame 291,
 with zero prepass protocol failures or capacity overruns across the hold.
 
 The frontend reserves `X:$0000-$3DFF` and `Y:$0000-$3EF7`. The full-mesh
-program occupies P from `$0040` and ends at `$0912`, leaving the words at
-`$0913-$09BF` free before the Y indices at `$09C0` — 173 words, after
+program occupies P from `$0040` and ends at `$094C`, leaving the words at
+`$094D-$09BF` free before the Y indices at `$09C0` — 115 words, after
 `command_get_vertices` was restored for the span validator at a cost of
-seventeen (`OPTIMIZATION.md` 3.12). This bound has to
+seventeen (`OPTIMIZATION.md` 3.12) and the 2.3j diagnostic counters, their
+mode-4 readout and the flow-compare sign fix took 58 more. This bound has to
 be checked after every DSP change, because an overflow overwrites the index
 list without an assembler error -- recompute it from the assembled `.lod`
 rather than trusting this figure, with the check command in the end-of-file
@@ -187,7 +190,9 @@ GET_TRIANGLES:
            survivor_count * 18-word packed span record
 
 PREPASS:
-    cmd, mode -> ACK_PREPASS, survivor_count
+    cmd, mode -> ACK_PREPASS, survivor_count       (modes 0-3)
+    cmd, 4    -> ACK_PREPASS, stamp_calls, stamped_cells, query_kills,
+                 dirty_merges, query_cells_visited, stamp_cells_visited
 ```
 
 The light payload is six Q1.23 direction-and-intensity vectors (three source
@@ -214,9 +219,14 @@ corner-normal table displaced the old resident UV table. The tail therefore
 does scale with chunk size even though the header does not.
 
 `PREPASS` mode 0 disarms, 1 arms the FINISH hook, and 2/3 run the prepass
-immediately. Both acting modes return only the fixed two-word acknowledgement.
-The pass sorts the full 2,724-triangle survivor list into conservative
-16-bucket depth classes, queries sealed 8x8-cell coverage, and stamps only qualified opaque
+immediately. All four return only the fixed two-word acknowledgement.
+Mode 4 (5-7 alias it) computes nothing and returns the six diagnostic
+counters the last run left in `prepass_status+2..+7` -- stamp calls, stamped
+cells, query kills, dirty merges, query cells visited, stamp cells visited
+-- which every run resets; the `-DTREX_PREPASS` host reads them per frame in
+arm 2 and writes the sums to `prep_sta.res` (`OPTIMIZATION.md` 2.3j).
+The pass sorts the full 2,724-triangle survivor list into 64 conservative
+32-bucket depth classes, queries sealed 8x8-cell coverage, and stamps only qualified opaque
 triangles when all four cell corners are inside the front-facing triangle.
 BUILD skips the resulting global kill flags. Command code 10 was `LOAD_UVS`
 until the corner-normal table displaced the resident UV table that command
@@ -266,7 +276,7 @@ outstanding. The 128-class/8x8-cell prepass probe was assembler-checked and
 framebuffer-gated, then rejected: on an equal 246-frame Hatari sample it saved
 only 2,516 raster writes (0.030%). The active 64-class build keeps its
 counters on-chip at `Y:$0096-$00D5`; the resident indices start at `Y:$09C0`
-and the last program word is `P:$0901`, below the `$09BF` ceiling. The
+and the last program word is `P:$094C`, below the `$09BF` ceiling. The
 standard host build has
 `prepass_arm = 1`, so FINISH runs the prepass inline
 and it stays armed through the synthetic hold. With TOS 4.02, Falcon DSP

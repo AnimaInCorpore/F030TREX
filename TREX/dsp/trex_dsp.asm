@@ -2348,6 +2348,12 @@ lookup_projected_z
 command_prepass
 	jsr	<receive_word
 
+	; Mode 4 (bit 2): diagnostic counter readout, checked first so the
+	; bit-0/1 decode below keeps its shape.  Replies ACK_PREPASS plus the
+	; six status-cell counters of the last run and computes nothing;
+	; 5-7 alias it.
+	jset	#2,x0,prepass_stats_reply
+	nop
 	; Mode word.  Bit 1 separates the two acting modes (2 = run now,
 	; 3 = dump) from the two arming modes (0 = disarm, 1 = arm), and bit 0
 	; separates the pair, so the decode needs no compare constants.
@@ -2379,6 +2385,24 @@ prepass_ack_exit
 	jsr	<send_word
 	jmp	<main_loop
 
+; Mode 4: send ACK_PREPASS plus the six diagnostic counters the last run left
+; in prepass_status+2..+7 -- stamp calls, stamped cells, query kills, dirty
+; merges, query cells visited, stamp cells visited, in that cell order.
+; Reading is non-destructive; prepass_run zeroes the cells at its next start.
+; The DO closes on a NOP because JSR may not sit at a hardware loop's last
+; address.
+prepass_stats_reply
+	move	#ACK_PREPASS,x0
+	jsr	<send_word
+	move	#prepass_status+2,r0
+	nop
+	do	#6,prepass_stats_send
+	move	x:(r0)+,x0
+	jsr	<send_word
+	nop
+prepass_stats_send
+	jmp	<main_loop
+
 prepass_run
 	; make_triangle_zkey bumps y:triangles_processed, which CMD_GET_STATUS
 	; reports.  Save it here and restore it on every exit path, otherwise
@@ -2398,6 +2422,11 @@ prepass_run
 	nop
 	rep	#PREPASS_CNT_COUNT
 	move	a1,y:(r0)+
+	; The six diagnostic counters in the status tail restart with them.
+	move	#prepass_status+2,r0
+	nop
+	rep	#6
+	move	a1,x:(r0)+
 	jsr	<prepass_clear_kill
 
 	; -------------------------------------------------------------------
@@ -2705,6 +2734,16 @@ prepass_occlusion_loop
 	move	#>PREPASS_ENTRY_BUCKET_MASK,x0
 	tfr	a,b
 	and	x0,b
+	; AND is a 24-bit operation: it clears B1 to the class but leaves B2
+	; holding the sign extension of entry bit 23, which is set exactly
+	; when the packed triangle index is 2,048 or higher.  The full-width
+	; CMP below then never matched for those 676 triangles, so every one
+	; of their survivors spuriously took the class-change path and merged
+	; pending coverage mid-class -- the 2.3f defect-2 sign-extension trap
+	; in compare form, found by the 2.3j merge counter (245.6 "dirty
+	; merges" per run against a sorted list's possible 63).  Reloading B
+	; from B1 rebuilds the clean extension: the class is at most 63.
+	move	b1,b
 	rep	#TRI_INDEX_BITS
 	lsr	a
 	move	a1,y:<prepass_occl_index
@@ -2786,6 +2825,11 @@ prepass_query_row
 	move	r4,r0
 	move	y:<prepass_occl_b0,x1
 	do	y:<prepass_occl_ncx,prepass_query_row_end
+	; Diagnostic: one query cell visited.  A is rebuilt from scratch on
+	; the very next instruction, so the bump costs no live register.
+	move	x:>prepass_status+6,a
+	add	y0,a
+	move	a1,x:>prepass_status+6
 	clr	a
 	move	x:(r0),a1
 	and	x1,a
@@ -2811,6 +2855,11 @@ prepass_query_row_end
 	move	x:(r0),a
 	or	x1,a
 	move	a1,x:(r0)
+	; Diagnostic: one triangle killed by the seal query.  Y0 still holds
+	; the walk's 1 -- prepass_bit_address leaves it untouched by contract.
+	move	x:>prepass_status+4,a
+	add	y0,a
+	move	a1,x:>prepass_status+4
 	jmp	<prepass_occlusion_next
 
 prepass_query_visible
@@ -2948,6 +2997,25 @@ prepass_stamp
 	move	#>1,a
 	move	a1,y:<prepass_occl_dirty
 
+	; Diagnostic counters: one stamp call, and the ncx*nrows cells the walk
+	; below will visit -- it has no early exit, so the product is the exact
+	; visit count.  The small-integer MPY leaves 2*n*m entirely in B0 (B1
+	; is only its sign), so one ASR and the B0 read recover the product,
+	; the same A0/B0 idiom the stamp itself documents.  A still holds the
+	; dirty flag's 1 and feeds the first bump; B, X0, Y0 and X1 are all
+	; overwritten by the edge setup before it reads them.
+	move	x:>prepass_status+2,b
+	add	a,b
+	move	b1,x:>prepass_status+2
+	move	y:<prepass_occl_ncx,x0
+	move	y:<prepass_occl_nrows,y0
+	mpy	x0,y0,b
+	asr	b
+	move	b0,x1
+	move	x:>prepass_status+7,b
+	add	x1,b
+	move	b1,x:>prepass_status+7
+
 	; Per-edge setup: doubled gradients, per-cell and per-row steps, and
 	; the anchored accumulator seeds.
 	move	#5,m3
@@ -3066,6 +3134,11 @@ prepass_stamp_row_seeds
 	move	x:(r0),b
 	or	x1,b
 	move	b1,x:(r0)
+	; Diagnostic: one cell actually stamped.  Y0 has held 1 since the row
+	; setup; B is reloaded at the skip label either way.
+	move	x:>prepass_status+3,b
+	add	y0,b
+	move	b1,x:>prepass_status+3
 prepass_stamp_skip
 	; Same wrap rule as the query walk.
 	move	x1,b
@@ -3095,6 +3168,13 @@ prepass_merge_masks
 	jeq	<prepass_merge_clean
 	clr	a
 	move	a1,y:<prepass_occl_dirty
+	; Diagnostic: one dirty merge.  X0 and B are dead here -- the loop
+	; below overwrites X0 and never reads B; the sweep's caller rewrites
+	; both before their next read.
+	move	x:>prepass_status+5,b
+	move	#>1,x0
+	add	x0,b
+	move	b1,x:>prepass_status+5
 	move	#prepass_scratch,r0
 	move	#prepass_scratch+OCCL_MASK_WORDS,r2
 	move	#>OCCL_MASK_WORDS,x0
@@ -3183,6 +3263,10 @@ prepass_scratch
 	ds	OCCL_MASK_WORDS*2
 prepass_kill
 	ds	PREPASS_KILL_WORDS
+; +0/+1 are BUILD's streaming kill cursor (word pointer, one-hot bit).
+; +2..+7 are the per-run diagnostic counters, zeroed by prepass_run and read
+; out by PREPASS mode 4: stamp calls, stamped cells, query kills, dirty
+; merges, query cells visited, stamp cells visited.
 prepass_status
 	ds	PREPASS_STATUS_WORDS
 
@@ -3564,7 +3648,7 @@ prepass_tp_save
 ; overwritten by the next upload and reports garbage, which cost this stage
 ; one full round of contradictory measurements once.
 ;
-; The current full-mesh program ends at P:$0901, leaving P:$0902-$09BF free
+; The current full-mesh program ends at P:$094C, leaving P:$094D-$09BF free
 ; before the resident index list.  Keep the "<" prefix on jumps and the short
 ; Y-scalar forms on any code added later, or the program will overwrite the
 ; index list without an assembler error.
