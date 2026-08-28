@@ -123,8 +123,10 @@ disarmed captures are byte-identical at frame 100 and at hold frame 291,
 with zero prepass protocol failures or capacity overruns across the hold.
 
 The frontend reserves `X:$0000-$3DFF` and `Y:$0000-$3EF7`. The full-mesh
-program occupies P from `$0040` and ends at `$0901`, leaving the words at
-`$0902-$09BF` free before the Y indices at `$09C0`. This bound has to
+program occupies P from `$0040` and ends at `$0912`, leaving the words at
+`$0913-$09BF` free before the Y indices at `$09C0` — 173 words, after
+`command_get_vertices` was restored for the span validator at a cost of
+seventeen (`OPTIMIZATION.md` 3.12). This bound has to
 be checked after every DSP change, because an overflow overwrites the index
 list without an assembler error -- recompute it from the assembled `.lod`
 rather than trusting this figure, with the check command in the end-of-file

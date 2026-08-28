@@ -502,7 +502,7 @@ DSP_TRIANGLE_CHUNK_TX_WORDS	= 3+(DSP_TRIANGLE_CHUNK*2)
 ; Host-resident packed UV pairs, two longs per triangle: since Gouraud they
 ; are no longer uploaded in one block but shipped per BUILD chunk.
 
-VAL_STATS_LONGS		= 26
+VAL_STATS_LONGS		= 27
 
 	ifd	TREX_OCCL
 ; Occlusion measurement build (-DTREX_OCCL, target trex_occl.tos).  Everything
@@ -913,6 +913,10 @@ trex_write_render_stats
 .copy_val_counts
 	move.l	(a1)+,(a0)+
 	dbra	d0,.copy_val_counts
+	; Appended field 26: 1 when the DSP refused GET_VERTICES, so the run had
+	; no reference to compare against.  Zero records and zero mismatches then
+	; mean "did not run", not "passed" -- read this one first.
+	move.l	val_no_vertices,(a0)+
 	Fcreate	val_stats_path,#0
 	tst.l	d0
 	bmi	.trex_val_done
@@ -1838,6 +1842,17 @@ dsp_packets_begin
 	tst.l	span_validate_enabled
 	beq	.begin_no_prefetch
 	bsr	fetch_projected_vertices
+	tst.l	d0
+	bne	.begin_no_prefetch
+	; The DSP refused GET_VERTICES.  Without projected vertices
+	; compute_span_reference calls every triangle degenerate, and the
+	; validator then reports one mismatch per record while comparing nothing
+	; -- a 100% failure verdict against a DSP that is fine, which is exactly
+	; how the retirement of command 3 stayed invisible (section 3.12).  Say
+	; what actually happened and validate nothing, rather than lie loudly.
+	; span_validate_enabled STAYS set: it is what gates the report, and a
+	; run that cannot validate still has to write the file that says so.
+	move.l	#1,val_no_vertices
 .begin_no_prefetch
 	tst.l	dsp_triangle_indices_loaded
 	beq	.begin_done
@@ -2715,6 +2730,13 @@ compute_span_reference
 ; DSP arithmetic and the wire pack/unpack round trip in one stroke.
 ; Preserves all registers.
 validate_span_record
+	; No projected vertices means no reference to compare against.  Counting
+	; anything here is worse than counting nothing: compute_span_reference
+	; would call every triangle degenerate and the report would read as a
+	; total DSP failure (section 3.12).  Leave every counter at zero and let
+	; val_no_vertices carry the verdict.
+	tst.l	val_no_vertices
+	bne	.val_no_reference
 	movem.l	d0-d7/a0-a6,-(sp)
 	move.l	d1,d7				; source index
 	move.l	a2,a6				; record fields
@@ -2755,6 +2777,7 @@ validate_span_record
 	blt	.val_compare_loop
 .val_record_done
 	movem.l	(sp)+,d0-d7/a0-a6
+.val_no_reference
 	rts
 
 ; Input d0 = vertex index.  Output d0 = projected x, d1 = projected y.
@@ -6099,6 +6122,8 @@ val_chain_tmp
 	ds.l	1
 val_ref
 	ds.l	17
+val_no_vertices
+	ds.l	1
 val_records
 	ds.l	1
 val_mismatch_total

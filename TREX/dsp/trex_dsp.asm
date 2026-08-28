@@ -328,13 +328,15 @@ dispatch_command_low
 	; 13 = LOAD_ANIMATION_GAIT, 15 = FINISH_ANIMATED_FRAME, $7f = RESET.
 	jclr	#1,x0,dispatch_odd_bit1_clear
 	nop
-	; Command 3 was GET_VERTICES.  The span-setup record retired it from the
-	; normal path (section 4.1c) and the occlusion stage needed its program
-	; words, so it now answers ERR_BAD_COMMAND.  That is deliberate: a host
-	; that still calls it -- span_validate_enabled, or the projected-vertex
-	; fallback -- gets a wrong ack and takes its shadow path instead of
-	; deadlocking on a reply that never comes.
-	jclr	#2,x0,dispatch_bad_command
+	; Command 3 is GET_VERTICES.  The span-setup record retired it from the
+	; NORMAL path (section 4.1c) and the occlusion stage took its program
+	; words, after which it answered ERR_BAD_COMMAND.  The intent was that a
+	; host still calling it would take its shadow path rather than deadlock,
+	; and the shadow path is exactly what made this a silent failure: the
+	; span validator got a failed ack, kept an all-zero projected-vertex
+	; buffer, and then reported every record as a mismatch against a DSP that
+	; was fine.  Restored in section 3.12; the validator is the only caller.
+	jclr	#2,x0,command_get_vertices
 	nop
 	jclr	#3,x0,command_load_normals
 	nop
@@ -716,10 +718,35 @@ finish_no_prepass
 	jsr	<send_word
 	jmp	<main_loop
 
-; command_get_vertices lived here until the occlusion stage claimed its
-; twenty-one program words.  It streamed the whole projected-vertex array back
-; to the host, which the span-setup record made unnecessary on the normal path
-; in section 4.1c; the dispatcher now routes command 3 to dispatch_bad_command.
+; Restored here after the occlusion stage claimed its twenty-one program words
+; (section 3.12).  The span-setup record made it unnecessary on the NORMAL path
+; in 4.1c, but span_validate_enabled and the projected-vertex fallback are still
+; callers, and retiring it turned 4.1b's regression gate into a tool that
+; reported 100% mismatches while comparing nothing.  It runs only when the host
+; sends command 3, so the shipping frame pays program words and no cycles.
+command_get_vertices
+	move	#ACK_VERTICES,x0
+	jsr	<send_word
+	move	y:<vertex_count,x0
+	jsr	<send_word
+	; Four words per vertex, straight out of the projection's own output
+	; array: x, y, z, spare.  That is the stride load_projected_xy and
+	; lookup_projected_z already index at, and the count the host sizes
+	; DSP_VERTEX_OUTPUT_WORDS from -- both sides must agree or the port
+	; deadlocks, exactly as the GET_TRIANGLES word count does.
+	move	y:<vertex_count,a
+	rep	#2
+	asl	a
+	move	a1,x0
+	move	#projected_vertices,r0
+	do	x0,vertex_send_loop
+	move	x:(r0)+,x0
+	jsr	<send_word
+	; JSR may not close a hardware loop; the NOP is the loop's last word.
+	nop
+vertex_send_loop
+	jmp	<main_loop
+
 ; The old prepass ordered-list streamer was removed with the mode-3 dump; the
 ; fixed two-word PREPASS acknowledgement is the only reply path now.
 

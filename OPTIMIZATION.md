@@ -2916,7 +2916,7 @@ document has come to costing a change before building it. The rasterizer moves
 it. 2.4c's split predicted the result too -- it put ~73 ms of host CPU work in
 the packet stage, and this removes about a third of it.
 
-#### The span validator is dead, and it did not die here
+#### The span validator was dead, and it did not die here — repaired in 3.12
 
 `span_validate_enabled` was turned on to exercise the one offset in the
 validator arm that this change moved. It reports **every record as a
@@ -2926,12 +2926,10 @@ all seventeen per-field counts zero -- the signature of every call taking
 degenerate, rather than reaching the field compare.
 
 **Unmodified HEAD does exactly the same thing** (181,601 of 181,601, same
-signature), so this is pre-existing rot and not a consequence of 3.11. It is
-recorded here because two other sections rely on the tool: 4.1b calls it "the
-on-demand field-for-field regression gate" and both 7.4 and roadmap item 15
-name it as the bring-up instrument that will field-compare SSI/DMA-delivered
-records against host-port-delivered ones. **It cannot do that job today**, and
-whoever starts the SSI work needs to repair it first.
+signature), so this is pre-existing rot and not a consequence of 3.11. **Root
+cause and repair are in section 3.12**: the DSP command the validator reads its
+reference vertices from had been retired, so it compared nothing and reported
+everything. With that restored, the same gate runs clean over 167,176 records.
 
 What validates 3.11 in the meantime is the stronger gate anyway: byte-identical
 frame-100 output over 270 frames exercises every survivor's span fields through
@@ -2941,6 +2939,83 @@ proven indirectly: it is the same address as the UV-lookup offset eight bytes
 earlier in the same run of stores, and that one *is* exercised, because the
 uv0/uv1 packs are built from the texture metadata it indexes and the image is
 byte-identical.
+
+### 3.12 The span validator was dead for two epochs -- root cause and repair
+
+Section 3.11 turned `span_validate_enabled` on and found it reporting **every
+record as a mismatch**, on unmodified HEAD as well as on the change under test.
+It is repaired here, and the failure is worth recording in full because of how
+it hid.
+
+**Root cause: the DSP command it depends on was deliberately removed.** The
+validator does not recompute the projection -- it compares the DSP's *span
+setup* against the host's, using **the DSP's own projected vertices** as the
+shared input, which is what makes a mismatch mean "the span arithmetic
+disagrees" rather than "the two projections rounded differently". It gets those
+vertices with `CMD_GET_VERTICES`, command 3.
+
+Section 4.1c retired command 3 from the normal path when the span-setup record
+made it unnecessary, and 2.3's occlusion stage then claimed its twenty-one
+program words; the dispatcher was pointed at `dispatch_bad_command`. The DSP
+source said so plainly and even named the casualty -- *"a host that still calls
+it -- span_validate_enabled, or the projected-vertex fallback -- gets a wrong
+ack and takes its shadow path instead of deadlocking"*. **Taking the shadow
+path is exactly what made it silent.** The chain:
+
+1. `fetch_projected_vertices` sends command 3 and gets `ERR_BAD_COMMAND`.
+2. Its ack test fails, it returns 0, and `dsp_vertex_rx_buffer` stays zero.
+3. `compute_span_reference` reads zero coordinates for all three vertices, so
+   its cross product is zero.
+4. That is the degenerate test, and `validate_span_record`'s degenerate arm
+   counts **one mismatch per record and returns before comparing anything**.
+
+The signature is unmistakable once seen: `val_records` exactly equals
+`val_mismatch_total` (181,601 of 181,601), `val_first_captured` is 0 and all
+seventeen per-field counters are 0 -- a 100% failure verdict in which nothing
+was compared. Any reader would have concluded the DSP was broken.
+
+**The repair, in two parts.**
+
+*Restore the command.* `command_get_vertices` is back on the DSP, streaming
+`vertex_count * 4` words straight out of the projection's own output array at
+the stride `load_projected_xy` and `lookup_projected_z` already index. It costs
+**seventeen program words**: the P extent moves `$0901` -> `$0912` against the
+`$09BF` ceiling, leaving **173 free** where 190 were. It executes only when the
+host sends command 3, which only `span_validate_enabled` and the
+projected-vertex fallback do, so the shipping frame pays the words and no
+cycles. The frame-100 `fb.res` is unchanged (`d89958b3...`) and the frame reads
+506.6 ms against 506.4 -- inside noise, as a command nothing calls should be.
+
+*Make the failure mode loud.* Restoring the command fixes today; the guard
+fixes the class. `val_no_vertices` is a new counter, appended as `val_stats.res`
+field 26 (`VAL_STATS_LONGS` 26 -> 27). When the prefetch fails, the host sets it
+and `validate_span_record` returns immediately without touching a counter, so
+the report reads **0 records, 0 mismatches, no_vertices = 1** -- "did not run",
+which cannot be misread as either "passed" or "the DSP is broken".
+`span_validate_enabled` deliberately stays set, because it is what gates the
+report and a run that cannot validate still has to write the file that says so.
+
+**Verified both ways**, corrected emulator, `--mmu true`:
+
+| Build | `val_records` | `val_mismatch_total` | `val_no_vertices` |
+|---|---:|---:|---:|
+| restored `.lod` | 167,176 | **0** | 0 |
+| HEAD's `.lod`, no command 3 | 0 | 0 | **1** |
+
+**167,176 records at seventeen fields each is 2,841,992 exact field
+comparisons, zero mismatches** -- against the 852,390 recorded in 4.1b when the
+gate last ran clean, and now covering the eighteen-word record and the Gouraud
+level fields that did not exist then.
+
+**What this cost, and the lesson.** The gate was dead across at least the
+Gouraud epoch and the occlusion epoch: 4.1b, 7.4 and roadmap item 15 all
+continued to describe it as available, and item 15 planned to use it as the
+SSI/DMA bring-up instrument. A diagnostic that fails by reporting failure is
+worse than one that fails by refusing to run, because the first is
+indistinguishable from a real defect in the thing it tests. **A retirement note
+that names the callers it breaks is not enough; the callers have to be made to
+say so at runtime.** Nothing here changes rendering, and none of it would have
+been found without turning the tool on for an unrelated change.
 
 ## 4. Work already assigned to the DSP
 
@@ -4854,7 +4929,11 @@ initial plain-word protocol made semantic validation easy; section 4.1d
 records the later fourteen-word packing.
 
 Validated **clean over two full revolutions**: 852,390 exact field
-comparisons, zero mismatches (section 4.1b).  The two constraints called out
+comparisons, zero mismatches (section 4.1b).  Re-validated after 3.12 repaired
+the gate, on the current eighteen-word record with its Gouraud level fields:
+**167,176 records at seventeen fields each, 2,841,992 comparisons, zero
+mismatches.**  Between those two results the gate was dead and reporting 100%
+failure -- see 3.12 before trusting any archived verdict from that span.  The two constraints called out
 before implementation — sign extension of zero-extended 24-bit words, and
 positioning the 48/24 dividends in the accumulator — both proved real; the
 dividend one produced saturated quotients on first contact and is documented
@@ -5132,14 +5211,18 @@ The open roadmap, in recommended order (expected effects from the section
    against host-port-delivered records.  **None of those can be validated in
    Hatari.**
 
-   **The bring-up instrument this item names is broken and must be repaired
-   first.**  Section 3.11 turned `span_validate_enabled` on and found it
-   reporting 100% mismatches on unmodified HEAD while comparing nothing -- every
-   call takes `validate_span_record`'s degenerate early-out.  7.4 and this item
-   both plan to field-compare stream-delivered records against host-port ones
-   "exactly as during the record migration"; that comparison is not currently
-   available, and discovering it during hardware bring-up would be the worst
-   possible time.
+   **The bring-up instrument this item names was broken; it is repaired
+   (3.12).**  3.11 found `span_validate_enabled` reporting 100% mismatches on
+   unmodified HEAD while comparing nothing, because the DSP command supplying
+   its reference vertices had been retired for program words.  Command 3 is
+   back at a cost of seventeen words, the gate runs clean over 167,176 records,
+   and a `val_no_vertices` field now makes the same failure mode announce
+   itself instead of masquerading as a DSP fault.  The field-for-field
+   comparison this item and 7.4 both plan to use for SSI/DMA bring-up --
+   stream-delivered records against host-port-delivered ones, "exactly as
+   during the record migration" -- is therefore available again.  Check
+   `val_no_vertices` first in any bring-up report: zero records with zero
+   mismatches means the gate did not run.
 
    **The scheduling question is now answered, and it clears this item (2.4d).**
    The FINISH window absorbs 97.5% of 117.7 ms of added DSP work, so overlap
@@ -5236,8 +5319,9 @@ The open roadmap, in recommended order (expected effects from the section
     Mode 1 runs in the existing FINISH window and stays armed through both the
     274 authored records and the frontend's continuing gait/turn hold. Modes 2
     and 3 remain fixed two-word run-now commands for measurement. The 64-word
-    counter bank is on-chip at `Y:$0096-$00D5`; the program ends at `P:$0901`,
-    leaving `$0902-$09BF` free before the resident indices at `Y:$09C0`. The X
+    counter bank is on-chip at `Y:$0096-$00D5`; the program ends at `P:$0912`
+    (`$0901` before 3.12 restored `command_get_vertices`), leaving
+    `$0913-$09BF` free before the resident indices at `Y:$09C0`. The X
     overlay ends exactly at
     `X:$3FFF`, and resident Y data ends at `Y:$3FFE`. No LOD-only relocation or
     alternate hardware map is used.
@@ -5317,6 +5401,7 @@ The open roadmap, in recommended order (expected effects from the section
     prepass from 76.76 to a measured **60.28 ms/frame**, which the size
     sites then carried to **57.18** (re-measured, section 2.4b) -- a
     quarter of the stage -- leaving **190 words free** to the `$09BF` ceiling
+    (**173** since 3.12 spent seventeen restoring `command_get_vertices`)
     against 51 when the audit began, at byte-identical output
     throughout.  The
     prepass cost is hidden by the FINISH window today, and every
