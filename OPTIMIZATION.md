@@ -103,10 +103,19 @@ bus-dominated stages the trustworthy ones and the arithmetic-heavy rasterizer
 the least trustworthy. No figure in this document has ever been taken on a
 Falcon.
 
-**The current baseline is section 2.4c's, not the table below.** Every figure
-in this document except 2.4b and 2.4c was taken on a stock Hatari that ran the
-DSP at twice a Falcon's clock (2.4a). Re-measured on the corrected emulator,
-the same binary reads **535.7 ms / 1.867 FPS**, and the whole difference lands
+**The current baseline is 532.6 ms / 1.878 FPS** (section 3.10, corrected
+emulator). Every figure in this document except 2.4b, 2.4c, 2.4d and 3.10 was
+taken on a stock Hatari that ran the DSP at twice a Falcon's clock (2.4a).
+
+The table below is the corrected baseline **at the shipped-then layout**,
+`OPAQUE_CLUT_PHASE = 0`: **535.7 ms / 1.867 FPS**. Section 3.10 later moved the
+word CLUT's data-cache phase to 128 and took the rasterizer to 241.25 ms for a
+532.6 ms frame at byte-identical output. Sections 2.4c and 2.4d were all
+measured at phase 0 and remain internally consistent pairs; subtract 3.1 ms of
+rasterizer to place any of them against the shipped binary.
+
+Re-measured on the corrected emulator, the same binary reads
+**535.7 ms / 1.867 FPS**, and the whole difference from the stock ledger lands
 in one stage:
 
 | Stage | Corrected time per frame | Share of frame |
@@ -1828,12 +1837,14 @@ tested, and none of them killed it.**
   this path.** The 68030 and the DMA channel would contend for ST-RAM, and
   2.4a records that this emulator models no Videl contention either. Hardware
   only; roadmap item 14.
-- **The cold-read bound is a statement about this memory model.** 2.4a notes
-  ST-RAM is modelled without burst, so a line miss fetches 4 bytes rather than
-  16. A real Falcon that bursts would give sequential reads a line-fill benefit
-  the model does not show -- which would help the current path and a DMA'd
-  buffer roughly equally, since a burst rewards sequentiality rather than
-  warmth, but the "approximately zero" is not a Falcon measurement.
+- **The cold-read bound is a statement about this memory model** -- but a
+  better-founded one than first written. 2.4a notes ST-RAM is modelled without
+  burst and flagged that a bursting Falcon would be faster than the model.
+  **The Falcon does not burst** (section 3.10 and its reference): the 68030
+  reaches ST-RAM over a 16-bit bus with no burst support, so a cache line fills
+  a word at a time there too. The emulator is right on this point and the
+  "approximately zero" transfers better than this bullet originally allowed.
+  It remains an emulator result, not a Falcon measurement.
 - The 2.76 FPS ceiling assumes the exposed DSP term goes to zero. Any real
   design leaves some of it, and pays whatever contention costs.
 
@@ -2764,6 +2775,85 @@ moved.  And the resolve slots are refilled every frame before any read, so
 a stale slot cannot survive a mesh or count change; the spare sixth slot is
 for the next candidate (fb_row or the Y flag, should their roundtrip ever
 price in).
+
+### 3.10 The data cache: what it is worth, and the one phase that was never scanned
+
+Section 3.9's series was entirely about the **instruction** cache. 2.4d
+measured the **data** cache for the first time by running the shipping binary
+with `--data-cache false`: the rasterizer goes **244.61 -> 316.53 ms**, so the
+data cache is currently worth **71.9 ms per frame -- 29% of the rasterizer and
+13% of the frame**. This section asks how much of that is recoverable by
+layout, and answers: a little, and now taken.
+
+**Why the data path is the way it is.** The Falcon's 68030 reaches ST-RAM over
+a **16-bit** bus, so a longword access is two bus cycles, and the machine has
+**no burst mode** -- a cache line is filled a word at a time, and the 030's
+16-byte line brings no prefetch benefit. (This also closes 2.4a's open
+question in the emulator's favour: 2.4a noted Hatari fills 4 bytes rather than
+16 and flagged that a bursting Falcon would be faster than the model. The
+Falcon does not burst, so the model is right here and 2.4d's cold-read bound
+transfers better than that caveat allowed.) The consequence is that the only
+data-cache levers are alignment and conflict, not prefetch.
+
+**Alignment is already optimal and there is nothing to win there.** The
+qualified-opaque pixel loop's three accesses are a byte texel read
+`move.b (0,a5,d1.l),d0`, a word CLUT read at `index*2` and a word framebuffer
+write -- one bus cycle each, all naturally aligned, no longword access to
+misalign. The misalignment penalty that dominates most Falcon data-path advice
+does not apply to this loop.
+
+**Conflict was the lever, and one phase had never been scanned.** The data
+cache is 256 bytes: sixteen 16-byte lines, direct-mapped on address bits 4..7.
+The pixel loop drives three streams through those sixteen lines every pixel.
+Item 16 scanned the raster state cells (a real curve, 13.6 ms, phase 32) and
+the texture BLOCK phase (flat), and pinned the word CLUT with `cnop 0,4096`
+after the Gouraud growth moved it and cost 80 ms. But **pinning was done to
+stop the banks moving, not to put them anywhere good** -- a 4-KiB anchor makes
+every 512-byte CLUT bank start at line 0, which is one arbitrary choice out of
+sixteen.
+
+`OPAQUE_CLUT_PHASE` offsets the buffer inside the 256-byte period, with a
+trailing pad restoring the total to whole periods so nothing after it moves
+phase. The buffer is 768 whole periods and the pads are BSS, so **the
+instruction stream is bit-identical across every point of the scan** -- all
+eleven binaries are the same file size and differ only in data addresses,
+which is a stronger equal-layout guarantee than the one-byte gates elsewhere
+in this document. Corrected emulator, `--mmu true`, 8,400 VBLs, frame-100
+`fb.res` equal to `d89958b3...` at every point:
+
+| Phase | Frames | px/frame | Rasterizer | Frame | us / 1k px |
+|---:|---:|---:|---:|---:|---:|
+| 0 (shipped) | 272 | 34,121 | 244.34 ms | 535.7 ms | 7.1609 |
+| 32 | 271 | 34,110 | **245.44 ms** | 536.5 ms | 7.1957 |
+| 64 | 271 | 34,110 | 245.37 ms | 536.5 ms | 7.1936 |
+| 96 | 272 | 34,121 | 242.72 ms | 533.8 ms | 7.1135 |
+| 112 | 273 | 34,136 | 241.67 ms | 532.9 ms | 7.0795 |
+| **128** | 273 | 34,136 | **241.25 ms** | **532.6 ms** | **7.0671** |
+| 144 | 273 | 34,136 | 241.72 ms | 532.9 ms | 7.0811 |
+| 160 | 273 | 34,136 | 241.65 ms | 532.8 ms | 7.0789 |
+| 176 | 273 | 34,136 | 242.44 ms | 533.6 ms | 7.1020 |
+| 192 | 272 | 34,121 | 242.61 ms | 533.8 ms | 7.1102 |
+| 224 | 272 | 34,121 | 243.62 ms | 534.7 ms | 7.1398 |
+
+A smooth single-minimum curve with a flat basin over 112--160, so **128 is
+chosen for the basin rather than the tick**. The pixel-normalised column is
+there because the frame counts differ by one or two: the fastest phases also
+carry the *most* pixels per frame, so frame mix works against the effect and
+the raw millisecond column understates it. Normalised range is **1.82%**.
+
+**Result: `OPAQUE_CLUT_PHASE = 128`, rasterizer 244.34 -> 241.25 ms, frame
+535.7 -> 532.6 ms, 1.867 -> 1.878 FPS, at byte-identical output.**
+
+**And the honest size of it.** The data cache is worth 71.9 ms; only **4.2 ms
+of that is phase-addressable**, and 3.1 ms was available from the shipped
+position. **94% of the benefit is the cache simply working**, and no layout
+change reaches it. The structural reason is visible in the numbers: a CLUT
+bank is 256 entries x 2 bytes = **512 bytes against a 256-byte cache**, so a
+bank aliases onto itself 2:1 no matter where it is placed. Phase can move
+which lines the three streams contend for; it cannot make the working set fit.
+Anyone hoping to repeat 3.9's order-of-magnitude result on the data side
+should read that ratio first -- the instruction cache was 552 bytes of loop
+against 256 and could be *made* to fit, and this cannot.
 
 ## 4. Work already assigned to the DSP
 
@@ -4819,15 +4909,22 @@ The open roadmap, in recommended order (expected effects from the section
    `rasterize_packet` loads its class state with one MOVEM.  Campaign total
    **302.6 ms / 3.30 FPS on the LOD 0-263 and 436.0 ms / 2.29 FPS on the
    full mesh 0-101**, byte-identical throughout.
-   **A sixth pass now has a measured target: the DATA cache.**  Section 2.4d
-   ran the rasterizer with the 68030 data cache disabled and it went
-   **244.61 -> 316.53 ms**, so the data cache is currently worth **71.9 ms per
-   frame -- 29% of the rasterizer and 13% of the frame**.  Where 3.9 and its
-   successors were entirely instruction-cache work, nothing in this series has
-   yet attacked data locality in the texture/CLUT/span-state path, and that
-   figure is what is at stake there in both directions: it is the size of the
-   prize and the size of the damage any change that disturbs the layout can do.
-   The equal-layout discipline of 2.1 applies with the usual force.
+   **Sixth pass done, and it is a small one -- section 3.10.**  2.4d measured
+   the DATA cache for the first time (`--data-cache false`: rasterizer
+   244.61 -> 316.53 ms), so it is worth **71.9 ms/frame, 29% of the
+   rasterizer**.  3.10 then scanned the one phase item 16 never did -- the word
+   CLUT's, pinned by `cnop 0,4096` to stop it moving rather than to place it
+   well -- across all eleven points of the 256-byte data-cache period at a
+   bit-identical instruction stream and byte-identical output.  Smooth
+   single-minimum curve, flat basin over 112--160: **`OPAQUE_CLUT_PHASE = 128`,
+   rasterizer 244.34 -> 241.25 ms, frame 535.7 -> 532.6, 1.867 -> 1.878 FPS.**
+   **Only 4.2 ms of the 71.9 is phase-addressable** and 94% is the cache simply
+   working, because a 512-byte CLUT bank aliases 2:1 in a 256-byte cache no
+   matter where it sits.  Alignment, the other classic Falcon data lever, has
+   nothing to give here either: the pixel loop's byte texel read, `index*2` word
+   CLUT read and word framebuffer write are one aligned bus cycle each.  **Do
+   not expect a 3.9-sized result on the data side** -- that loop was 552 bytes
+   against a 256-byte cache and could be made to fit; this working set cannot.
 12. Cross-frame pipelining. **Stage 1 done, stage 2 measured and rejected.**
    Stage 1 sends frame N+1's animation after frame N is fully unpacked and
    defers the FINISH ack to the next slot's `dsp_packets_begin`, so the
@@ -5142,6 +5239,7 @@ The open roadmap, in recommended order (expected effects from the section
 ## 11. References
 
 - [Atari Falcon 030 Developer Documentation, October 1992](https://bus-error.nokturnal.pl/dl5)
+- [MiKRO, "68030 and ST-RAM"](https://mikro.naprvyraz.sk/docs/mikro/030_stram.html) — the 16-bit ST-RAM bus, the absence of burst mode on the Falcon, longword/misalignment bus-cycle costs, write-through data caching and the precharge penalty. Section 3.10 uses it to bound which data-cache levers can exist at all, and it closes 2.4a's open question about whether a real Falcon bursts.
 - [Atari Compendium, Falcon sound system, DSP, and connection matrix](https://frummel.org/~weedz/atari/docs/The_Atari_Compendium.pdf)
 - [Atari Falcon030 Owner's Manual](https://www.atariworld.org/files/docs/Atari_Falcon030_Manual_en.pdf)
 - [Falcon hardware register listing](https://temlib.org/AtariForumWiki/index.php/Atari_ST/STe/MSTe/TT/F030_Hardware_Register_Listing)

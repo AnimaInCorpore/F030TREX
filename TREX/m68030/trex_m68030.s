@@ -6319,9 +6319,32 @@ dsp_uv_tx_buffer
 ; Bulk storage belongs after the pinned render target, packet buffer and every
 ; pre-existing hot cell.  Its own 4-KiB anchor gives the word CLUT the same
 ; stable page phase as the flag-bearing long CLUT and framebuffer.
+;
+; OPAQUE_CLUT_PHASE is the DATA-cache phase lever.  The 68030's data cache is
+; 256 bytes, sixteen 16-byte lines, direct-mapped on address bits 4..7, and the
+; qualified-opaque pixel loop drives three streams through it every pixel: the
+; byte texel read, this word CLUT read at index*2, and the framebuffer write.
+; The 4-KiB anchor above makes every 512-byte CLUT bank start at line 0, which
+; is stable but arbitrary -- the anchor was added to stop the banks MOVING
+; (roadmap item 16's 80 ms), never to put them anywhere good.  This offsets the
+; buffer inside the 256-byte cache period; the trailing pad restores the total
+; to a whole number of periods so nothing after it changes cache phase, exactly
+; the isolation item 16 used for the raster state cells.  Section 3.10 has the
+; scan.  The buffer is 768 whole periods, so only the pads move phase.
+;
+; MEASURED, eleven points across the period, frame-100 fb.res byte-identical at
+; every one of them: the rasterizer draws a smooth single-minimum curve from
+; 245.44 ms at phase 32 to 241.25 ms at phase 128, with a flat basin over
+; 112..160.  128 is that minimum and is chosen for the basin, not the tick.
+; Against the shipped phase 0 it is -3.09 ms of rasterizer and -3.1 ms of
+; frame.  Do not "clean this up" back to a bare cnop: phase 0 is 3.1 ms slow
+; and 32/64 are 4.2 ms slow, and the value is not derivable, only measured.
+OPAQUE_CLUT_PHASE = 128
 	cnop	0,4096
+	ds.b	OPAQUE_CLUT_PHASE
 texture_page_falcon_opaque_clut_buffer
 	ds.w	TIM_PAGE_COUNT*CLUT_BANK_COUNT*TIM_CLUT_ENTRIES
+	ds.b	256-OPAQUE_CLUT_PHASE
 
 ; Active Ordering Table interval for the current frame.  Kept after all
 ; pre-existing shipping buffers so no measured cache phase moves.
