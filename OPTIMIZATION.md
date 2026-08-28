@@ -3977,14 +3977,18 @@ timeout rejects it; a Hatari timing alone cannot select it.
 ### 7.4 Concrete SSI/DMA span-stream contract -- offline prototype
 
 [`tools/ssi_stream_model.py`](tools/ssi_stream_model.py) is an executable
-16-bit protocol prototype and full-mesh cost/buffer model.  **It is not present
-in this repository** -- `tools/` holds only `asm56k`, the O3D/TMD converters,
-`vasm` and `vlink` -- so this section is a specification and a record of what
-the coder established, not something that can be re-run here; treat it the way
-the README's note treats every other tool named but not shipped.  Anyone
-implementing step 2 of an SSI plan is writing that prototype, not re-running it.
-It deliberately
-does **not** touch Falcon hardware yet.  The target hardware configuration is
+16-bit protocol prototype and full-mesh cost/buffer model.  It deliberately
+does **not** touch Falcon hardware yet.
+
+**The file that existed when this section was written described the ROW stream
+and was absent from the repository; the file now present describes the RECORD
+stream and is the one to run** (`python tools/ssi_stream_model.py`, 198,912
+checks).  The rest of 7.4 -- the ABS/SET_SHADE/RUN16 coder, the 86.9-KB row
+figures, the 2x192-KiB row sizing -- remains the row-stream specification and
+is unimplemented.  Section 7.4a is the record-stream contract and supersedes it
+for anything scoped to "DSP -> CPU result records only".
+
+The target hardware configuration is
 nevertheless exact enough to implement without rediscovering ownership:
 
 1. acquire the Falcon sound lock; snapshot the complete sound-DMA start/end/
@@ -4058,6 +4062,91 @@ Hatari cannot close either hardware gate.  Consequently the source contains
 the protocol/cost prototype but no dormant half-configured Crossbar path.  The
 first hardware implementation must field-compare every decoded row against
 the existing host record before it is allowed to feed the rasterizer.
+
+### 7.4a Record-stream contract -- frozen and proved offline
+
+This is the format for the scope the SSI plan actually calls for first,
+**DSP -> CPU result records only**, with animation and control traffic left on
+the host port.  It is implemented and self-testing in
+[`tools/ssi_stream_model.py`](tools/ssi_stream_model.py).
+
+**The payload is the existing 18-word packed span record, unchanged.**  Nothing
+about the record's meaning is reopened: `SPAN_RECORD_WORDS` in
+`TREX/dsp/trex_dsp.asm` and `DSP_SPAN_RECORD_WORDS` in `trex_m68030.s` are the
+two ends of a contract already validated field-for-field over two revolutions
+(4.1b).  Only the framing is new, so only the framing needs proving.
+
+**Correction to 9.2 found while transcribing it.**  Section 9.2 states the
+record travels "packed at fourteen words" and lists `uv0pack`/`uv1pack` as
+wire fields.  Both are stale: the constant is **18** in both sources, and the
+sorted UV byte pairs are not transmitted at all -- the host rebuilds them from
+`gpu_texture_meta_buffer` through the two slot ids in w0.  8.2a's "eighteen
+words" was the correct figure.
+
+Encoding, big-endian throughout:
+
+| Element | Units | Contents |
+|---|---:|---|
+| Frame header | 8 | magic `$5353`, version/flags, 32-bit frame id, mesh id, buffer generation, 32-bit capacity in units |
+| Record | 36 | the 18 packed words, each as two units: `(w >> 16) & $FF`, then `w & $FFFF` |
+| Frame footer | 8 | magic `$5AA5`, status, 32-bit frame id, record count, 32-bit actual unit count, CRC-16/CCITT over everything preceding |
+
+**Two units per 24-bit word, with no width-aware packing.**  w0 is provably
+16 bits, w4 is 12, and w14 is two 12-bit fields, so a tighter packing would cut
+36 units to about 31 -- roughly 14%.  It is deliberately rejected: 2.4c prices
+the entire host port at 14.2 ms/frame, so a width-aware format buys 14% of a
+14-ms term and pays with a silent corruption mode the first time any field
+outgrows its assumed width.  Two units per word is lossless for all 2^24
+patterns by construction and needs no per-field range assumption.  If a future
+measurement ever makes the wire matter, this is a one-constant change.
+
+**Buffer sizing, and a real difference from the row stream.**  A record stream
+is bounded by triangle count, not by coverage, so its worst case is a number
+the mesh cannot exceed:
+
+| Case | Records | Bytes | KiB |
+|---|---:|---:|---:|
+| Average frame (8.2a) | 1,149 | 82,760 | 80.8 |
+| Armed prepass capacity (2.3f `PREPASS_MAX`) | 1,335 | 96,152 | 93.9 |
+| **Geometric maximum, every triangle survives** | 2,724 | 196,160 | **191.6** |
+
+The geometric maximum fits in 192 KiB, which the row stream could never claim
+-- 7.4 had to call its 192 KiB "an observed-corpus bound, never an
+unconditional geometry bound."  **But the margin is 448 bytes, 0.2% of one
+buffer.**  One more 24-bit word in the record costs 10,896 bytes and overflows;
+a 19-word record needs 202.2 KiB.  This pipeline has changed the record width
+before (17 to 18 words for the Gouraud level starts), so **size the pair at
+2 x 256 KiB if the memory map can afford it** rather than copying 192 KiB
+across from the row-stream section.  The overflow path stays implemented and
+tested either way: a wedged DSP or a capacity field corrupted in transit has to
+fail closed.
+
+**What the self-tests prove** (198,912 checks, fixed seed, reproducible):
+lossless round-trip of the word codec over all 24-bit boundary and single-bit
+patterns plus 200,000 random draws; whole-frame round-trip at 0, 1, 2, 31, 32,
+33, 1,149, 1,335 and 2,724 records; and rejection of every corruption the DMA
+path can produce -- truncation, one-unit shift, trailing unit, odd length,
+single-bit flips at six positions, stale frame id, stale generation, a dropped
+record, a torn ping-pong buffer built from two frames, a stale footer left by a
+longer previous frame, and encoder-side malformed input.  Decoding is
+all-or-nothing by design: there is no resynchronisation, because a half-good
+buffer silently reaching the rasterizer is exactly the failure this envelope
+exists to prevent.
+
+**What it does not prove.**  Nothing about crossbar setup, DMA ownership, cache
+coherency or achieved bandwidth -- 7.4's two hardware gates are untouched and
+still block activation.  At the specified 1 MB/s ceiling the average frame is
+82.8 ms and the geometric maximum 196.2 ms, against the 275.3 ms window outside
+the packet stage (2.4c): a 30% duty cycle typically and 71% at worst, contending
+for ST-RAM with a rasterizer that 2.5 already measured sitting at the memory-bus
+floor.  And the framing has not been run against captured DSP output; it does
+not need to be for format correctness, since the 18 words are opaque to it and
+already validated, but the first hardware bring-up must still field-compare
+decoded records against host-port-delivered ones exactly as 4.1b did.
+
+**The reason to build this remains the one 2.4c established**, not the one this
+chapter was written for: the transfer it replaces is worth 14.2 ms, and the
+case for the stream is the ~173 ms of exposed DSP time it lets the CPU overlap.
 
 ## 8. When SSI/crossbar streaming is worthwhile
 
@@ -4414,6 +4503,16 @@ layout), and the host unpack restores this order. `SPAN_REC_*` on the host and
 `make_triangle_span`'s store sequence on the DSP are the two ends of the
 contract:
 
+> **Two figures in this paragraph are stale (corrected 2026-08-28, see 7.4a).**
+> `SPAN_RECORD_WORDS` is **18**, not fourteen, in both `trex_dsp.asm` and
+> `trex_m68030.s`; 8.2a's "eighteen words" is the correct count. And the two UV
+> starts `uv0pack`/`uv1pack` listed below as w17/w18 **are not transmitted at
+> all** -- the DSP source says so explicitly ("the sorted top/middle UV bytes
+> are not sent"), and the host rebuilds them from `gpu_texture_meta_buffer`
+> through the two slot ids carried in w0. The host-semantic record is still
+> nineteen fields; the wire carries eighteen packed words. The field list below
+> remains correct as the *semantic* record, which is what it is for.
+
 ```text
 w0   survivor key (chunk-local index | shade<<8)
 w1   average-z / OT key
@@ -4676,6 +4775,20 @@ The open roadmap, in recommended order (expected effects from the section
    measured one host-port attempt at overlap **slower**, and its stated cause --
    a deferred unpack re-reading 59 KB cold -- applies with more force to an
    82-107 KB DMA buffer the CPU reads cold.
+   **Step 2 done for the record scope (7.4a).**  The 16-bit framing of the
+   existing 18-word packed record is frozen, implemented and self-testing in
+   `tools/ssi_stream_model.py`: 198,912 checks covering lossless round-trip and
+   rejection of truncation, one-unit shift, bit flips, stale frame id and
+   generation, a dropped record, a torn ping-pong buffer and a stale trailing
+   footer.  Average frame 80.8 KiB, **geometric maximum 191.6 KiB -- bounded by
+   triangle count, so unlike the row stream it cannot be overflowed by
+   geometry**, but with only 448 bytes of margin at 192 KiB, so size the pair at
+   2 x 256 KiB.  Remaining before activation, unchanged: the sound-state
+   save/restore owner, handshaked DSP-XMIT -> DMA-RECORD, cache coherency
+   without an ad-hoc CACR write, and a field-for-field bring-up comparison
+   against host-port-delivered records.  **None of those can be validated in
+   Hatari**, and the scheduling question above should be answered before any of
+   them is built.
 16. **Closed to a measured mechanism.**  Three findings, each by scan:
    the Gouraud buffer growth moved the unpinned preshaded CLUT banks and
    cost 80 ms at an unchanged instruction stream — they are pinned now.
