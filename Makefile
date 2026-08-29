@@ -24,13 +24,17 @@ HATARI=../F030Arcade/third_party/hatari/build/src/hatari
 TOS402=../F030Arcade/third_party/tos/tos402.img
 MEASURE_DIR=./TREX/m68030/measure
 # 265-frame prefix on the corrected build; re-converge after any program change
-# (OPTIMIZATION.md 2.4b) rather than trusting this constant.
-MEASURE_VBLS=7710
+# (OPTIMIZATION.md 2.4b) rather than trusting this constant.  Re-converged for
+# the 8.2b direct-unpack build (499.5 ms/frame).
+MEASURE_VBLS=7245
 # Converged VBL budgets for the three-build rasterizer split (measure_split).
 # Each has to land on the SAME frame count as MEASURE_FRAMES or the averages
 # are taken over different stretches of the choreography and do not subtract;
 # the profile builds are faster and therefore need fewer VBLs.  Re-converge
 # all four after any program change rather than trusting these constants.
+# STALE since 8.2b (the split has not been re-taken on the direct-unpack
+# build); the decoder's --expect-frames refuses a mismatched run, so a stale
+# budget fails loudly rather than subtracting garbage.
 MEASURE_FRAMES=265
 MEASURE_SPLIT_VBLS=7605
 MEASURE_SPLIT_NOPIX_VBLS=6760

@@ -131,11 +131,12 @@ OPTIMIZATION.md are identified as Hatari/emulator results; physical Falcon030
 timing remains unmeasured. Figures predating OPTIMIZATION.md 2.4b were taken
 with the DSP at twice its real clock and are superseded by the re-measurement
 there. Over the 265-frame prefix the current full-mesh **diagnostic** build
-measures **526.6 ms / 1.90 FPS**, and `TREX.TOS` measures **525.5 ms / 1.90
+measures **499.5 ms / 2.00 FPS**, and `TREX.TOS` measures **502.2 ms / 1.99
 FPS** with its release-only overlay and default-disarmed prepass. The
 frame-local normal-light cache removes 7.6 ms from the diagnostic DSP/packet
-path, while applying the prepass result from OPTIMIZATION.md 2.4c removes the
-release's previous 3.5 ms overhang; section 2.4d has the fixed-prefix gates.
+path (section 2.4d), and section 8.2b's direct-to-packet record unpack
+removes another 24.9 ms of the packet stage at byte-identical output; both
+sections carry the fixed-prefix gates.
 
 The v1.2 release has a measured figure: **511.2 ms per frame, 1.956 FPS**
 under a Hatari corrected to run the DSP at the Falcon's real clock

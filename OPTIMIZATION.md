@@ -6308,7 +6308,8 @@ reads until the sweep -- removes 44 longword bus accesses per survivor, 50,556
 per frame, about **25 ms** at the 8.05 cycles per longword this program
 exhibits.  It is not free to build: the projected-vertex fallback and the span
 validator both consume the old `rx_buffer` layout, so the copying builder has
-to survive for them.
+to survive for them.  **Built as section 8.2b: the stage moved -24.9 ms,
+within 0.1 ms of this paragraph's estimate.**
 
 **Built and measured: -25.20 ms (section 3.11).**  The estimate above is the
 closest this document has come to costing a change before making it.  The
@@ -6356,6 +6357,61 @@ correction and hardens:
 - The ~25 ms unpack fix is unchanged in absolute terms -- 2.4c's sweep shows
   the host CPU stages are emulator-invariant -- but it is now ~34% of the
   ~73 ms host CPU term rather than a fraction of a 185.7 ms mystery.
+#### 8.2b Direct-to-packet unpack -- implemented, -27.2 ms/frame, byte-identical
+
+8.2a's duplicated-work item is built (2026-08-29).  The frame path is decided
+once per frame at chunk-pipeline start: on a direct frame the record unpack
+writes the 22 span/level fields straight into each packet's own slots w4..w25
+and parks (source index, OT key, shade) in resolve slots w26..w28 -- dead
+until the 3.9c sweep overwrites them, which is after `gpu_submit_ot` has
+consumed w2 -- and `build_gpu_packet_heads` then derives only the four head
+words per packet.  The copying builder and the `rx_buffer` records survive
+unchanged for everyone who needs the old layout: validation frames select
+the copy path at frame begin, the projected-vertex fallback clears the frame
+flag when it takes over mid-frame, and the OCCL/SSI row/shadow diagnostic
+builds assemble `direct_unpack_enabled` as 0 (it is a data flag, so the A/B
+stays byte-patchable).  Both unpack bodies carry their own line pin: the
+copy body is unchanged at 250 bytes, the direct body assembles to 252, and
+both fit the 256-byte instruction cache unconditionally.
+
+Measured, corrected-clock recipe, converged 265-frame prefix:
+
+| Stage | copy path | direct path | Delta |
+|---|---:|---:|---:|
+| DSP set_frame | 13.2 ms | 13.1 ms | -0.1 ms |
+| DSP readback + packet build | 252.1 ms | **227.2 ms** | **-24.9 ms** |
+| Clear + OT | 17.3 ms | 17.3 ms | 0.0 ms |
+| Software span rasterizer | 243.7 ms | 241.5 ms | -2.2 ms |
+| **Total** | **526.7 ms / 1.90 FPS** | **499.5 ms / 2.00 FPS** | **-27.2 ms (-5.2%)** |
+
+The packet stage lands within 0.1 ms of 8.2a's 25 ms model, which was a bus
+floor -- and on this emulator, which prices instruction execution at zero,
+a bus-access count is exactly what should reproduce.  The 2.2 ms rasterizer
+movement is not part of the mechanism (the raster stage reads the same
+packet layout); it is the kind of cross-stage drift 2.1 warns about reading
+into, and the total stands regardless.  Output gates: frame-100 `fb.res`
+reproduces `d89958b3…3d16` byte-identically, cumulative pixels 9,049,666 and
+1,149 final packets equal.  Regressions on the surviving copy path: the
+`trex_m68030_ssi_rows` build (copy path forced) reproduces the same frame-100
+hash and its row stream passes `verify_ssi_rows`; the armed-prepass build
+reproduces the hash with zero protocol failures.  The shipped release,
+re-timed by 2.4c's two-byte instrumentation patch (`cmp -l` confirms exactly
+two bytes): **502.2 ms / 1.99 FPS** over 265 frames, against 2.4d's recorded
+525.5 / 1.90.
+
+One pre-existing condition surfaced by the regression pass, not caused by
+it: with `span_validate_enabled` patched to 1, `val_stats.res` reports every
+record as one mismatch -- 118,049 of 118,049 at the pre-change HEAD, and the
+same pattern after -- while the frame-100 checkpoint still reproduces.  The
+validator was last gated clean before later record-field changes and is
+STALE AS A TOOL; its verdict is currently meaningless in both directions.
+Until it is re-aligned with the current 18-word record, the byte-identity
+checkpoints are the only span-record gate.
+
+The gate arithmetic moves: 499.5 ms against 333.3 is **166.2 ms**, from
+193.3.  The remaining named lever is item 19's occlusion yield (~41 ms
+conditional on unbuilt yield work); the rest still has no mechanism short
+of item 15.
 
 ### Why this must be prototyped on hardware first
 
