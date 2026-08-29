@@ -131,12 +131,13 @@ OPTIMIZATION.md are identified as Hatari/emulator results; physical Falcon030
 timing remains unmeasured. Figures predating OPTIMIZATION.md 2.4b were taken
 with the DSP at twice its real clock and are superseded by the re-measurement
 there. Over the 265-frame prefix the current full-mesh **diagnostic** build
-measures **499.5 ms / 2.00 FPS**, and `TREX.TOS` measures **502.2 ms / 1.99
+measures **497.2 ms / 2.01 FPS**, and `TREX.TOS` measures **499.9 ms / 2.00
 FPS** with its release-only overlay and default-disarmed prepass. The
 frame-local normal-light cache removes 7.6 ms from the diagnostic DSP/packet
-path (section 2.4d), and section 8.2b's direct-to-packet record unpack
-removes another 24.9 ms of the packet stage at byte-identical output; both
-sections carry the fixed-prefix gates.
+path (section 2.4d), section 8.2b's direct-to-packet record unpack removes
+another 24.9 ms of the packet stage at byte-identical output, and 2.4e's
+object-space lighting a further 2.1 ms at whole-choreography pixel identity;
+each section carries its fixed-prefix gates.
 
 The v1.2 release has a measured figure: **511.2 ms per frame, 1.956 FPS**
 under a Hatari corrected to run the DSP at the Falcon's real clock
@@ -150,11 +151,17 @@ nine sites reworked for size and speed at byte-identical output, with the
 armed occlusion prepass measured 25.6% cheaper in Hatari -- plus 2.4d's
 128-entry normal-light cache, which lets repeated corner normals bypass their
 3x3 rotation and six direct-light dot products while retaining the
-per-triangle depth cue, and the host-port calibration burst (25 words). The
-default build ends at `P:$09AE`, 17 words below the resident-index ceiling.
-Two instruments are conditionally assembled because they do not all fit: the
-`CMD_SSI_STREAM` transport probe of section 7.4b (`SSIPROBE`, 103 words) and
-the cross-frame window burn loop (`WINPROBE`, 44 words). The shipping and
+per-triangle depth cue, and object-space lighting: the six light vectors
+rotate through the frame-matrix transpose once per frame and the Lambert loops
+dot the raw corner normal, measured pixel-identical over a 321-frame
+whole-choreography hash sweep.
+
+The default build ends at `P:$09AC`, 19 words below the resident-index
+ceiling; the camera-lights A/B reference (`make trex_dsp_camlights`) ends at
+`P:$0999`. Three instruments are conditionally assembled because they do not
+all fit: the `CMD_SSI_STREAM` transport probe of section 7.4b (`SSIPROBE`,
+103 words), the cross-frame window burn loop (`WINPROBE`, 44 words) and the
+host-port calibration burst (`PIOBURST`, 25 words). The shipping and
 measurement builds take the window probe only.
 
 ## Feature comparison with the PS1 reference

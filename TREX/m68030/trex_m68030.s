@@ -911,6 +911,13 @@ trex_dummy_frame
 	bsr	trex_write_framebuffer_debug
 .no_framebuffer_dump
 
+	ifd	TREX_FRAME_HASH
+	; Hash EVERY rendered frame, so one bounded run gates the whole
+	; choreography instead of a single checkpoint (built to close the
+	; empirical-identity question of 2.4e's object-lights variant).
+	bsr	trex_frame_hash_accumulate
+	endc
+
 	bsr	lib_psyq_end_frame
 	bsr	lib_psyq_vsync
 
@@ -1547,6 +1554,54 @@ trex_write_framebuffer_debug
 	Fclose	d7
 .trex_fb_debug_done
 	rts
+
+	ifd	TREX_FRAME_HASH
+FRAME_HASH_MAX	= 512
+; Rolling hash of the 240x224 render window: h = rol(h,1) ^ longword over
+; 120 longwords per row at the screen stride, seeded zero per frame.  The
+; rotate makes the hash order-sensitive, so a one-step shade change on any
+; pixel of any frame changes that frame's longword.  The whole list is
+; reflushed to frmhash.res every frame, so a cut-short run still yields
+; every completed frame's verdict.  Diagnostic only: the sweep costs real
+; emulated bus time, so NO timing figure may be taken from a
+; TREX_FRAME_HASH build.
+trex_frame_hash_accumulate
+	movem.l	d0-d3/d6-d7/a0-a1,-(sp)
+	move.l	frame_number,d2
+	cmpi.l	#FRAME_HASH_MAX,d2
+	bge	.frame_hash_done
+	move.l	last_rendered_base,a0
+	moveq	#0,d0
+	move.w	#SCREEN_HEIGHT-1,d7
+.frame_hash_row
+	move.l	a0,a1
+	move.w	#(SCREEN_WIDTH/2)-1,d1
+.frame_hash_long
+	move.l	(a1)+,d3
+	eor.l	d3,d0
+	rol.l	#1,d0
+	dbra	d1,.frame_hash_long
+	adda.l	#VIDEO_SCREEN_STRIDE,a0
+	dbra	d7,.frame_hash_row
+	lea	frame_hash_block+8,a1
+	move.l	d0,(0,a1,d2.l*4)
+	addq.l	#1,d2
+	lea	frame_hash_block,a1
+	move.l	#$46485348,(a1)			; 'FHSH'
+	move.l	d2,4(a1)			; completed-frame count
+	move.l	d2,d1
+	lsl.l	#2,d1
+	addq.l	#8,d1				; header + count longwords
+	Fcreate	frame_hash_path,#0
+	tst.l	d0
+	bmi	.frame_hash_done
+	move.w	d0,d7
+	Fwrite	d7,d1,frame_hash_block
+	Fclose	d7
+.frame_hash_done
+	movem.l	(sp)+,d0-d3/d6-d7/a0-a1
+	rts
+	endc
 
 ; -----------------------------------------------------------------------------
 ; Dummy library layer
@@ -6601,6 +6656,12 @@ pio_cal_path
 	even
 	endc
 
+	ifd	TREX_FRAME_HASH
+frame_hash_path
+	dc.b	'frmhash.res',0
+	even
+	endc
+
 	ifd	TREX_SSI_ROWS
 ssi_rows_dump_path
 	dc.b	'ssi_rows.res',0
@@ -7800,6 +7861,11 @@ pio_cal_results
 	ds.l	PIO_CAL_RESULT_LONGS
 pio_cal_capture
 	ds.l	PIO_CAL_LARGE
+	endc
+
+	ifd	TREX_FRAME_HASH
+frame_hash_block
+	ds.l	2+FRAME_HASH_MAX
 	endc
 
 	ifd	TREX_SSI_DMA

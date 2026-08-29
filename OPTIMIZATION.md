@@ -2693,8 +2693,9 @@ emulator measurement, not a physical-Falcon result.
 
 Assembly is 0 errors/0 warnings.  The program grows from `P:$0901` to
 `P:$091E`, leaving 161 words at `$091F-$09BF` before the resident indices.
-(Section 7.4b's transport probe has since taken 103 of those and 2.4e's
-calibration burst 25 more; the program now ends at `P:$099E`.)
+(Section 7.4b's transport probe has since taken 103 of those, 2.4e's
+calibration burst 25 more and its adopted object-space lighting the rest to
+`P:$09B1`; 14 words remain.)
 An armed-prepass 4,000-VBL gate completed 130 frames with zero protocol
 failures and reproduced the same frame-100 hash, directly exercising the
 prepass-order/cache lifetime boundary.
@@ -2776,8 +2777,10 @@ leaves the per-miss path of `make_triangle_shade` entirely.  What moves is
 rounding: per-frame light components round instead of per-corner rotated
 normal components, so the variant forfeits the byte-identity gate BY DESIGN
 and answers to geometric comparison.  `OBJLIGHTS equ 0` stays in the source
-(the checked-in `.lod` is byte-identical); `make trex_dsp_objlights` rewrites
-the equate and produces `trex_dsp_ol.lod` (extent `P:$09B1`).
+(the checked-in `.lod` is byte-identical); the then-variant target rewrote
+the equate and produced `trex_dsp_ol.lod` (extent `P:$09B1`).  The adoption
+below inverted the pair: the equate ships as 1 and `make trex_dsp_camlights`
+rebuilds the camera-space reference.
 
 One `.lod` swapped under one host binary, re-converged to 265 frames:
 
@@ -2794,10 +2797,25 @@ packets, and the frame-50, frame-100 and frame-200 captures are all
 cross a level-quantization boundary on any tested frame.  That identity is
 EMPIRICAL, not by construction: it held on three checkpoints and the
 whole-prefix pixel count, and a change to lights, choreography or the
-quantizer could surface a one-step level difference at any time.  The
-variant is therefore built and measured but NOT the shipping default;
-adopting it costs either a full-choreography sweep or accepting an
-empirical identity gate where a structural one used to be.
+quantizer could surface a one-step level difference at any time.
+
+**Adopted as the shipping default after the full-choreography sweep.**  The
+`TREX_FRAME_HASH` diagnostic (`make trex_m68030_framehash`) hashes every
+rendered frame -- `h = rol(h,1) ^ longword` over the whole render window --
+and reflushes the list to `frmhash.res` each frame.  Two runs, one per
+`.lod`, covered **321 frames: all 274 choreography records plus 47 hold
+frames, every hash equal**, with the hash's discrimination confirmed by all
+321 being distinct (the hold keeps animating the pose, which is also why
+2.3f's frame-291 checkpoint exists).  On that evidence `OBJLIGHTS equ 1`
+became the checked-in default -- the rebuilt shipping `.lod` is
+byte-identical to the exact variant the sweep ran -- and every recorded
+framebuffer checkpoint remains the gate, `d89958b3…3d16` included.  `make
+trex_dsp_camlights` rebuilds the camera-space reference (`trex_dsp_cam.lod`,
+extent `P:$099E`).  Composed with 8.2b's direct unpack, the diagnostic
+build measures **497.2 ms / 2.01 FPS** and the re-timed release **499.9 ms
+/ 2.00 FPS** over the converged 265-frame prefix.  A change to the light
+vectors, the choreography or the quantizer re-opens the question; the sweep
+is one `make trex_m68030_framehash` pair away from re-answering it.
 
 **What this leaves of the ~177 ms DSP-rate-sensitive estimate.**  With
 lighting's 51.2 ms (2.4c) the only attributed phase, ~2 ms of it now
@@ -4470,10 +4488,11 @@ address in the LOD after adding DSP code:
 awk '/^_DATA P 0040/{f=1;next} /^_DATA/{f=0} f{n+=NF} END{printf "first free P address: $%X\n", 0x40+n}' TREX/dsp/trex_dsp.lod
 ```
 
-The current program ends at `P:$099E`, leaving 33 words `$099F-$09BF` before
+The current program ends at `P:$09B1`, leaving 14 words `$09B2-$09BF` before
 `triangle_indices`: the normal-cache build ended at `P:$091E`, section
 7.4b's `CMD_SSI_STREAM` transport probe added 103 words, and section 2.4e's
-`CMD_PIO_BURST` calibration burst 25 more. The complete
+`CMD_PIO_BURST` calibration burst and adopted object-space lighting the
+rest. The complete
 animation-pose/transform/projection stage is 2.5% of the current frame. It is
 already DSP-side except for XYZ16 expansion and programmed-I/O transport; the
 remaining measured DSP lever was repeated per-corner lighting, which 2.4d now
@@ -6409,9 +6428,10 @@ Until it is re-aligned with the current 18-word record, the byte-identity
 checkpoints are the only span-record gate.
 
 The gate arithmetic moves: 499.5 ms against 333.3 is **166.2 ms**, from
-193.3.  The remaining named lever is item 19's occlusion yield (~41 ms
-conditional on unbuilt yield work); the rest still has no mechanism short
-of item 15.
+193.3 -- and 2.4e's object-lights adoption takes the composed build to
+**497.2 ms / 2.01 FPS (163.9 ms)**.  The remaining named lever is item 19's
+occlusion yield (~41 ms conditional on unbuilt yield work); the rest still
+has no mechanism short of item 15.
 
 ### Why this must be prototyped on hardware first
 

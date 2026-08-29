@@ -242,17 +242,17 @@ ACK_PREPASS		= $70000f
 ACK_SSI_STREAM		= $700010
 ACK_PIO_BURST		= $700011
 
-; Object-space lighting variant.  0 keeps the shipping camera-space corner
-; rotation; 1 rotates the six light vectors through the frame matrix
-; TRANSPOSE once per frame instead, and the Lambert loop dots the RAW
-; object-space corner normal.  (R n) . l = n . (Rt l) is an identity for any
-; matrix, so the change is exact in real arithmetic; what differs is where
-; the fixed-point rounding lands (per-frame light components instead of
-; per-corner rotated normal components), so 1 FORFEITS the byte-identical
-; framebuffer gate by design and answers only to a geometric comparison.
-; The Makefile's variant target rewrites this line; the checked-in source
-; must keep it 0 so the shipping .lod stays byte-identical.
-OBJLIGHTS	equ	0
+; Object-space lighting.  1 (shipping since 2026-08-29) rotates the six
+; light vectors through the frame matrix TRANSPOSE once per frame and the
+; Lambert loop dots the RAW object-space corner normal; 0 restores the
+; per-corner camera-space rotation.  (R n) . l = n . (Rt l) is an identity
+; for any matrix, so the change is exact in real arithmetic; the fixed-point
+; rounding lands elsewhere, but a 321-frame whole-choreography hash sweep
+; (TREX_FRAME_HASH, OPTIMIZATION.md 2.4e) measured the two variants
+; PIXEL-IDENTICAL on every frame including the animated hold, so every
+; recorded framebuffer checkpoint remains the gate.  The Makefile's
+; trex_dsp_camlights target rewrites this line to 0 for the A/B reference.
+OBJLIGHTS	equ	1
 
 ; SSI transport probe framing.  The envelope is the same 8-word header and
 ; 6-word footer the span-stream contract defines; the DSP only relays it.
@@ -384,7 +384,11 @@ dispatch_control_even
 	jclr	#1,x0,command_ssi_stream
 	nop
 	ENDIF
+	IF	PIOBURST
 	jmp	<command_pio_burst
+	ELSE
+	jmp	<command_reset
+	ENDIF
 
 dispatch_command_low
 	jclr	#0,x0,dispatch_even
@@ -3601,6 +3605,7 @@ ssi_wait_tde_done
 ; zero count runs 65,536 times.  The reply is N ramp words counting from 0
 ; (low 16 bits are the index, so the host verifies integrity outside its
 ; timing bracket), then ACK_PIO_BURST.
+	IF	PIOBURST
 ; -----------------------------------------------------------------------------
 command_pio_burst
 	jsr	<receive_word
@@ -3624,6 +3629,8 @@ pio_burst_send
 	move	#ACK_PIO_BURST,x0
 	jsr	<send_word
 	jmp	<main_loop
+
+	ENDIF
 
 ; -----------------------------------------------------------------------------
 ; X memory
@@ -4125,20 +4132,22 @@ ssi_status
 ; overwritten by the next upload and reports garbage, which cost this stage
 ; one full round of contradictory measurements once.
 ;
-; The default build (SSIPROBE=0, WINPROBE=1, OBJLIGHTS=0) ends at P:$09AE,
-; leaving P:$09AF-$09BF free before the resident index list -- 17 words.  That
-; is the configuration that ships and that every timing run uses.
+; The default build (OBJLIGHTS=1, SSIPROBE=0, WINPROBE=1) ends at P:$09AC,
+; leaving P:$09AD-$09BF free before the resident index list -- 19 words.  That
+; is the configuration that ships and that every timing run uses.  The
+; camera-lights A/B reference (OBJLIGHTS=0, make trex_dsp_camlights) assembles
+; to P:$0999.
 ;
 ; Three things here are conditional, because they do not all fit.  The SSI
 ; transport probe (CMD_SSI_STREAM, SSIPROBE) costs 103 words; the cross-frame
 ; window burn loop (WINPROBE) costs 44; the host-port calibration burst
-; (CMD_PIO_BURST) costs 25 and is unconditional for now.  KNOWN STATE: the SSI
+; (CMD_PIO_BURST, PIOBURST) costs 25; its calibration is already recorded,
+; so it is off by default.  KNOWN STATE: the SSI
 ; bring-up configuration (SSIPROBE=1, WINPROBE=0) is OVER the ceiling.  It is a
 ; non-shipping bring-up variant whose .lod is not committed, so nothing that
 ; ships is affected, but it must be brought back under $09BF before it can be
 ; trusted -- past that address the program silently overwrites the first
-; triangle index.  The OBJLIGHTS=1 variant never ships from this file (the
-; Makefile's trex_dsp_objlights target rewrites the equate).
+; triangle index.
 ; Keep the "<" prefix on jumps and the short
 ; Y-scalar forms on any code added later, or the program will overwrite the
 ; index list without an assembler error.

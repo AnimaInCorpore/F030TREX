@@ -8,6 +8,10 @@ SSIPROBE=0
 # shipping build pays only three instructions per frame for it.  The SSI
 # bring-up build turns it off: both instruments together exceed P:$09BF.
 WINPROBE=1
+# Assemble the host-port per-word calibration burst (CMD_PIO_BURST, 8.2a).
+# Its calibration is already taken and recorded, so the default build leaves
+# it out; set to 1 to re-take it.
+PIOBURST=0
 # Extra flags for the DSP assembly run.  Plain DOSBox needs none.  DOSBox-X
 # opens a working-folder prompt and a menu on macOS and then never reaches
 # BUILD.BAT, so it needs:
@@ -25,8 +29,8 @@ TOS402=../F030Arcade/third_party/tos/tos402.img
 MEASURE_DIR=./TREX/m68030/measure
 # 265-frame prefix on the corrected build; re-converge after any program change
 # (OPTIMIZATION.md 2.4b) rather than trusting this constant.  Re-converged for
-# the 8.2b direct-unpack build (499.5 ms/frame).
-MEASURE_VBLS=7245
+# the 8.2b direct-unpack + 2.4e object-lights build (497.2 ms/frame).
+MEASURE_VBLS=7215
 # Converged VBL budgets for the three-build rasterizer split (measure_split).
 # Each has to land on the SAME frame count as MEASURE_FRAMES or the averages
 # are taken over different stretches of the choreography and do not subtract;
@@ -84,19 +88,20 @@ ssi_rows_verify:
 ssi_hatari_verify:
 	PYTHONPATH=./tools python3 ./tools/verify_ssi_hatari.py ./TREX/m68030/ssi_rows.res ./TREX/m68030/ssi_rows.pkt ./TREX/m68030/ssihatri.sta
 
-# Object-space lights DSP variant (OBJLIGHTS rewritten 0 -> 1).  Exact in
-# real arithmetic, different in rounding: OUTPUT-CHANGING BY DESIGN, so it
-# answers to a geometric comparison, never the byte-identity hash.  Produces
-# trex_dsp_ol.lod; rename it to trex_dsp.lod beside a diagnostic host binary
-# to run it -- no host-side change exists or is needed.
-trex_dsp_objlights: create_dirs
+# Camera-space lights A/B reference (OBJLIGHTS rewritten 1 -> 0): the
+# pre-adoption per-corner rotation, kept rebuildable because it is the
+# measured baseline of the 2.4e object-lights A/B.  Produces
+# trex_dsp_cam.lod; rename it to trex_dsp.lod beside a diagnostic host
+# binary to run it -- no host-side change exists or is needed.  The
+# 321-frame TREX_FRAME_HASH sweep measured the two pixel-identical.
+trex_dsp_camlights: create_dirs
 	@command -v $(DOSBOX) >/dev/null 2>&1 || { echo "DOSBOX ($(DOSBOX)) not found"; exit 1; }
-	sed 's/^OBJLIGHTS	equ	0/OBJLIGHTS	equ	1/' ./TREX/dsp/trex_dsp.asm > ./TREX/dsp/build/trex_dsp.asm
-	grep -q 'OBJLIGHTS	equ	1' ./TREX/dsp/build/trex_dsp.asm
+	sed 's/^OBJLIGHTS	equ	1/OBJLIGHTS	equ	0/' ./TREX/dsp/trex_dsp.asm > ./TREX/dsp/build/trex_dsp.asm
+	grep -q 'OBJLIGHTS	equ	0' ./TREX/dsp/build/trex_dsp.asm
 	cp ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE ./TREX/dsp/build/
 	SDL_VIDEODRIVER=dummy $(DOSBOX) $(DOSBOX_FLAGS) -exit ./TREX/dsp/build/BUILD.BAT
 	[ -s ./TREX/dsp/build/trex_dsp.lod ]
-	cp ./TREX/dsp/build/trex_dsp.lod ./TREX/dsp/trex_dsp_ol.lod
+	cp ./TREX/dsp/build/trex_dsp.lod ./TREX/dsp/trex_dsp_cam.lod
 
 trex_dsp: create_dirs ./TREX/dsp/trex_dsp.lod
 
@@ -112,6 +117,11 @@ trex_m68030_ssi_dma: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_dma.tos
 # Decode and independently re-derive the transport probe's capture.
 ssi_dma_verify:
 	PYTHONPATH=./tools python3 ./tools/verify_ssi_dma.py ./TREX/m68030/ssi_dma.res ./TREX/m68030/ssi_dcap.res
+
+# Whole-choreography output gate: hashes every rendered frame into
+# frmhash.res (OPTIMIZATION.md 2.4e).  Compare two runs' sidecars with cmp.
+# NO timing figure may be taken from this build.
+trex_m68030_framehash: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_framehash.tos ./TREX/m68030/trex_dsp.lod
 
 # Host-port per-word calibration (OPTIMIZATION.md 8.2a).  Runs four
 # CMD_PIO_BURST configurations before the renderer starts and writes
@@ -257,6 +267,12 @@ TREX_MESH_DEPS = ./TREX/model/trex.o3d ./TREX/model/trex_facenormals.bin \
 ./TREX/m68030/trex_ssi_dma.tos: ./TREX/m68030/build/trex_ssi_dma.o ./TREX/m68030/build/ssi_dma.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
+./TREX/m68030/build/trex_framehash.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_FRAME_HASH -o $@ -L ./TREX/m68030/build/trex_framehash.lst
+
+./TREX/m68030/trex_framehash.tos: ./TREX/m68030/build/trex_framehash.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
 ./TREX/m68030/build/trex_pio_cal.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
 	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_PIO_CAL -o $@ -L ./TREX/m68030/build/trex_pio_cal.lst
 
@@ -350,7 +366,7 @@ TREX_MESH_DEPS = ./TREX/model/trex.o3d ./TREX/model/trex_facenormals.bin \
 ./TREX/dsp/trex_dsp.lod: ./TREX/dsp/trex_dsp.asm ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE
 	@if command -v $(DOSBOX) >/dev/null 2>&1; then \
 		cp ./TREX/dsp/trex_dsp.asm ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE ./TREX/dsp/build/ && \
-		printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' > ./TREX/dsp/build/dspconf.inc && \
+		printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' > ./TREX/dsp/build/dspconf.inc && \
 		SDL_VIDEODRIVER=dummy $(DOSBOX) $(DOSBOX_FLAGS) -exit ./TREX/dsp/build/BUILD.BAT && \
 		[ -s ./TREX/dsp/build/trex_dsp.lod ] && \
 		cp ./TREX/dsp/build/trex_dsp.lod $@; \
