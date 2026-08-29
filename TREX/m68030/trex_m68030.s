@@ -417,6 +417,26 @@ DSP_ACK_ANIMATION_GAIT	= $0070000d
 DSP_ACK_ANIMATION_TARGET	= $0070000e
 DSP_CULLED_MARKER	= $007fffff
 
+	ifd	TREX_PIO_CAL
+; Host-port per-word calibration (OPTIMIZATION.md 8.2a).  CMD_PIO_BURST on
+; the DSP absorbs M pushed words and streams back N ramp words; four
+; configurations -- large and small bursts in each direction -- bracketed
+; with the 200 Hz clock let per-word cost and per-command overhead separate.
+; The old 2.3 us/word figure was derived by removing words from the shipping
+; stream, so it priced DSP production and transport together; these loops do
+; nothing else per word, so they price transport with both parties ready.
+DSP_CMD_PIO_BURST	= $42
+DSP_ACK_PIO_BURST	= $00700011
+PIO_CAL_LARGE		= 16304
+PIO_CAL_SMALL		= 64
+PIO_CAL_REPS_LARGE	= 16
+PIO_CAL_REPS_SMALL	= 64
+PIO_CAL_CONFIGS		= 4
+; 'PCAL', version, then per configuration M, N, repeats, 200 Hz ticks,
+; last-burst ack, verify flag, first bad index.
+PIO_CAL_RESULT_LONGS	= 2+(PIO_CAL_CONFIGS*7)
+	endc
+
 ; Falcon DSP host port, addressed exactly as TOS's own XBIOS routines do.
 ; RXDF = a word from the DSP is waiting, TXDE = the DSP has taken the last word
 ; and the port is free again.  See dsp_block_handshake for why this code polls
@@ -701,6 +721,14 @@ trex_init
 	; renderer does afterwards is the unchanged host-port path.
 	bsr	ssi_dma_probe_run
 	bsr	ssi_dma_probe_write_capture
+	endc
+
+	ifd	TREX_PIO_CAL
+	; Host-port calibration, in the same pre-render slot the SSI probe
+	; uses: DSP loaded and idle, no frame in flight, every burst's state
+	; returned to main_loop before the renderer starts.
+	bsr	pio_cal_run
+	bsr	pio_cal_write_results
 	endc
 
 	; These are the state objects a real implementation would pass to the
@@ -1391,6 +1419,109 @@ ssi_dma_probe_write_capture
 	Fwrite	d7,#(SSI_DMA_PROBE_TOTAL_WORDS*2),ssi_dma_record_buffer
 	Fclose	d7
 .ssi_dma_probe_capture_done
+	rts
+	endc
+
+	ifd	TREX_PIO_CAL
+; The four calibration configurations: large/small burst, each direction.
+; The off-direction count is 1, never 0 -- a hardware DO with a zero count
+; runs 65,536 times (see command_pio_burst in trex_dsp.asm).
+pio_cal_config_table
+	dc.l	1,PIO_CAL_LARGE,PIO_CAL_REPS_LARGE	; DSP -> host, large
+	dc.l	1,PIO_CAL_SMALL,PIO_CAL_REPS_SMALL	; DSP -> host, small
+	dc.l	PIO_CAL_LARGE,1,PIO_CAL_REPS_LARGE	; host -> DSP, large
+	dc.l	PIO_CAL_SMALL,1,PIO_CAL_REPS_SMALL	; host -> DSP, small
+
+; Run every configuration: repeats * [command, M, N, push M, pull N, ack]
+; inside one 200 Hz bracket, then verify the LAST burst's capture outside it.
+; The polls are unbounded like dsp_block_handshake's -- a bounded wait would
+; put a timer read on the polled path and distort exactly what is being
+; measured.  Diagnostic build only.
+pio_cal_run
+	movem.l	d0-d7/a0-a6,-(sp)
+	lea	pio_cal_results,a4
+	move.l	#$5043414c,(a4)+		; 'PCAL'
+	move.l	#1,(a4)+
+	lea	pio_cal_config_table,a5
+	moveq	#PIO_CAL_CONFIGS-1,d7
+.pio_cal_config
+	move.l	(a5)+,d2			; M, host -> DSP
+	move.l	(a5)+,d3			; N, DSP -> host
+	move.l	(a5)+,d4			; repeats
+	move.l	d2,(a4)+
+	move.l	d3,(a4)+
+	move.l	d4,(a4)+
+	move.l	d4,d5
+	move.l	$4ba.w,d6			; open the bracket
+.pio_cal_burst
+	lea	pio_cal_capture,a1
+.pio_cal_cmd
+	btst.b	#DSP_HOST_ISR_TXDE,DSP_HOST_ISR
+	beq	.pio_cal_cmd
+	move.l	#DSP_CMD_PIO_BURST,DSP_HOST_DATA
+.pio_cal_send_m
+	btst.b	#DSP_HOST_ISR_TXDE,DSP_HOST_ISR
+	beq	.pio_cal_send_m
+	move.l	d2,DSP_HOST_DATA
+.pio_cal_send_n
+	btst.b	#DSP_HOST_ISR_TXDE,DSP_HOST_ISR
+	beq	.pio_cal_send_n
+	move.l	d3,DSP_HOST_DATA
+	; Push M words.  The pushed value is the countdown itself: the DSP
+	; discards it, and the loop is the exact shipping send idiom.
+	move.l	d2,d0
+.pio_cal_push
+	btst.b	#DSP_HOST_ISR_TXDE,DSP_HOST_ISR
+	beq	.pio_cal_push
+	move.l	d0,DSP_HOST_DATA
+	subq.l	#1,d0
+	bne	.pio_cal_push
+	; Pull N ramp words -- the exact shipping receive idiom.
+	move.l	d3,d0
+.pio_cal_pull
+	btst.b	#DSP_HOST_ISR_RXDF,DSP_HOST_ISR
+	beq	.pio_cal_pull
+	move.l	DSP_HOST_DATA,(a1)+
+	subq.l	#1,d0
+	bne	.pio_cal_pull
+.pio_cal_ack
+	btst.b	#DSP_HOST_ISR_RXDF,DSP_HOST_ISR
+	beq	.pio_cal_ack
+	move.l	DSP_HOST_DATA,d1
+	subq.l	#1,d5
+	bne	.pio_cal_burst
+	move.l	$4ba.w,d0			; close the bracket
+	sub.l	d6,d0
+	move.l	d0,(a4)+			; ticks
+	move.l	d1,(a4)+			; last burst's ack
+	; Verify the last burst's ramp: longword i must read back as i.
+	lea	pio_cal_capture,a1
+	moveq	#0,d0
+.pio_cal_verify
+	cmp.l	(a1)+,d0
+	bne	.pio_cal_verify_bad
+	addq.l	#1,d0
+	cmp.l	d3,d0
+	blo	.pio_cal_verify
+	clr.l	(a4)+				; verify ok
+	move.l	#-1,(a4)+			; no bad index
+	bra	.pio_cal_next
+.pio_cal_verify_bad
+	move.l	#-1,(a4)+
+	move.l	d0,(a4)+			; first bad index
+.pio_cal_next
+	dbra	d7,.pio_cal_config
+	movem.l	(sp)+,d0-d7/a0-a6
+	rts
+
+pio_cal_write_results
+	Fcreate	pio_cal_path,#0
+	tst.l	d0
+	bmi	.pio_cal_write_done
+	move.w	d0,d7
+	Fwrite	d7,#(PIO_CAL_RESULT_LONGS*4),pio_cal_results
+	Fclose	d7
+.pio_cal_write_done
 	rts
 	endc
 
@@ -6332,6 +6463,12 @@ ssi_dma_capture_path
 	even
 	endc
 
+	ifd	TREX_PIO_CAL
+pio_cal_path
+	dc.b	'pio_cal.res',0
+	even
+	endc
+
 	ifd	TREX_SSI_ROWS
 ssi_rows_dump_path
 	dc.b	'ssi_rows.res',0
@@ -7501,6 +7638,13 @@ val_field_counts
 	ds.l	17
 val_stats_buffer
 	ds.l	VAL_STATS_LONGS
+
+	ifd	TREX_PIO_CAL
+pio_cal_results
+	ds.l	PIO_CAL_RESULT_LONGS
+pio_cal_capture
+	ds.l	PIO_CAL_LARGE
+	endc
 
 	ifd	TREX_SSI_DMA
 ; The record channel's landing window and the host's independent model of

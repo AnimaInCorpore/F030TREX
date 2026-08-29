@@ -80,6 +80,20 @@ ssi_rows_verify:
 ssi_hatari_verify:
 	PYTHONPATH=./tools python3 ./tools/verify_ssi_hatari.py ./TREX/m68030/ssi_rows.res ./TREX/m68030/ssi_rows.pkt ./TREX/m68030/ssihatri.sta
 
+# Object-space lights DSP variant (OBJLIGHTS rewritten 0 -> 1).  Exact in
+# real arithmetic, different in rounding: OUTPUT-CHANGING BY DESIGN, so it
+# answers to a geometric comparison, never the byte-identity hash.  Produces
+# trex_dsp_ol.lod; rename it to trex_dsp.lod beside a diagnostic host binary
+# to run it -- no host-side change exists or is needed.
+trex_dsp_objlights: create_dirs
+	@command -v $(DOSBOX) >/dev/null 2>&1 || { echo "DOSBOX ($(DOSBOX)) not found"; exit 1; }
+	sed 's/^OBJLIGHTS	equ	0/OBJLIGHTS	equ	1/' ./TREX/dsp/trex_dsp.asm > ./TREX/dsp/build/trex_dsp.asm
+	grep -q 'OBJLIGHTS	equ	1' ./TREX/dsp/build/trex_dsp.asm
+	cp ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE ./TREX/dsp/build/
+	SDL_VIDEODRIVER=dummy $(DOSBOX) $(DOSBOX_FLAGS) -exit ./TREX/dsp/build/BUILD.BAT
+	[ -s ./TREX/dsp/build/trex_dsp.lod ]
+	cp ./TREX/dsp/build/trex_dsp.lod ./TREX/dsp/trex_dsp_ol.lod
+
 trex_dsp: create_dirs ./TREX/dsp/trex_dsp.lod
 
 ssi_stream_model_test:
@@ -94,6 +108,11 @@ trex_m68030_ssi_dma: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_dma.tos
 # Decode and independently re-derive the transport probe's capture.
 ssi_dma_verify:
 	PYTHONPATH=./tools python3 ./tools/verify_ssi_dma.py ./TREX/m68030/ssi_dma.res ./TREX/m68030/ssi_dcap.res
+
+# Host-port per-word calibration (OPTIMIZATION.md 8.2a).  Runs four
+# CMD_PIO_BURST configurations before the renderer starts and writes
+# pio_cal.res; decode with tools/decode_pio_cal.py.
+trex_m68030_pio_cal: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_pio_cal.tos ./TREX/m68030/trex_dsp.lod
 
 # Compile-only Falcon SSI/DMA ownership scaffold.  It is intentionally not
 # linked into the renderer until the physical owner snapshot/restore and cache
@@ -232,6 +251,12 @@ TREX_MESH_DEPS = ./TREX/model/trex.o3d ./TREX/model/trex_facenormals.bin \
 	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_SSI_DMA -o $@ -L ./TREX/m68030/build/trex_ssi_dma.lst
 
 ./TREX/m68030/trex_ssi_dma.tos: ./TREX/m68030/build/trex_ssi_dma.o ./TREX/m68030/build/ssi_dma.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
+./TREX/m68030/build/trex_pio_cal.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_PIO_CAL -o $@ -L ./TREX/m68030/build/trex_pio_cal.lst
+
+./TREX/m68030/trex_pio_cal.tos: ./TREX/m68030/build/trex_pio_cal.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 ./TREX/m68030/build/trex_ssi_shadow.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_dma.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin

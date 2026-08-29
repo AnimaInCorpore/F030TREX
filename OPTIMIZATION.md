@@ -2693,8 +2693,8 @@ emulator measurement, not a physical-Falcon result.
 
 Assembly is 0 errors/0 warnings.  The program grows from `P:$0901` to
 `P:$091E`, leaving 161 words at `$091F-$09BF` before the resident indices.
-(Section 7.4b's transport probe has since taken 103 of those; the program
-now ends at `P:$0985`.)
+(Section 7.4b's transport probe has since taken 103 of those and 2.4e's
+calibration burst 25 more; the program now ends at `P:$099E`.)
 An armed-prepass 4,000-VBL gate completed 130 frames with zero protocol
 failures and reproduced the same frame-100 hash, directly exercising the
 prepass-order/cache lifetime boundary.
@@ -2708,6 +2708,104 @@ recorded 536.5 ms / 1.86 FPS armed release: **-11.0 ms/frame (-2.1%)**.  Its
 framebuffer hash is not an identity gate because its FPS overlay is designed to
 change when timing changes; the overlay-free diagnostic hash above is the
 correct output check.
+
+### 2.4e Three DSP-hotspot levers, sized -- two rejected by simulation, one built and measured
+
+This campaign (2026-08-29) took the three named levers against the 252.1 ms
+packet stage in order of cost-to-try.  Two died in their first measurement,
+which is the cheapest place to die; the third is built, measured at -2.4
+ms/frame, and empirically output-identical.  All figures are corrected-clock
+Hatari, the 2.4b recipe, the converged 265-frame prefix.
+
+**Cache widening/rehashing: rejected without building.**
+`tools/simulate_shade_cache.py` rebuilds 2.4d's source-order model from the
+exact corner-normal sidecar and reproduces the recorded 3,777 hits to the
+digit before any variant row is read:
+
+| configuration | hits | rate |
+|---|---:|---:|
+| 128-entry low-7 (shipping) | 3,777 | 46.22% |
+| 128-entry best XOR fold (>>6) | 3,778 | 46.23% |
+| 256-entry low-8 | 4,064 | 49.73% |
+| 512-entry low-9 | 4,285 | 52.44% |
+| infinite cache (compulsory misses only) | 4,563 | 55.84% |
+
+The ceiling is the finding: 44.16% of the 8,172 references are first touches
+of one of the 3,609 distinct normals and can never hit a frame-local cache of
+any size or associativity.  At 2.4d's measured ~2.0 us per hit the entire
+remaining headroom is ~1.6 ms/frame, the buildable 256-entry step (+287
+hits) is ~0.6 ms against 768 X words that do not exist (the BUILD tail holds
+293), and rehashing at 128 entries is worth one hit -- the conflict misses
+are capacity, not hash artifacts.  Rejected on 2.3i's arithmetic.
+
+**Survivors-only/resident UV traffic: rejected by the calibration below.**
+All UV upload traffic together is 5,448 words * 1.188 us = 6.5 ms/frame; the
+reachable fraction is smaller, and reclaiming any of it needs the resident
+UV table whose Y memory the corner normals displaced.
+
+**The corrected per-word calibration exists now.**  `CMD_PIO_BURST` ($42, 25
+program words, the even control-range neighbour of `CMD_SSI_STREAM`) absorbs
+M pushed words and streams back N ramp words; `make trex_m68030_pio_cal`
+brackets 16 large and 64 small bursts per direction with the 200 Hz clock
+before the renderer starts, and `tools/decode_pio_cal.py` solves the pair
+for per-word cost against per-command overhead.  Both directions verified
+(ramp byte-exact, all acks):
+
+| direction | per word | per-burst overhead |
+|---|---:|---:|
+| DSP -> host (record readback) | **1.876 us** | 36.2 us |
+| host -> DSP (upload) | **1.188 us** | 2.1 us |
+
+The burst loops do nothing else per word, so unlike the pre-2.4b 2.3 us/word
+figure this prices transport with both parties ready, separated from DSP
+production.  Against 8.2a's word counts the wire is 20,682 record words at
+1.876 (38.8 ms) plus ~5,900 upload words at 1.188 (7.0 ms): **~46 ms/frame
+of measured port floor**, replacing the 62 ms upper bound.  That floor is
+what item 15's DMA stream attacks, and it bounds every traffic-shaping idea
+below it.  Resolution is one 200 Hz tick on 98 (read) and 62 (write) ticks,
+so about 1-1.6%.  Gate: the extended `.lod` under the unchanged host binary
+reproduces `d89958b3…3d16` and 526.7 ms/frame exactly -- the probe is
+dispatch-reachable only by a command no shipping path sends.
+
+**Object-space lights: built, measured, -2.4 ms/frame.**  `(R n) . l =
+n . (Rt l)` is an identity for any matrix -- no orthonormality assumption --
+so rotating the six light vectors through the frame-matrix transpose once
+per frame (`cache_light_directions_x`, matrix walked by columns) lets the
+Lambert loops dot the raw object-space corner normal, and the 3x3 rotation
+leaves the per-miss path of `make_triangle_shade` entirely.  What moves is
+rounding: per-frame light components round instead of per-corner rotated
+normal components, so the variant forfeits the byte-identity gate BY DESIGN
+and answers to geometric comparison.  `OBJLIGHTS equ 0` stays in the source
+(the checked-in `.lod` is byte-identical); `make trex_dsp_objlights` rewrites
+the equate and produces `trex_dsp_ol.lod` (extent `P:$09B1`).
+
+One `.lod` swapped under one host binary, re-converged to 265 frames:
+
+| Stage | shipping | OBJLIGHTS=1 | Delta |
+|---|---:|---:|---:|
+| DSP readback + packet build | 252.1 ms | **250.0 ms** | **-2.1 ms** |
+| Software span rasterizer | 243.7 ms | 243.7 ms | 0.0 ms |
+| **Total** | **526.7 ms / 1.90 FPS** | **524.3 ms / 1.91 FPS** | **-2.4 ms (-0.5%)** |
+
+Both runs write the same cumulative 9,049,666 pixels and 1,149 final
+packets, and the frame-50, frame-100 and frame-200 captures are all
+**byte-identical** to the shipping renderer's -- frame 100 reproduces
+`d89958b3…3d16` itself.  The 24-bit rounding differences exist but never
+cross a level-quantization boundary on any tested frame.  That identity is
+EMPIRICAL, not by construction: it held on three checkpoints and the
+whole-prefix pixel count, and a change to lights, choreography or the
+quantizer could surface a one-step level difference at any time.  The
+variant is therefore built and measured but NOT the shipping default;
+adopting it costs either a full-choreography sweep or accepting an
+empirical identity gate where a structural one used to be.
+
+**What this leaves of the ~177 ms DSP-rate-sensitive estimate.**  With
+lighting's 51.2 ms (2.4c) the only attributed phase, ~2 ms of it now
+removable, the cache measured to its ceiling, and transport measured at ~46
+ms, the unattributed remainder -- projection, both classify passes, span
+setup, `span_div`, record packing -- still has no per-phase timer.  The
+`prepass_arm=2` freestanding-and-timed bracket remains the mechanism that
+could name it, and is the remaining measurement this section did not build.
 
 ### 2.5 Delta clearing: built, measured, rejected
 
@@ -4372,9 +4470,10 @@ address in the LOD after adding DSP code:
 awk '/^_DATA P 0040/{f=1;next} /^_DATA/{f=0} f{n+=NF} END{printf "first free P address: $%X\n", 0x40+n}' TREX/dsp/trex_dsp.lod
 ```
 
-The current program ends at `P:$0985`, leaving 58 words `$0986-$09BF` before
-`triangle_indices`: the normal-cache build ended at `P:$091E` and section
-7.4b's `CMD_SSI_STREAM` transport probe added 103 words. The complete
+The current program ends at `P:$099E`, leaving 33 words `$099F-$09BF` before
+`triangle_indices`: the normal-cache build ended at `P:$091E`, section
+7.4b's `CMD_SSI_STREAM` transport probe added 103 words, and section 2.4e's
+`CMD_PIO_BURST` calibration burst 25 more. The complete
 animation-pose/transform/projection stage is 2.5% of the current frame. It is
 already DSP-side except for XYZ16 expansion and programmed-I/O transport; the
 remaining measured DSP lever was repeated per-corner lighting, which 2.4d now
@@ -6183,12 +6282,22 @@ all 2,724 triangles, plus chunk headers and acks), or roughly 62 ms at the
 2.3 us/word calibration.  **That 62 ms is wrong and the word count is right**
 (2.4c): a wait-state sweep on the corrected emulator counts ~25,000 host-port
 accesses per frame in this stage -- corroborating the ~26,800 words by an
-independent route -- but prices the whole host port at **14.2 ms**, not 62.
-The 2.3 us/word figure is an end-to-end stage delta from roadmap item 3, which
-removed the DSP's receive-and-store work along with the wire, so it was never a
-transport rate.  Read this paragraph as the word count it establishes; the
-timing conclusion below is re-derived in 2.4c, where the stage is ~173 ms
-exposed DSP compute, ~73 ms host CPU work and 14.2 ms wire.
+independent route -- but prices the port's *wait states* at **14.2 ms**, not
+62.  The 2.3 us/word figure is an end-to-end stage delta from roadmap item 3,
+which removed the DSP's receive-and-store work along with the wire, so it was
+never a transport rate.
+
+Two numbers now describe the port and they are not in conflict, because they
+price different things.  The wait-state sweep isolates only the charge the
+emulator adds per access; 2.4a's core prices the transfer loop's instruction
+execution at zero, so that figure excludes it.  The `CMD_PIO_BURST`
+calibration measures the wire end to end -- **1.876 us/word readback and
+1.188 us/word upload, transport-only, a measured port floor of ~46 ms/frame**.
+Read 14.2 ms as what a free host port would give back on this emulator, and
+~46 ms as what the transport actually costs including the loop that drives it.
+Read this paragraph as the word count it establishes; the timing conclusion
+below is re-derived in 2.4c, where the stage is ~173 ms exposed DSP compute,
+~73 ms host CPU work and 14.2 ms of wait states.
 Of the remainder, one item is pure duplicated work:
 **every survivor's span record is handled twice.**  The unpack writes 22
 expanded longwords into `dsp_triangle_rx_buffer`, and `build_gpu_shadow_packets`

@@ -149,12 +149,12 @@ nine sites reworked for size and speed at byte-identical output, with the
 armed occlusion prepass measured 25.6% cheaper in Hatari -- plus 2.4d's
 128-entry normal-light cache, which lets repeated corner normals bypass their
 3x3 rotation and six direct-light dot products while retaining the
-per-triangle depth cue. The default build ends at `P:$0995`, 42 words below
-the resident-index ceiling. Two instruments are conditionally assembled
-because they do not both fit: the `CMD_SSI_STREAM` transport probe of section
-7.4b (`SSIPROBE`, 103 words) and the cross-frame window burn loop
-(`WINPROBE`, 44 words). The shipping and measurement builds take the window
-probe only.
+per-triangle depth cue, and the host-port calibration burst (25 words). The
+default build ends at `P:$09AE`, 17 words below the resident-index ceiling.
+Two instruments are conditionally assembled because they do not all fit: the
+`CMD_SSI_STREAM` transport probe of section 7.4b (`SSIPROBE`, 103 words) and
+the cross-frame window burn loop (`WINPROBE`, 44 words). The shipping and
+measurement builds take the window probe only.
 
 ## Feature comparison with the PS1 reference
 

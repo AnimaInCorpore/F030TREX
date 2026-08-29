@@ -217,8 +217,10 @@ CMD_APPLY_ANIMATION_TARGET	= 14
 CMD_FINISH_ANIMATED_FRAME	= 15
 ; Bit 6 selects the control range.  RESET is its only member with bit 0 set;
 ; the SSI transport probe takes the even side, so the dispatcher separates
-; them with one extra JCLR and no new tree level.
+; them with one extra JCLR and no new tree level.  The host-port calibration
+; burst joins the even side with bit 1 set; one more JCLR splits $40/$42.
 CMD_SSI_STREAM		= $40
+CMD_PIO_BURST		= $42
 CMD_RESET		= $7f
 
 ACK_PING		= $700001
@@ -238,6 +240,19 @@ ACK_ANIMATION_GAIT	= $70000d
 ACK_ANIMATION_TARGET	= $70000e
 ACK_PREPASS		= $70000f
 ACK_SSI_STREAM		= $700010
+ACK_PIO_BURST		= $700011
+
+; Object-space lighting variant.  0 keeps the shipping camera-space corner
+; rotation; 1 rotates the six light vectors through the frame matrix
+; TRANSPOSE once per frame instead, and the Lambert loop dots the RAW
+; object-space corner normal.  (R n) . l = n . (Rt l) is an identity for any
+; matrix, so the change is exact in real arithmetic; what differs is where
+; the fixed-point rounding lands (per-frame light components instead of
+; per-corner rotated normal components), so 1 FORFEITS the byte-identical
+; framebuffer gate by design and answers only to a geometric comparison.
+; The Makefile's variant target rewrites this line; the checked-in source
+; must keep it 0 so the shipping .lod stays byte-identical.
+OBJLIGHTS	equ	0
 
 ; SSI transport probe framing.  The envelope is the same 8-word header and
 ; 6-word footer the span-stream contract defines; the DSP only relays it.
@@ -356,11 +371,20 @@ main_loop
 	; control range first; command $7f is its only defined member.
 	jclr	#6,x0,dispatch_command_low
 	nop
+	jclr	#0,x0,dispatch_control_even
+	nop
+	jmp	<command_reset
+
+dispatch_control_even
+	; $40 = SSI stream, $42 = host-port calibration burst; bit 1 splits
+	; them.  Other even control values alias one of the two, all undefined.
+	; With SSIPROBE=0 the stream arm is not assembled and $40 aliases the
+	; burst, which is undefined in exactly the same way.
 	IF	SSIPROBE
-	jclr	#0,x0,command_ssi_stream
+	jclr	#1,x0,command_ssi_stream
 	nop
 	ENDIF
-	jmp	<command_reset
+	jmp	<command_pio_burst
 
 dispatch_command_low
 	jclr	#0,x0,dispatch_even
@@ -1259,12 +1283,53 @@ cache_light_directions_x
 	; prepass completes and above the maximum BUILD UV/output allocation.  It
 	; is also safe for the no-prepass SET_FRAME test path: no BUILD command
 	; can arrive until this routine has returned its frame acknowledgement.
+	IF	OBJLIGHTS
+	; Rotate each light through the matrix transpose while copying, so the
+	; per-corner rotation in make_triangle_shade disappears.  Column j of
+	; the row-major matrix walks with N2=3; each column restarts R2 with an
+	; immediate reload, which is cheaper than rewinding a cursor for a body
+	; that runs six times per frame.  R2/N2 and X1/Y1 are dead at all three
+	; call sites: each falls straight through to its acknowledgement.
+	move	#3,n2
+	move	#light_direction,r0
+	move	#phase_light_directions_x,r1
+	do	#LIGHT_COUNT*2,cache_light_rotate_loop
+	; Each column's R2 reload sits at least one instruction before its
+	; first use: the pipeline forbids addressing through a register the
+	; previous instruction wrote.
+	move	#frame_matrix,r2
+	move	y:(r0)+,x1
+	move	y:(r0)+,y1
+	move	y:(r0)+,x0
+	move	y:(r2)+n2,y0
+	mpy	x1,y0,a	y:(r2)+n2,y0
+	mac	y1,y0,a	y:(r2),y0
+	mac	x0,y0,a
+	rnd	a
+	move	#frame_matrix+1,r2
+	move	a1,x:(r1)+
+	move	y:(r2)+n2,y0
+	mpy	x1,y0,a	y:(r2)+n2,y0
+	mac	y1,y0,a	y:(r2),y0
+	mac	x0,y0,a
+	rnd	a
+	move	#frame_matrix+2,r2
+	move	a1,x:(r1)+
+	move	y:(r2)+n2,y0
+	mpy	x1,y0,a	y:(r2)+n2,y0
+	mac	y1,y0,a	y:(r2),y0
+	mac	x0,y0,a
+	rnd	a
+	move	a1,x:(r1)+
+cache_light_rotate_loop
+	ELSE
 	move	#light_direction,r0
 	move	#phase_light_directions_x,r1
 	do	#LIGHT_COUNT*6,cache_light_direction_loop
 	move	y:(r0)+,x0
 	move	x0,x:(r1)+
 cache_light_direction_loop
+	ENDIF
 
 	; R1 now points at shade_cache_tags.  Only tags need invalidating; sum
 	; words are read only after an exact full-index tag match.
@@ -1627,6 +1692,17 @@ shade_corner_loaded
 	; fetch above and the Lambert loops' own re-point below, so it carries
 	; the row cursor.  R4 stays parked on shade_cx for the Lambert loops;
 	; using R0/R3 here removes their per-corner R4/N4 reinitialization.
+	IF	OBJLIGHTS
+	; The cached light vectors are already object-space, so the raw corner
+	; normal streams to shade_cx..cz unrotated for the Lambert loops.  The
+	; R7 advance from the shared tail below sits between the R3 load and
+	; its first use, which the pipeline requires anyway.
+	move	#shade_cx,r3
+	move	(r7)+n7
+	move	x1,y:(r3)+
+	move	y1,y:(r3)+
+	move	x0,y:(r3)+
+	ELSE
 	move	#frame_matrix,r0
 	move	#shade_cx,r3
 	do	#3,shade_rotate_row
@@ -1637,6 +1713,8 @@ shade_corner_loaded
 	rnd	a
 	move	a1,y:(r3)+
 shade_rotate_row
+	move	(r7)+n7
+	ENDIF
 
 	; Lambert sum over the three source lights.  Each contributes its own
 	; clamped cosine: a face turned away from one light simply gets nothing
@@ -1654,8 +1732,9 @@ shade_rotate_row
 	; X-resident light component.  The DSP's XY move form assigns R0 to
 	; the X bus and R4 to the Y bus here.
 	; Advance R7 from this normal's tag to its red raw-sum slot.  N7 then
-	; walks red -> green after the two channel passes.
-	move	(r7)+n7
+	; walks red -> green after the two channel passes.  The advance itself
+	; sits at the tail of each IF branch above: the object-lights branch
+	; needs it as the pipeline gap after its R3 load.
 	move	#phase_light_directions_x,r0
 	move	#shade_sum_r,r3
 	do	#2,shade_channel_loop
@@ -3507,6 +3586,46 @@ ssi_wait_tde_done
 	ENDIF
 
 ; -----------------------------------------------------------------------------
+; CMD_PIO_BURST -- host-port per-word calibration (OPTIMIZATION.md 8.2a).
+;
+; The 2.3 us/word wire figure was derived pre-2.4b by removing words from the
+; shipping stream, so it prices DSP production and transport together.  This
+; command isolates transport: it absorbs M host words and then streams back N
+; ramp words, and both loops do so little work per word (four instructions on
+; the send side) that the port handshake with both parties ready is the only
+; term left.  The host brackets repeated bursts with the 200 Hz clock and
+; solves the two burst sizes for per-word cost against per-command overhead.
+;
+; Arguments, in order: M = words the host will push (absorbed and discarded),
+; N = words streamed back.  BOTH MUST BE AT LEAST 1: a hardware DO with a
+; zero count runs 65,536 times.  The reply is N ramp words counting from 0
+; (low 16 bits are the index, so the host verifies integrity outside its
+; timing bracket), then ACK_PIO_BURST.
+; -----------------------------------------------------------------------------
+command_pio_burst
+	jsr	<receive_word
+	move	x0,y1			; M, host -> DSP
+	jsr	<receive_word
+	move	x0,y0			; N, DSP -> host
+
+	do	y1,pio_burst_absorb
+	jsr	<receive_word
+	nop
+pio_burst_absorb
+
+	clr	b
+	move	#>1,x1
+	do	y0,pio_burst_send
+	jclr	#1,x:m_hsr,*
+	movep	b1,x:m_htx
+	add	x1,b
+pio_burst_send
+
+	move	#ACK_PIO_BURST,x0
+	jsr	<send_word
+	jmp	<main_loop
+
+; -----------------------------------------------------------------------------
 ; X memory
 ; -----------------------------------------------------------------------------
 
@@ -4006,19 +4125,21 @@ ssi_status
 ; overwritten by the next upload and reports garbage, which cost this stage
 ; one full round of contradictory measurements once.
 ;
-; The default build (SSIPROBE=0, WINPROBE=1) ends at P:$0995, leaving
-; P:$0996-$09BF free before the resident index list -- 42 words.  That is the
-; configuration that ships and that every timing run uses.
+; The default build (SSIPROBE=0, WINPROBE=1, OBJLIGHTS=0) ends at P:$09AE,
+; leaving P:$09AF-$09BF free before the resident index list -- 17 words.  That
+; is the configuration that ships and that every timing run uses.
 ;
-; Two instruments are conditional because they do not both fit.  The SSI
+; Three things here are conditional, because they do not all fit.  The SSI
 ; transport probe (CMD_SSI_STREAM, SSIPROBE) costs 103 words; the cross-frame
-; window burn loop (WINPROBE) costs 44.  KNOWN STATE: the SSI bring-up
-; configuration (SSIPROBE=1, WINPROBE=0) ends at P:$09D0 and is 17 words OVER
-; the ceiling.  It is a non-shipping bring-up variant whose .lod is not
-; committed, so nothing that ships is affected, but it must be brought back
-; under $09BF before it can be trusted -- past that address the program
-; silently overwrites the first triangle index.  Keep the "<" prefix on jumps
-; and the short
+; window burn loop (WINPROBE) costs 44; the host-port calibration burst
+; (CMD_PIO_BURST) costs 25 and is unconditional for now.  KNOWN STATE: the SSI
+; bring-up configuration (SSIPROBE=1, WINPROBE=0) is OVER the ceiling.  It is a
+; non-shipping bring-up variant whose .lod is not committed, so nothing that
+; ships is affected, but it must be brought back under $09BF before it can be
+; trusted -- past that address the program silently overwrites the first
+; triangle index.  The OBJLIGHTS=1 variant never ships from this file (the
+; Makefile's trex_dsp_objlights target rewrites the equate).
+; Keep the "<" prefix on jumps and the short
 ; Y-scalar forms on any code added later, or the program will overwrite the
 ; index list without an assembler error.
 ; Absolute-short addressing is the largest single contributor: every data
