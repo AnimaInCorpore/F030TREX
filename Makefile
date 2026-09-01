@@ -12,6 +12,22 @@ WINPROBE=1
 # Its calibration is already taken and recorded, so the default build leaves
 # it out; set to 1 to re-take it.
 PIOBURST=0
+# Assemble the 2.3j occlusion-prepass diagnostic counters and their mode-4
+# readout.  Default on: they are what section 2.3j is measured with, and the
+# shipping build has room for them.  The SSI bring-up build turns them off to
+# fit its transport probe under the P:$09BF ceiling.  They are write-only --
+# nothing but mode 4 reads prepass_status+2..+7 -- so dropping them cannot
+# change rendered output, which the frame-100 checkpoint verifies.
+PREPASSDIAG=1
+# Rotate the light vectors into object space once per frame instead of
+# transforming every corner normal.  Pixel-identical to OBJLIGHTS=0 over the
+# 321-frame hash sweep (2.4j), and 19 program words cheaper is the reason the
+# SSI bring-up build takes the 0 form.
+OBJLIGHTS=1
+
+# One generator for the assembler-visible build switches, used by every DSP
+# rule so a variant can never assemble against a stale or missing config.
+DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' > ./TREX/dsp/build/dspconf.inc
 # Extra flags for the DSP assembly run.  Plain DOSBox needs none.  DOSBox-X
 # opens a working-folder prompt and a menu on macOS and then never reaches
 # BUILD.BAT, so it needs:
@@ -44,7 +60,7 @@ MEASURE_SPLIT_VBLS=7605
 MEASURE_SPLIT_NOPIX_VBLS=6760
 MEASURE_SPLIT_NOROWS_VBLS=5270
 
-.PHONY: measure_split_run all clean trex_m68030 trex_m68030_run trex_m68030_prepass trex_m68030_prepass_run trex_m68030_ssi_shadow trex_m68030_ssi_rows trex_m68030_ssi_hatari trex_m68030_ssi_dma ssi_dma_verify measure_split trex_ssi_loopback ssi_rows_verify ssi_hatari_verify trex_release trex_dsp ssi_stream_model_test ssi_dma_compile_test measure create_dirs
+.PHONY: dspconf measure_split_run all clean trex_m68030 trex_m68030_run trex_m68030_prepass trex_m68030_prepass_run trex_m68030_ssi_shadow trex_m68030_ssi_rows trex_m68030_ssi_hatari trex_m68030_ssi_dma ssi_dma_verify measure_split trex_ssi_loopback ssi_rows_verify ssi_hatari_verify trex_release trex_dsp ssi_stream_model_test ssi_dma_compile_test measure create_dirs
 
 all: create_dirs $(VASM) $(VLINK) ./TREX/m68030/TREX.TOS ./TREX/m68030/TREX.LOD
 
@@ -94,11 +110,16 @@ ssi_hatari_verify:
 # trex_dsp_cam.lod; rename it to trex_dsp.lod beside a diagnostic host
 # binary to run it -- no host-side change exists or is needed.  The
 # 321-frame TREX_FRAME_HASH sweep measured the two pixel-identical.
+# Write the assembler-visible build switches. Split out so variant targets can
+# regenerate it with their own overrides instead of duplicating the generator.
+dspconf: create_dirs
+	@$(DSPCONF)
+
 trex_dsp_camlights: create_dirs
 	@command -v $(DOSBOX) >/dev/null 2>&1 || { echo "DOSBOX ($(DOSBOX)) not found"; exit 1; }
-	sed 's/^OBJLIGHTS	equ	1/OBJLIGHTS	equ	0/' ./TREX/dsp/trex_dsp.asm > ./TREX/dsp/build/trex_dsp.asm
-	grep -q 'OBJLIGHTS	equ	0' ./TREX/dsp/build/trex_dsp.asm
-	cp ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE ./TREX/dsp/build/
+	cp ./TREX/dsp/trex_dsp.asm ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE ./TREX/dsp/build/
+	$(MAKE) --no-print-directory OBJLIGHTS=0 dspconf
+	grep -q 'OBJLIGHTS	equ	0' ./TREX/dsp/build/dspconf.inc
 	SDL_VIDEODRIVER=dummy $(DOSBOX) $(DOSBOX_FLAGS) -exit ./TREX/dsp/build/BUILD.BAT
 	[ -s ./TREX/dsp/build/trex_dsp.lod ]
 	cp ./TREX/dsp/build/trex_dsp.lod ./TREX/dsp/trex_dsp_cam.lod
@@ -366,7 +387,7 @@ TREX_MESH_DEPS = ./TREX/model/trex.o3d ./TREX/model/trex_facenormals.bin \
 ./TREX/dsp/trex_dsp.lod: ./TREX/dsp/trex_dsp.asm ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE
 	@if command -v $(DOSBOX) >/dev/null 2>&1; then \
 		cp ./TREX/dsp/trex_dsp.asm ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE ./TREX/dsp/build/ && \
-		printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' > ./TREX/dsp/build/dspconf.inc && \
+		$(DSPCONF) && \
 		SDL_VIDEODRIVER=dummy $(DOSBOX) $(DOSBOX_FLAGS) -exit ./TREX/dsp/build/BUILD.BAT && \
 		[ -s ./TREX/dsp/build/trex_dsp.lod ] && \
 		cp ./TREX/dsp/build/trex_dsp.lod $@; \

@@ -137,18 +137,33 @@ disarmed captures are byte-identical at frame 100 and at hold frame 291,
 with zero prepass protocol failures or capacity overruns across the hold.
 
 The frontend reserves `X:$0000-$3DFF` and `Y:$0000-$3EF7`. The full-mesh
-program occupies P from `$0040` and, in the default build, ends at `$0995`,
-leaving the words at `$0996-$09BF` free before the Y indices at `$09C0` — 42
+program occupies P from `$0040` and, in the default build, ends at `$09AC`,
+leaving the words at `$09AD-$09BF` free before the Y indices at `$09C0` — 19
 words, after `command_get_vertices` was restored for the span validator at a
 cost of seventeen (`OPTIMIZATION.md` 3.12), the 2.3j diagnostic counters,
 their mode-4 readout and the flow-compare sign fix took 58 more, the 2.4f
 window-capacity probe took 44 and 2.4i's normal-light cache took its own
-share. Two instruments are conditionally assembled because they no longer
-both fit: `WINPROBE` (the window burn loop, 44 words, on by default) and
-`SSIPROBE` (the `CMD_SSI_STREAM` transport probe, 103 words, off by default).
-**The SSI bring-up configuration is currently 17 words over the ceiling at
-`$09D0` and must be brought back under it before it can be trusted.** This
-bound has to
+share.
+
+Five switches in the generated `dspconf.inc` select what is assembled, because
+it no longer all fits — `SSIPROBE` (the `CMD_SSI_STREAM` transport probe, 103
+words), `WINPROBE` (the window burn loop, 44), `PREPASSDIAG` (2.3j's counter
+increments, 30), `PIOBURST` (the host-port calibration burst, 25) and
+`OBJLIGHTS` (object-space lighting, 19). The default build takes `WINPROBE`,
+`PREPASSDIAG` and `OBJLIGHTS`; the SSI transport bring-up build
+(`SSIPROBE=1 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=0`) trades all
+three for the probe and ends at `$09B6` with 9 words free.
+
+`PREPASSDIAG` guards only the counter *increments*. The mode-4 dispatch and
+its reply are unconditional in every configuration, because a guarded-out
+dispatch would send a mode-4 command into `prepass_arm` — silently arming the
+prepass with the value 4 and answering two words where the host expects seven.
+With `PREPASSDIAG=0` mode 4 still replies `ACK_PREPASS` plus six cells, and
+they read honest zeros. `OBJLIGHTS=0` is pixel-identical to 1 over the
+321-frame hash sweep, so the bring-up build streams the same records the
+shipping build would.
+
+This bound has to
 be checked after every DSP change, because an overflow overwrites the index
 list without an assembler error -- recompute it from the assembled `.lod`
 rather than trusting this figure, with the check command in the end-of-file

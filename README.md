@@ -158,11 +158,15 @@ whole-choreography hash sweep.
 
 The default build ends at `P:$09AC`, 19 words below the resident-index
 ceiling; the camera-lights A/B reference (`make trex_dsp_camlights`) ends at
-`P:$0999`. Three instruments are conditionally assembled because they do not
-all fit: the `CMD_SSI_STREAM` transport probe of section 7.4b (`SSIPROBE`,
-103 words), the cross-frame window burn loop (`WINPROBE`, 44 words) and the
-host-port calibration burst (`PIOBURST`, 25 words). The shipping and
-measurement builds take the window probe only.
+`P:$0999`. Five switches in the generated `dspconf.inc` select what is
+assembled, because it does not all fit: the `CMD_SSI_STREAM` transport probe
+of section 7.4b (`SSIPROBE`, 103 words), the cross-frame window burn loop
+(`WINPROBE`, 44), section 2.3j's prepass diagnostic counters (`PREPASSDIAG`,
+30), the host-port calibration burst (`PIOBURST`, 25) and object-space
+lighting (`OBJLIGHTS`, 19). The shipping and measurement builds take the
+window probe, the counters and object-space lighting; the SSI transport
+bring-up build trades all four for the probe and ends at `P:$09B6` with 9
+words to spare.
 
 ## Feature comparison with the PS1 reference
 

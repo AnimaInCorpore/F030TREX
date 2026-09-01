@@ -251,8 +251,9 @@ ACK_PIO_BURST		= $700011
 ; (TREX_FRAME_HASH, OPTIMIZATION.md 2.4e) measured the two variants
 ; PIXEL-IDENTICAL on every frame including the animated hold, so every
 ; recorded framebuffer checkpoint remains the gate.  The Makefile's
-; trex_dsp_camlights target rewrites this line to 0 for the A/B reference.
-OBJLIGHTS	equ	1
+; trex_dsp_camlights target builds the A/B reference with OBJLIGHTS=0.
+; The switch itself lives in the generated dspconf.inc, with SSIPROBE,
+; WINPROBE, PIOBURST and PREPASSDIAG.
 
 ; SSI transport probe framing.  The envelope is the same 8-word header and
 ; 6-word footer the span-stream contract defines; the DSP only relays it.
@@ -3081,9 +3082,11 @@ prepass_query_row
 	do	y:<prepass_occl_ncx,prepass_query_row_end
 	; Diagnostic: one query cell visited.  A is rebuilt from scratch on
 	; the very next instruction, so the bump costs no live register.
+	IF	PREPASSDIAG
 	move	x:>prepass_status+6,a
 	add	y0,a
 	move	a1,x:>prepass_status+6
+	ENDIF
 	clr	a
 	move	x:(r0),a1
 	and	x1,a
@@ -3111,9 +3114,11 @@ prepass_query_row_end
 	move	a1,x:(r0)
 	; Diagnostic: one triangle killed by the seal query.  Y0 still holds
 	; the walk's 1 -- prepass_bit_address leaves it untouched by contract.
+	IF	PREPASSDIAG
 	move	x:>prepass_status+4,a
 	add	y0,a
 	move	a1,x:>prepass_status+4
+	ENDIF
 	jmp	<prepass_occlusion_next
 
 prepass_query_visible
@@ -3258,6 +3263,7 @@ prepass_stamp
 	; the same A0/B0 idiom the stamp itself documents.  A still holds the
 	; dirty flag's 1 and feeds the first bump; B, X0, Y0 and X1 are all
 	; overwritten by the edge setup before it reads them.
+	IF	PREPASSDIAG
 	move	x:>prepass_status+2,b
 	add	a,b
 	move	b1,x:>prepass_status+2
@@ -3269,6 +3275,7 @@ prepass_stamp
 	move	x:>prepass_status+7,b
 	add	x1,b
 	move	b1,x:>prepass_status+7
+	ENDIF
 
 	; Per-edge setup: doubled gradients, per-cell and per-row steps, and
 	; the anchored accumulator seeds.
@@ -3390,9 +3397,11 @@ prepass_stamp_row_seeds
 	move	b1,x:(r0)
 	; Diagnostic: one cell actually stamped.  Y0 has held 1 since the row
 	; setup; B is reloaded at the skip label either way.
+	IF	PREPASSDIAG
 	move	x:>prepass_status+3,b
 	add	y0,b
 	move	b1,x:>prepass_status+3
+	ENDIF
 prepass_stamp_skip
 	; Same wrap rule as the query walk.
 	move	x1,b
@@ -4132,22 +4141,36 @@ ssi_status
 ; overwritten by the next upload and reports garbage, which cost this stage
 ; one full round of contradictory measurements once.
 ;
-; The default build (OBJLIGHTS=1, SSIPROBE=0, WINPROBE=1) ends at P:$09AC,
-; leaving P:$09AD-$09BF free before the resident index list -- 19 words.  That
-; is the configuration that ships and that every timing run uses.  The
-; camera-lights A/B reference (OBJLIGHTS=0, make trex_dsp_camlights) assembles
-; to P:$0999.
+; Five switches select what is assembled, all of them in the generated
+; dspconf.inc (see the Makefile).  Two configurations matter, and both fit:
 ;
-; Three things here are conditional, because they do not all fit.  The SSI
-; transport probe (CMD_SSI_STREAM, SSIPROBE) costs 103 words; the cross-frame
-; window burn loop (WINPROBE) costs 44; the host-port calibration burst
-; (CMD_PIO_BURST, PIOBURST) costs 25; its calibration is already recorded,
-; so it is off by default.  KNOWN STATE: the SSI
-; bring-up configuration (SSIPROBE=1, WINPROBE=0) is OVER the ceiling.  It is a
-; non-shipping bring-up variant whose .lod is not committed, so nothing that
-; ships is affected, but it must be brought back under $09BF before it can be
-; trusted -- past that address the program silently overwrites the first
-; triangle index.
+;   default   SSIPROBE=0 WINPROBE=1 PIOBURST=0 PREPASSDIAG=1 OBJLIGHTS=1
+;             ends P:$09AC, 19 words free.  Ships, and every timing run uses it.
+;   SSI       SSIPROBE=1 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=0
+;             ends P:$09B6, 9 words free.  Transport bring-up only.
+;
+; The camera-lights A/B reference (OBJLIGHTS=0 alone, make trex_dsp_camlights)
+; ends P:$0999.
+;
+; What each switch is worth in program words: SSIPROBE (the CMD_SSI_STREAM
+; transport probe) 103, WINPROBE (the cross-frame window burn loop) 44,
+; PREPASSDIAG (2.3j's six diagnostic counters) 30, PIOBURST (the host-port
+; calibration burst) 25, OBJLIGHTS 19.  The probe alone is larger than the
+; default build's headroom, which is why the SSI configuration turns four
+; things off to carry it.
+;
+; Two of those are safe to drop only because of what they are NOT.  PREPASSDIAG
+; guards the counter INCREMENTS, never the mode-4 dispatch or its reply: with
+; the dispatch guarded out a mode-4 command would fall into prepass_arm and
+; silently arm the prepass with the value 4, then answer two words where the
+; host expects seven.  The reply keeps its seven-word shape in both
+; configurations and reports honest zeros when the counters are not built.
+; OBJLIGHTS=0 is pixel-identical to 1 over the 321-frame hash sweep, so the
+; bring-up build streams exactly the records the shipping build would.
+;
+; Past $09BF the program silently overwrites the first triangle index, so
+; re-measure the extent from the assembled .lod after adding code -- no
+; assembler error marks the overflow.
 ; Keep the "<" prefix on jumps and the short
 ; Y-scalar forms on any code added later, or the program will overwrite the
 ; index list without an assembler error.

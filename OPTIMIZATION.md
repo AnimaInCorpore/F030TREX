@@ -4536,8 +4536,10 @@ normal-light cache. The current exact map is:
 
 `Y:$09C0` leaves **42** external words (`$0996-$09BF`) free above the default
 build for code growth. That is the SSIPROBE=0 configuration; the SSI bring-up
-build (SSIPROBE=1, WINPROBE=0) currently ends at `$09D0`, 17 words past the
-ceiling, and is not usable until it comes back under it. The frontend reserves
+bring-up build (SSIPROBE=1, WINPROBE=0, PIOBURST=0, PREPASSDIAG=0,
+OBJLIGHTS=0) ends at `$09B6` with 9 words free: carrying the 103-word
+transport probe costs it the window burn loop, 2.3j's diagnostic counters and
+object-space lighting, none of which it exercises. The frontend reserves
 16,120 Y words through `Y:$3EF7`, so only four reserved words remain above
 `face_normals`.
 
