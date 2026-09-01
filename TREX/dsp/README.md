@@ -352,6 +352,22 @@ unmeasured.
 
 The DSP assembler runs under DOSBox; the result is `TREX/dsp/trex_dsp.lod`,
 which is then adopted as the runtime copy at `TREX/m68030/trex_dsp.lod`.
+
+Each configuration assembles to its own cached image under
+`TREX/dsp/build/trex_dsp-<switches>-<source hash>.lod`, and **only the default
+configuration writes the tracked `TREX/dsp/trex_dsp.lod`** — building a variant
+tells you where its image landed and leaves the tracked file alone, so a
+`make measure` or a release can never pick up a bring-up image by accident.
+The name carries both the switch settings and a hash of the DSP source because
+the system `make` is 3.81, which compares whole seconds: a rebuild finishing in
+the same second as its own source reads as up to date and is skipped. Keying on
+a filename makes the decision existence-based, which no clock granularity can
+lose. Build a variant with, for example:
+
+```
+make SSIPROBE=1 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=0 \
+     DOSBOX=/Applications/dosbox.app/Contents/MacOS/DOSBox trex_dsp
+```
 DOSBox-X needs extra flags to reach `BUILD.BAT` headlessly:
 
 ```

@@ -27,6 +27,29 @@ OBJLIGHTS=1
 
 # One generator for the assembler-visible build switches, used by every DSP
 # rule so a variant can never assemble against a stale or missing config.
+#
+# The .lod's dependency on those switches is carried by a stamp whose NAME
+# encodes them.  Changing any switch names a stamp that does not exist yet, so
+# the .lod rebuilds whatever the timestamps say.  That matters here: GNU make
+# 3.81 (the macOS system make) compares whole seconds only, so a build that
+# lands in the same second as its own source is otherwise skipped -- and before
+# the stamp existed nothing tied the image to its configuration at all, so
+# asking for one variant could silently leave you the previous one.
+DSPCONF_ID=$(SSIPROBE)$(WINPROBE)$(PIOBURST)$(PREPASSDIAG)$(OBJLIGHTS)
+DSPCONF_STAMP=./TREX/dsp/build/dspconf-$(DSPCONF_ID).stamp
+# Each configuration assembles to its own image, so asking for one names a file
+# that either exists (and is current) or does not (and is built).  Existence is
+# a signal no clock granularity can lose, which timestamps here cannot promise.
+# ...and the same trick for the sources, because the switches are only half the
+# input.  Hashing the DSP source into the name means an edit also names a file
+# that does not exist yet, so `touch`-then-build inside one second -- which the
+# whole-second comparison reads as up to date -- cannot skip the assembly.
+DSPSRC_ID=$(shell cat ./TREX/dsp/trex_dsp.asm ./src/ioequ.inc 2>/dev/null | shasum -a 256 | cut -c1-8)
+DSPVARIANT=./TREX/dsp/build/trex_dsp-$(DSPCONF_ID)-$(DSPSRC_ID).lod
+# The identity of the default: only this configuration may write the tracked
+# ./TREX/dsp/trex_dsp.lod, so a variant build can never leave the wrong image
+# in the tree for `make measure` or a release to pick up.
+DSPCONF_DEFAULT_ID=01011
 DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' > ./TREX/dsp/build/dspconf.inc
 # Extra flags for the DSP assembly run.  Plain DOSBox needs none.  DOSBox-X
 # opens a working-folder prompt and a menu on macOS and then never reaches
@@ -110,10 +133,15 @@ ssi_hatari_verify:
 # trex_dsp_cam.lod; rename it to trex_dsp.lod beside a diagnostic host
 # binary to run it -- no host-side change exists or is needed.  The
 # 321-frame TREX_FRAME_HASH sweep measured the two pixel-identical.
-# Write the assembler-visible build switches. Split out so variant targets can
-# regenerate it with their own overrides instead of duplicating the generator.
-dspconf: create_dirs
+# Write the assembler-visible build switches, and stamp which set they are.
+# Old stamps are removed so exactly one is present and it always describes the
+# dspconf.inc sitting beside it.
+$(DSPCONF_STAMP): | create_dirs
+	@rm -f ./TREX/dsp/build/dspconf-*.stamp
 	@$(DSPCONF)
+	@touch $@
+
+dspconf: $(DSPCONF_STAMP)
 
 trex_dsp_camlights: create_dirs
 	@command -v $(DOSBOX) >/dev/null 2>&1 || { echo "DOSBOX ($(DOSBOX)) not found"; exit 1; }
@@ -124,7 +152,21 @@ trex_dsp_camlights: create_dirs
 	[ -s ./TREX/dsp/build/trex_dsp.lod ]
 	cp ./TREX/dsp/build/trex_dsp.lod ./TREX/dsp/trex_dsp_cam.lod
 
-trex_dsp: create_dirs ./TREX/dsp/trex_dsp.lod
+# Assemble the configuration named by the switches.  Depending on $(DSPVARIANT)
+# rather than on the tracked .lod is what makes a switch change reliable: the
+# variant either exists or it does not, and make cannot mistake that for
+# up-to-date the way it can with two files written in the same second.
+trex_dsp: create_dirs
+	@if ! command -v $(DOSBOX) >/dev/null 2>&1; then \
+		$(MAKE) --no-print-directory ./TREX/dsp/trex_dsp.lod; \
+	elif [ "$(DSPCONF_ID)" = "$(DSPCONF_DEFAULT_ID)" ]; then \
+		$(MAKE) --no-print-directory $(DSPVARIANT) && \
+		{ cmp -s $(DSPVARIANT) ./TREX/dsp/trex_dsp.lod || cp $(DSPVARIANT) ./TREX/dsp/trex_dsp.lod; }; \
+	else \
+		$(MAKE) --no-print-directory $(DSPVARIANT) && \
+		{ echo "configuration $(DSPCONF_ID) assembled to $(DSPVARIANT)"; \
+		  echo "  the tracked ./TREX/dsp/trex_dsp.lod is the default build and is left untouched"; }; \
+	fi
 
 ssi_stream_model_test:
 	python3 ./tools/ssi_stream_model.py --self-test
@@ -384,17 +426,32 @@ TREX_MESH_DEPS = ./TREX/model/trex.o3d ./TREX/model/trex_facenormals.bin \
 # also stops a plain checkout (which makes the .asm look newer) from breaking
 # `make trex_m68030`.  Rebuild the DSP explicitly with
 #   make DOSBOX=/path/to/DOSBox trex_dsp
-./TREX/dsp/trex_dsp.lod: ./TREX/dsp/trex_dsp.asm ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE
-	@if command -v $(DOSBOX) >/dev/null 2>&1; then \
-		cp ./TREX/dsp/trex_dsp.asm ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE ./TREX/dsp/build/ && \
-		$(DSPCONF) && \
-		SDL_VIDEODRIVER=dummy $(DOSBOX) $(DOSBOX_FLAGS) -exit ./TREX/dsp/build/BUILD.BAT && \
-		[ -s ./TREX/dsp/build/trex_dsp.lod ] && \
-		cp ./TREX/dsp/build/trex_dsp.lod $@; \
-	else \
+$(DSPVARIANT): ./TREX/dsp/trex_dsp.asm ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE $(DSPCONF_STAMP)
+	@command -v $(DOSBOX) >/dev/null 2>&1 || { \
+		echo "DOSBOX ($(DOSBOX)) not found - cannot assemble configuration $(DSPCONF_ID)"; \
+		echo "  install DOSBox, or pass DOSBOX=/path/to/DOSBox"; exit 1; }
+	@rm -f ./TREX/dsp/build/trex_dsp-$(DSPCONF_ID)-*.lod
+	@cp ./TREX/dsp/trex_dsp.asm ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE ./TREX/dsp/build/
+	@SDL_VIDEODRIVER=dummy $(DOSBOX) $(DOSBOX_FLAGS) -exit ./TREX/dsp/build/BUILD.BAT
+	@[ -s ./TREX/dsp/build/trex_dsp.lod ] || { \
+		echo "ERROR: assembly of configuration $(DSPCONF_ID) produced no image"; exit 1; }
+	@cp ./TREX/dsp/build/trex_dsp.lod $@
+
+# The tracked default image.  Its rule exists so an edit to the DSP source
+# rebuilds it on the way to a host target, and so a checkout without the DOS
+# toolchain keeps the committed file rather than failing -- that is why the
+# .lod is committed at all.
+./TREX/dsp/trex_dsp.lod: ./TREX/dsp/trex_dsp.asm ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE $(DSPCONF_STAMP)
+	@if ! command -v $(DOSBOX) >/dev/null 2>&1; then \
 		echo "DOSBOX ($(DOSBOX)) not found - keeping the checked-in $@"; \
 		echo "  rebuild with: make DOSBOX=/path/to/DOSBox trex_dsp"; \
 		[ -s $@ ] && touch $@; \
+	elif [ "$(DSPCONF_ID)" != "$(DSPCONF_DEFAULT_ID)" ]; then \
+		echo "configuration $(DSPCONF_ID) is not the default - $@ left untouched"; \
+		echo "  build it with: make SSIPROBE=.. trex_dsp   (writes $(DSPVARIANT))"; \
+		touch $@; \
+	else \
+		$(MAKE) --no-print-directory $(DSPVARIANT) && cp $(DSPVARIANT) $@; \
 	fi
 	@[ -s $@ ] || { echo "ERROR: $@ is missing or EMPTY -- restore it" \
 		"(git checkout -- $@) before any DSP-dependent run: TOS" \
