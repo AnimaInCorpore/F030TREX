@@ -2334,38 +2334,68 @@ on the corrected binary gives the true DSP clock with upstream's port model.
 | stock 2.6.1 (DSP 2x fast, upstream port) | 175.6 ms | 449.7 ms / 2.22 FPS |
 | corrected DSP clock, upstream port | 263.9 ms | 538.4 ms / 1.86 FPS |
 | corrected DSP clock, corrected port | 259.7 ms | 534.2 ms / 1.87 FPS |
-| corrected DSP clock, **no port charge at all** | 259.8 ms | 534.1 ms / 1.87 FPS |
+| corrected DSP clock, **no port charge at all** — **RETRACTED, see below** | 259.8 ms | 534.1 ms / 1.87 FPS |
 
 **The DSP clock is the whole story: +88.7 ms.** The host-port recalibration is
 worth **-4.2 ms** to this program — a small net *gain*, because its traffic is
 dominated by block writes, and the new table charges a word write 3 instead of 4
 and a long write 7 instead of 12.
 
-The last row is the stronger statement. Setting every constant to zero — no
-wait state charged on any host-port access in either direction — moves the frame
-by **0.1 ms**, and leaves the packet stage where the calibrated table leaves it.
-**The port's wait-state bill is not a term in this program's frame time at all.**
-That upstream's model still costs +4.1 ms is consistent rather than
-contradictory: the extra charge can only bite where the CPU runs ahead of the
-DSP, which is the bulk `Dsp_BlkUnpacked` upload path (long write 12 against 7),
-and is invisible everywhere the stage is already waiting on the DSP.
+**The last row does not reproduce, and it is retracted.** It was re-run on
+2026-09-01 against the same corrected emulator (`d9c734ca`), on the current
+build rather than this section's: forcing all six constants to zero moves the
+frame by **14.4 ms**, not by 0.1.
+
+| Configuration | packet stage | set_frame | rasterizer | frame |
+|---|---:|---:|---:|---:|
+| calibrated, run 1 | 225.0 ms | 13.3 ms | 241.6 ms | 497.2 ms / 2.01 FPS |
+| calibrated, run 2 | 225.1 ms | 13.2 ms | 241.8 ms | 497.2 ms / 2.01 FPS |
+| all six constants 0 | 211.7 ms | 11.3 ms | 242.4 ms | 482.8 ms / 2.07 FPS |
+
+The calibrated run is repeated as its own control: run-to-run noise is 0.1-0.2
+ms per stage and 0.0 ms on the frame, so the 14.4 ms is about a hundred times
+noise. It lands as **13.4 ms in the packet stage and 1.9 ms in `set_frame`**,
+with the rasterizer flat at +0.7 ms and the frame-100 checkpoint hashing
+`d89958b3...3d16` in all three runs. An independent sweep on the master line,
+taken at the pre-unpack state, measures 14.15 ms in the packet stage and 1.37
+ms in `set_frame` — corroborating both the magnitude and the way it splits.
+**The port's wait-state bill is a real term in this program's frame time.**
+
+**How the original row came to read 0.1 ms is not established.** The obvious
+explanation — a Hatari without the knobs, whose six `getenv` calls would all
+miss silently — is ruled out by the row above it in the same table: `upstream
+port` differs from `corrected port` by 4.2 ms, which happens only if the
+environment override took effect in that very run. The mechanism is also
+correct on inspection and does honour a zero value (`src/falcon/dsp.c:889`
+tests `getenv(...) != NULL` before `atoi`), so a zeroed constant is applied
+rather than treated as unset. Treat the retracted row as an unexplained bad
+run, and give any future wait-state sweep a same-binary repeat as its control.
+
+That upstream's model costs +4.1 ms stands, and its reading is unchanged: the
+extra charge can only bite where the CPU runs ahead of the DSP, which is the
+bulk `Dsp_BlkUnpacked` upload path (long write 12 against 7), and is invisible
+everywhere the stage is already waiting on the DSP.
 
 That splits the 259.7 ms stage about as far as these timers can:
 
 | term | ms/frame | how it is known |
 |---|---:|---|
 | DSP-rate-sensitive | ~177 | the only part that moved when the clock halved: +88.7 ms on a doubling |
-| CPU-side unpack and packet build | ~83 | the residual |
-| host-port wait states | ~0 | measured directly, last table row |
+| host-port wait states | ~13 | measured directly, re-run above, packet-stage share only |
+| CPU-side unpack and packet build | ~69 | the residual |
 
 The ~177 ms is a **measured-delta-derived estimate**, not a timer reading: it
 assumes the rate-sensitive part scales exactly with the clock, which is what a
 halved clock on a fixed instruction stream should do but is not independently
-instrumented. The ~83 ms residual is bus traffic only — 2.4a's core prices
-instruction execution at zero — so it is a floor for the CPU-side cost on
+instrumented. The port term is measured on the current build, where the stage
+is 225.0 ms, and carried back here unrescaled, so it is approximate at this
+stage size; the master-line sweep reading 14.15 ms at 260.40 ms suggests it is
+close. The residual falls from the ~83 ms this section first published to
+~69 ms by exactly that much. It is bus traffic only — 2.4a's core prices
+instruction execution at zero — so it remains a floor for the CPU-side cost on
 hardware, not an estimate of it. Any future reasoning about this program's
-transport should treat the port model as neutral, the DSP rate as the term that
-moved, and the CPU-side figure as understated.
+transport should treat the port as costing about 14 ms/frame, the DSP rate as
+the term that moved, and the CPU-side figure as understated.
 
 #### Cross-check on the other core
 
@@ -5985,12 +6015,13 @@ those records could already be in memory at frame start and the CPU
 would no longer service 86 result-chunk transactions. The 112.7 ms stage quoted
 in the rest of this paragraph is the LOD epoch's; **section 2.4b supersedes it
 and isolates the shares this sentence said had not been isolated**. Of the
-current **252.1 ms** stage, about 177 ms is DSP-rate-sensitive and about 83 ms
-is CPU-side unpack and packet build, while the host port's own wait states
-measure **zero** — forcing every one of them to zero moves the frame 0.1 ms.
-The split was taken at 259.7 ms, before 2.4d's light cache removed 7.6 ms of
-it; the shares are quoted unrescaled because the cache changed what the CPU
-side fetches, not how the stage divides.
+current **252.1 ms** stage, about 177 ms is DSP-rate-sensitive, about 13 ms is
+host-port wait states and about 69 ms is CPU-side unpack and packet build. The
+split was taken at 259.7 ms, before 2.4d's light cache removed 7.6 ms of it;
+the shares are quoted unrescaled because the cache changed what the CPU side
+fetches, not how the stage divides. **The port share is a correction**: this
+passage first read `zero`, on a 2.4b row since retracted and re-measured at
+13.4 ms in this stage — the CPU-side residual absorbs the whole difference.
 
 That relocates the case for DMA. It is not a wait-state bill to be avoided: it
 is that the frame loop schedules nothing against those ~177 ms, so the CPU holds
@@ -6292,8 +6323,10 @@ body is **130 bytes**, `gpu_submit_ot`'s is **62**, and 3.9c's resolve sweep is
 **118**, all comfortably inside the cache, and the record-unpack loop was
 already pinned to 250 bytes by 3.9 step 4.  Whatever that stage is, it is not
 loop-body eviction.  7bece90 later split it directly on the corrected build:
-of 252.1 ms, about 177 ms is DSP-rate-sensitive, about 83 ms is CPU-side
-unpack and packet build, and the host port's own wait states measure zero.
+of 252.1 ms, about 177 ms is DSP-rate-sensitive, about 13 ms is host-port wait
+states and about 69 ms is CPU-side unpack and packet build.  That commit's own
+reading of the port share was zero; 2.4b retracts it and re-measures 13.4 ms
+in this stage.
 
 **What it is, in the part that can be named:** the wire is about 26,800 words
 per frame (1,149 survivor records at eighteen words, plus 5,448 UV words for
