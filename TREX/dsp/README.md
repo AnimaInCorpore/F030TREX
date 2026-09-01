@@ -142,7 +142,7 @@ leaving the words at `$0996-$09BF` free before the Y indices at `$09C0` — 42
 words, after `command_get_vertices` was restored for the span validator at a
 cost of seventeen (`OPTIMIZATION.md` 3.12), the 2.3j diagnostic counters,
 their mode-4 readout and the flow-compare sign fix took 58 more, the 2.4f
-window-capacity probe took 44 and 2.4d's normal-light cache took its own
+window-capacity probe took 44 and 2.4i's normal-light cache took its own
 share. Two instruments are conditionally assembled because they no longer
 both fit: `WINPROBE` (the window burn loop, 44 words, on by default) and
 `SSIPROBE` (the `CMD_SSI_STREAM` transport probe, 103 words, off by default).

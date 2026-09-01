@@ -79,8 +79,8 @@ in [`TREX/m68030/trex_m68030.s`](TREX/m68030/trex_m68030.s).
 ## 2. Current measured baseline
 
 The current diagnostic baseline is the frame-local normal-light-cache build
-from section 2.4d, measured over the fixed 265-frame prefix on the corrected
-DSP-clock Hatari described in 2.4b:
+from section 2.4i, measured over the fixed 265-frame prefix on the corrected
+DSP-clock Hatari described in 2.4g:
 
 | Stage | Time per frame | Share of frame |
 |---|---:|---:|
@@ -98,7 +98,7 @@ the rasterizer is identical to the tick.  These are corrected-Hatari emulator
 measurements, not physical-Falcon timings.
 
 The release now keeps the occlusion implementation compiled in but defaults it
-to disarmed, following 2.4c's measured +3.5 ms net loss at the current yield.
+to disarmed, following 2.4h's measured +3.5 ms net loss at the current yield.
 With the light cache and that default, the layout-identical two-byte timing
 copy of `TREX.TOS` measures **525.5 ms / 1.90 FPS** over the same 265 frames
 (251.8 ms packet stage, 242.8 ms rasterizer).  The two changes together remove
@@ -184,7 +184,7 @@ and because the rest of this document is written against it:
 
 **This table was taken with the DSP running at twice Falcon speed.** The
 emulator that produced it grants the DSP56001 four clocks per emulated 68030
-clock instead of two; section 2.4b is the re-measurement on a corrected build
+clock instead of two; section 2.4g is the re-measurement on a corrected build
 and puts the same binary at **534.2 ms / 1.87 FPS**, with all 84.5 ms of the
 difference in the DSP/packet row and the rasterizer rows unmoved. Read the
 shares above as obsolete — on the corrected model the transport stage is 48.6%
@@ -199,7 +199,7 @@ historical and no longer describes a buildable configuration.
 The full 2,724-triangle mesh moved from **763.8 to 488.8 ms** in section 3.9's
 instruction-cache series (1.31 to 2.05 FPS) at byte-identical output. Section
 8.2a then recorded the 460.0 ms diagnostic baseline after 3.9b/3.9c.  **Both
-are stock-clock figures** and neither is the current baseline: 2.4b's clock
+are stock-clock figures** and neither is the current baseline: 2.4g's clock
 correction adds about 74 ms to the same binary, and the table at the top of
 this section -- 526.6 ms / 1.90 FPS -- is what the current build measures.
 The series' *gains* survive the correction because they are rasterizer gains
@@ -528,7 +528,7 @@ Both configurations write the same 17,072 pixels and link the same 752 packets.
 The rasterizer figure is identical to the tick, which is the whole point of the
 preshaded CLUT banks: the pixel loop does not know that lighting exists. The
 entire cost of flat shading is **+0.20% of the frame**, spent on the DSP side.
-**Superseded — see 2.4c.** That is the flat-shading, reduced-mesh epoch. On the
+**Superseded — see 2.4h.** That is the flat-shading, reduced-mesh epoch. On the
 current build, at the corrected DSP clock, the same one-byte `lighting_enabled`
 A/B measures **+52.0 ms, 9.7% of the frame**, essentially all of it on the DSP
 readback stage.
@@ -1136,7 +1136,7 @@ over 246 frames (0.030%), far below the established 64-class yield.  The
 arm-2 freestanding 64-class prepass cost
 75.6 ms/frame in Hatari -- the two classification passes dominate -- which
 the production arm-1 inline mode hid inside the FINISH window; these are
-emulator figures under the 2.4a caveats.  (**2.4c re-measures the prepass at
+emulator figures under the 2.4a caveats.  (**2.4h re-measures the prepass at
 the corrected DSP clock: 117.9 ms/frame freestanding, and the armed inline arm
 is no longer free.**)
 
@@ -1158,7 +1158,7 @@ disabled. The matching `TREX.LOD` is still read once at startup, so the
 mounted GEMDOS volume remains necessary.
 
 This is the single supported full-mesh package: textured Gouraud shading,
-the DSP occlusion implementation retained but default-disarmed after 2.4c
+the DSP occlusion implementation retained but default-disarmed after 2.4h
 measured its current yield as a net loss, and no per-frame diagnostic file
 writes. Diagnostic prepass builds still default to arm 1, and the release's
 one-word `prepass_arm` can still select the same validated path for yield work.
@@ -1253,7 +1253,7 @@ the program-size change in words (negative frees words):
    across the change -- and the arm-2 survivor maximum stays exactly
    1,194, zero overflow, zero protocol failures.  Measured effect: the
    freestanding prepass falls from 75.98 to **60.28 ms/frame** (arm-2, and
-   **117.9 ms/frame when re-measured at the Falcon's real DSP clock — 2.4c**,
+   **117.9 ms/frame when re-measured at the Falcon's real DSP clock — 2.4h**,
    11,500-VBL runs of 310/318 frames, one host binary, only the `.lod`
    swapped) -- **-15.7 ms/frame, -21%**, and -16.5 against the site-1
    baseline's 76.76.  The faster `.lod` completes eight more frames in
@@ -1437,7 +1437,7 @@ The equal-frame 8x8 yield was roughly 25k pixels per run.
 
 **The 4x4 cells measured 20,976 fewer armed pixels over 357 equal frames
 -- no improvement over 8x8 -- while the freestanding prepass rose from
-60.28 to 74.86 ms/frame.**  (Both figures are pre-2.4c; that section scales the
+60.28 to 74.86 ms/frame.**  (Both figures are pre-2.4h; that section scales the
 pair to roughly 118 and 147 ms/frame as arithmetic, not measurement, and the
 rejection is unaffected.)  The finding: cell resolution is NOT the
 binding constraint.  Sealing only happens across depth-class boundaries,
@@ -2255,7 +2255,18 @@ is what it costs, as the hook's comment claims.
   none of this is a Falcon measurement.
 - Measured on `trex_prepass.tos` over frames 0–199, not on the release binary
   over the full choreography.
-### 2.4b The DSP ran at twice Falcon speed; re-measured on a corrected emulator
+### 2.4g The DSP ran at twice Falcon speed; re-measured on a corrected emulator
+
+**This section and 2.4b/2.4c re-measured the DSP-clock correction
+independently, and they agree.** They were written on separate lines of work.
+The whole-frame numbers land at 534.2 ms / 1.87 FPS here against 2.4c's
+535.7 ms / 1.867, the regression at +84.5 ms against +84.3, and every
+68030-side stage matches to a few tenths -- two runs of the same experiment
+agreeing to about 0.3%, which is the strongest evidence either carries. 2.4c
+reports to two decimals and splits the packet stage further; read it as the
+authoritative baseline and this section for the diagnosis and the recipe.
+**One result here was wrong and is retracted below**: the host port's share is
+not zero.
 
 Section 2.4a bounded what the measuring emulator charges for and cleared the
 DSP clock rate. That clearance was wrong, and it was wrong in the direction
@@ -2356,9 +2367,12 @@ The calibrated run is repeated as its own control: run-to-run noise is 0.1-0.2
 ms per stage and 0.0 ms on the frame, so the 14.4 ms is about a hundred times
 noise. It lands as **13.4 ms in the packet stage and 1.9 ms in `set_frame`**,
 with the rasterizer flat at +0.7 ms and the frame-100 checkpoint hashing
-`d89958b3...3d16` in all three runs. An independent sweep on the master line,
-taken at the pre-unpack state, measures 14.15 ms in the packet stage and 1.37
-ms in `set_frame` — corroborating both the magnitude and the way it splits.
+`d89958b3...3d16` in all three runs. **2.4c's wait-state sweep is the
+independent confirmation**: taken at the pre-unpack state on a separate line of
+work, it measures 14.15 ms in the packet stage and 1.37 ms in `set_frame`,
+corroborating both the magnitude and the way it splits, and it reaches the
+figure by a three-point sweep (0 / calibrated / 10) this two-point re-run does
+not attempt.
 **The port's wait-state bill is a real term in this program's frame time.**
 
 **How the original row came to read 0.1 ms is not established.** The obvious
@@ -2426,7 +2440,7 @@ work decides is the honest one.
   to optimize. On the corrected model it is no longer the biggest item.
 - **The three-FPS gate roughly doubles.** The distance from the frame to
   333.3 ms was 126.7 ms against 8.2a's 460.0 ms stock-clock baseline. Against
-  this build's 534.2 ms it was **200.9 ms**, and after 2.4d's light cache the
+  this build's 534.2 ms it was **200.9 ms**, and after 2.4i's light cache the
   re-measured gate in section 8.2 is **193.3 ms**. Section 8.2a already
   concluded that three FPS does not follow from any identified optimization;
   that conclusion is now much stronger, and the ~66 ms its two named levers
@@ -2435,7 +2449,7 @@ work decides is the honest one.
   terms.** It targets the stage that is now half the frame. Nothing measured
   here says the SSI/DMA path is easier or that section 7.4's hardware gates got
   smaller; what changed is only that the prize is larger.
-- **The stage figures above 2.4b are not re-tabulated.** Deltas measured inside
+- **The stage figures above 2.4g are not re-tabulated.** Deltas measured inside
   the rasterizer or the clear (3.5, 3.6, 3.8, 3.9, 2.5) are unaffected — those
   stages move less than half a millisecond between the two emulators. Deltas
   measured on the DSP or packet stage (2.3a-2.3i, 4.x) were taken with the DSP
@@ -2478,9 +2492,9 @@ against a real Falcon's DSPBench figures, which makes its DSP throughput far
 better founded than what it replaces, but 2.4a's bound still holds for the rest
 of the model and no figure in this document has been taken on a Falcon.
 
-### 2.4c The DSP-side A/Bs, re-taken at the corrected clock
+### 2.4h The DSP-side A/Bs, re-taken at the corrected clock
 
-2.4b re-measured the frame. It left every measurement that isolates *DSP* work
+2.4g re-measured the frame. It left every measurement that isolates *DSP* work
 standing at figures taken with the DSP at double speed, and those are the ones a
 halved clock should move most. This is that campaign: the same 265-frame prefix,
 the same recipe, and in every case **one binary with one byte patched**, which
@@ -2575,15 +2589,23 @@ transport work rather than rasterizer work.
 
 Per-span bank selection from the interpolated corner chain is now 4.6 ms/frame
 **cheaper** than the packet's single mean-level bank. This is not an emulator
-effect: it is a rasterizer figure, and 2.4b measured the rasterizer as moving
+effect: it is a rasterizer figure, and 2.4g measured the rasterizer as moving
 0.2 ms between the two emulators. The +8.1 ms was taken against the 428.1 ms
 flat epoch, before 3.8's opaque path and 3.9's instruction-cache series rebuilt
 the row loop; that rasterizer no longer exists. Layout is identical by
-construction here and the repeat-run noise floor is 0.2 ms (2.4b), so -4.6 ms is
+construction here and the repeat-run noise floor is 0.2 ms (2.4g), so -4.6 ms is
 outside noise — but the mechanism is not established, and 2.1's warning about
 rasterizer deltas applies to reading anything more into it.
 
 #### The release build, measured for the first time
+
+**2.4e measures the release too, on a later state of the program, and is the
+current figure.** This subsection took it at 536.5 ms armed / 533.0 disarmed;
+2.4e reports 511.2 ms / 1.956 FPS after the unpack change landed. The two are
+not in conflict and neither supersedes the other's finding about the prepass:
+the armed cost reads +3.5 ms here and +3.72/+3.38 ms there, which is the same
+result twice. Quote 2.4e for the release's speed and this subsection for how
+the release build came to be measurable at all.
 
 Everything above is a diagnostic build. The shipped `TREX.TOS` is a different
 binary — `-DTREX_RUN -DTREX_PREPASS -DTREX_RELEASE -DTREX_FPS` — and 8.2a records
@@ -2623,7 +2645,7 @@ the yield**, and at today's yield the arm costs more than it returns.
 #### The pre-normal-cache standings
 
 Everything measured at this point on the corrected emulator, one binary per row
-except where noted, all at the converged 265-frame prefix. Section 2.4d
+except where noted, all at the converged 265-frame prefix. Section 2.4i
 supersedes the shippable rows with the normal-light cache and the disarmed
 release default:
 
@@ -2632,7 +2654,7 @@ release default:
 | lighting off — not a shippable option, sizes 4.4a's protocol | 482.2 ms | 2.07 |
 | **release, prepass disarmed — one byte from shipping** | **533.0 ms** | **1.88** |
 | prepass build, arm 0 / arm 3 | 533.6 ms | 1.87 |
-| `trex_m68030` diagnostic, the 2.4b baseline | 534.2 ms | 1.87 |
+| `trex_m68030` diagnostic, the 2.4g baseline | 534.2 ms | 1.87 |
 | **release as shipped** | **536.5 ms** | **1.86** |
 | prepass build, arm 1 | 537.1 ms | 1.86 |
 | gouraud off | 538.8 ms | 1.86 |
@@ -2663,7 +2685,7 @@ conclusions built on "the DSP work is hidden" need re-checking rather than
 re-scaling** — the prepass is the case where the number moved by the expected
 factor and the conclusion drawn from it did not survive.
 
-### 2.4d Frame-local normal-light cache and release disarm — implemented and measured
+### 2.4i Frame-local normal-light cache and release disarm — implemented and measured
 
 Per-corner Gouraud evaluates three normal indices for every surviving
 triangle.  Across the complete static triangle stream, those 8,172 references
@@ -2703,7 +2725,7 @@ The scheduling also parks R4/N4 on the rotated-normal triple across corners
 and uses R0/R3 for the rotation cursors, removing two per-corner pointer resets.
 
 The controlled A/B used the current worktree and the corrected-clock Hatari
-recipe from 2.4b.  The before run reproduced the recorded baseline exactly;
+recipe from 2.4g.  The before run reproduced the recorded baseline exactly;
 the after run was re-converged to the same 265 completed frames by setting the
 VBL cap to 7,604:
 
@@ -2723,14 +2745,14 @@ emulator measurement, not a physical-Falcon result.
 
 Assembly is 0 errors/0 warnings.  The program grows from `P:$0901` to
 `P:$091E`, leaving 161 words at `$091F-$09BF` before the resident indices.
-(Section 7.4b's transport probe has since taken 103 of those, 2.4e's
+(Section 7.4b's transport probe has since taken 103 of those, 2.4j's
 calibration burst 25 more and its adopted object-space lighting the rest to
 `P:$09B1`; 14 words remain.)
 An armed-prepass 4,000-VBL gate completed 130 frames with zero protocol
 failures and reproduced the same frame-100 hash, directly exercising the
 prepass-order/cache lifetime boundary.
 
-The release default applies 2.4c's earlier result at the same time:
+The release default applies 2.4h's earlier result at the same time:
 `TREX_PREPASS` remains compiled in, and diagnostic prepass builds still default
 to arm 1, but `TREX_RELEASE` initializes `prepass_arm` to zero.  The cache plus
 that disarm measures **525.5 ms / 1.90 FPS** over 265 frames, against the
@@ -2740,16 +2762,16 @@ framebuffer hash is not an identity gate because its FPS overlay is designed to
 change when timing changes; the overlay-free diagnostic hash above is the
 correct output check.
 
-### 2.4e Three DSP-hotspot levers, sized -- two rejected by simulation, one built and measured
+### 2.4j Three DSP-hotspot levers, sized -- two rejected by simulation, one built and measured
 
 This campaign (2026-08-29) took the three named levers against the 252.1 ms
 packet stage in order of cost-to-try.  Two died in their first measurement,
 which is the cheapest place to die; the third is built, measured at -2.4
 ms/frame, and empirically output-identical.  All figures are corrected-clock
-Hatari, the 2.4b recipe, the converged 265-frame prefix.
+Hatari, the 2.4g recipe, the converged 265-frame prefix.
 
 **Cache widening/rehashing: rejected without building.**
-`tools/simulate_shade_cache.py` rebuilds 2.4d's source-order model from the
+`tools/simulate_shade_cache.py` rebuilds 2.4i's source-order model from the
 exact corner-normal sidecar and reproduces the recorded 3,777 hits to the
 digit before any variant row is read:
 
@@ -2763,7 +2785,7 @@ digit before any variant row is read:
 
 The ceiling is the finding: 44.16% of the 8,172 references are first touches
 of one of the 3,609 distinct normals and can never hit a frame-local cache of
-any size or associativity.  At 2.4d's measured ~2.0 us per hit the entire
+any size or associativity.  At 2.4i's measured ~2.0 us per hit the entire
 remaining headroom is ~1.6 ms/frame, the buildable 256-entry step (+287
 hits) is ~0.6 ms against 768 X words that do not exist (the BUILD tail holds
 293), and rehashing at 128 entries is worth one hit -- the conflict misses
@@ -2787,7 +2809,7 @@ for per-word cost against per-command overhead.  Both directions verified
 | DSP -> host (record readback) | **1.876 us** | 36.2 us |
 | host -> DSP (upload) | **1.188 us** | 2.1 us |
 
-The burst loops do nothing else per word, so unlike the pre-2.4b 2.3 us/word
+The burst loops do nothing else per word, so unlike the pre-2.4g 2.3 us/word
 figure this prices transport with both parties ready, separated from DSP
 production.  Against 8.2a's word counts the wire is 20,682 record words at
 1.876 (38.8 ms) plus ~5,900 upload words at 1.188 (7.0 ms): **~46 ms/frame
@@ -2848,7 +2870,7 @@ vectors, the choreography or the quantizer re-opens the question; the sweep
 is one `make trex_m68030_framehash` pair away from re-answering it.
 
 **What this leaves of the ~177 ms DSP-rate-sensitive estimate.**  With
-lighting's 51.2 ms (2.4c) the only attributed phase, ~2 ms of it now
+lighting's 51.2 ms (2.4h) the only attributed phase, ~2 ms of it now
 removable, the cache measured to its ceiling, and transport measured at ~46
 ms, the unattributed remainder -- projection, both classify passes, span
 setup, `span_div`, record packing -- still has no per-phase timer.  The
@@ -3238,7 +3260,7 @@ completely.  Re-taken the same way on the same full mesh and the same prefix:
 | Per-packet setup | 95.3 ms | **91.2 ms** | -4.1 ms |
 
 **Every split in this section is a stock-clock measurement**, taken before
-2.4b established that stock Hatari ran the DSP at twice its real rate.  The
+2.4g established that stock Hatari ran the DSP at twice its real rate.  The
 *frame* columns above are therefore all too low.  The rasterizer terms are
 not: the DSP clock is not a term in the CPU rasterizer, and the corrected
 re-measurement in 8.2 reproduces the post-3.9b/3.9c rasterizer split to
@@ -3489,7 +3511,7 @@ LOD and -36.0% on the full mesh, at byte-identical output**, from moving and
 shrinking code without changing what any of it computes.
 
 **Every absolute figure in this section is a stock-clock measurement**, taken
-before 2.4b found that stock Hatari ran the DSP at twice its real rate.  The
+before 2.4g found that stock Hatari ran the DSP at twice its real rate.  The
 series' deltas and percentages stand -- both sides of every A/B share one
 emulator, and the term being removed is CPU instruction fetch, which the DSP
 clock does not touch -- but its frame totals are all too low.  Section 8.2
@@ -3880,6 +3902,25 @@ should read that ratio first -- the instruction cache was 552 bytes of loop
 against 256 and could be *made* to fit, and this cannot.
 
 ### 3.11 The unpack writes into the packet -- implemented, -25.2 ms
+
+**Two independent implementations of this change exist, and 8.2b's is the one
+that ships.** This section and 8.2b were written on separate lines of work and
+measured the same optimization without knowing of each other. They agree on
+the physics: **-25.20 ms** in the packet stage here against **-24.9 ms**
+there, both against 8.2a's ~25 ms bus-access model, both byte-identical at the
+frame-100 checkpoint. Their absolute frames differ -- 532.6 -> 506.4 here,
+526.7 -> 499.5 there -- because 8.2b's line already carried 2.4i's
+normal-light cache, worth about 6 ms, and not because either run is wrong.
+
+What differs is the mechanism, and it matters. The version described below
+retargets the unpack unconditionally. 8.2b's decides per frame against
+`direct_unpack_enabled` and `span_validate_enabled`, so validation frames, the
+OCCL/SSI diagnostic builds and the projected-vertex fallback keep the copying
+path and the `rx_buffer` layout they consume. **That is the version in the
+tree**, because the span validator repaired in 3.12 reads `rx_buffer` and the
+unconditional form would silently starve it -- the same class of failure 3.12
+exists to prevent. Read this section for why the change is worth making and
+what it costs; read 8.2b for what the code does.
 
 Section 8.2a named this and costed it; it is now built and measured. **Every
 survivor's span record was handled twice.** The chunk unpack expanded the
@@ -4485,7 +4526,7 @@ resident array at the bottom of external Y overwrites executable P words.
 
 Both arrays therefore start above the program. The tracked LOD's first free P
 address is currently **`P:$0996`** — `$094D` before 2.4f's window-capacity
-probe added 44 words for its burn loop and hook, and `$0979` before 2.4d's
+probe added 44 words for its burn loop and hook, and `$0979` before 2.4i's
 normal-light cache. The current exact map is:
 
 | Array | Range | Words |
@@ -4520,12 +4561,12 @@ awk '/^_DATA P 0040/{f=1;next} /^_DATA/{f=0} f{n+=NF} END{printf "first free P a
 
 The current program ends at `P:$09B1`, leaving 14 words `$09B2-$09BF` before
 `triangle_indices`: the normal-cache build ended at `P:$091E`, section
-7.4b's `CMD_SSI_STREAM` transport probe added 103 words, and section 2.4e's
+7.4b's `CMD_SSI_STREAM` transport probe added 103 words, and section 2.4j's
 `CMD_PIO_BURST` calibration burst and adopted object-space lighting the
 rest. The complete
 animation-pose/transform/projection stage is 2.5% of the current frame. It is
 already DSP-side except for XYZ16 expansion and programmed-I/O transport; the
-remaining measured DSP lever was repeated per-corner lighting, which 2.4d now
+remaining measured DSP lever was repeated per-corner lighting, which 2.4i now
 caches. The two large remaining stages are mixed DSP/host packet construction
 and the M68030 framebuffer path.
 
@@ -4711,7 +4752,7 @@ failures. This directly covers the post-run cache refresh. These are
 control-path smoke tests only, not framebuffer-equivalence checks or timing
 results.
 
-Section 2.4d extends this phase-local block with a second cache at
+Section 2.4i extends this phase-local block with a second cache at
 `X:$3C71-$3DF0`: 128 exact normal-index tags and two clamped direct-light sums
 per entry. It reuses a rotated/lit normal across triangle corners while
 leaving the triangle-specific depth MPY/RND and every downstream quantizer in
@@ -5828,7 +5869,7 @@ bus contention against true-colour Videl, and DMA data ownership on hardware.
 The first hardware implementation must field-compare every decoded row
 against the existing host record before it is allowed to feed the rasterizer.
 
-#### 7.4a Implementation plan and current slice
+#### 7.4c Implementation plan and current slice
 
 Implementation is deliberately staged so every failure can return to the
 existing host-port path:
@@ -6013,20 +6054,20 @@ the transfer loop. `DSP-XMIT -> DMA-RECORD` through the crossbar can write
 result records to ST-RAM autonomously. Combined with cross-frame pipelining,
 those records could already be in memory at frame start and the CPU
 would no longer service 86 result-chunk transactions. The 112.7 ms stage quoted
-in the rest of this paragraph is the LOD epoch's; **section 2.4b supersedes it
+in the rest of this paragraph is the LOD epoch's; **section 2.4g supersedes it
 and isolates the shares this sentence said had not been isolated**. Of the
 current **252.1 ms** stage, about 177 ms is DSP-rate-sensitive, about 13 ms is
 host-port wait states and about 69 ms is CPU-side unpack and packet build. The
-split was taken at 259.7 ms, before 2.4d's light cache removed 7.6 ms of it;
+split was taken at 259.7 ms, before 2.4i's light cache removed 7.6 ms of it;
 the shares are quoted unrescaled because the cache changed what the CPU side
 fetches, not how the stage divides. **The port share is a correction**: this
-passage first read `zero`, on a 2.4b row since retracted and re-measured at
+passage first read `zero`, on a 2.4g row since retracted and re-measured at
 13.4 ms in this stage — the CPU-side residual absorbs the whole difference.
 
 That relocates the case for DMA. It is not a wait-state bill to be avoided: it
 is that the frame loop schedules nothing against those ~177 ms, so the CPU holds
 still through them while 243.7 ms of rasterizing waits behind. Cross-frame
-overlap (7.4a step 7) is where that goes, and DMA is what makes the overlap
+overlap (7.4c step 7) is where that goes, and DMA is what makes the overlap
 possible, since PIO forces the CPU to choose between transferring and
 rasterizing. Note also that the direct saving looks small here partly because
 2.4a's core charges nothing for executing the transfer loop and models no Videl
@@ -6055,7 +6096,7 @@ The sound DMA frames 16-bit words; the record's slope fields are genuine
 count: roughly 10k-14k DSP words becomes 40-56 KB of 16-bit-framed output. At
 the Falcon's specified 1 MB/s ceiling this is 40-56 ms per frame. It fits
 inside the CPU rasterization window if truly asynchronous — that window is
-**243.7 ms** on the corrected emulator (2.4b, re-measured for 8.2 on
+**243.7 ms** on the corrected emulator (2.4g, re-measured for 8.2 on
 2026-08-20), not the 333.2 ms of the LOD epoch this paragraph was written
 against, so the margin is narrower and the conclusion unchanged.
 The open question is the achieved rate and the M68030 slowdown when DMA, Videl
@@ -6107,7 +6148,7 @@ runs the identical prestep pair, plus two more for the left-clip catch-up,
 because in every build that exists today the **host** constructs the stream.
 The multiplies therefore moved from the walker into the stream builder, on the
 same CPU in the same frame -- a relocation, not an offload.  The 68.4-ms bound
-below is only recovered once the DSP emits the rows (7.4a steps 6 and 7); the
+below is only recovered once the DSP emits the rows (7.4c steps 6 and 7); the
 7.4b transport probe transmits a generated ramp and does not move it either.
 
 There are two integration stages:
@@ -6175,7 +6216,7 @@ charges much CPU arithmetic zero.
 
 **Re-measured on the corrected-clock emulator, 2026-08-20.**  The two older
 columns were taken on stock Hatari, which ran the Falcon DSP at twice its real
-rate (2.4b), and they are kept only as the shape of the 3.9 result.  The
+rate (2.4g), and they are kept only as the shape of the 3.9 result.  The
 current column is the shipping diagnostic build on the corrected emulator,
 over the same converged 265-frame prefix, with the section 3.5 profile patches
 re-taken on that build:
@@ -6199,7 +6240,7 @@ agreed on every term to 0.2 ms, which is the precision to attach to these
 figures: the timers are 200 Hz ticks over 265 frames, so one tick either way
 is 0.02 ms and a few ticks of scheduling jitter is all the spread there is.
 
-**The correction lands entirely in the packet stage, exactly where 2.4b says
+**The correction lands entirely in the packet stage, exactly where 2.4g says
 it must.**  Against 8.2a's stock-clock measurement of the same code family,
 the three rasterizer terms reproduce to 0.7 ms -- 112.7 against 113.4, 68.5
 against 68.3, 62.5 against 62.2 -- while the packet stage moves 185.7 to
@@ -6258,7 +6299,7 @@ Revised verdict:
 - **3 FPS full mesh: still not demonstrated.**  193.3 ms is the gap, and
   unlike the 155.5 ms figure it replaces, most of it now sits in a stage whose
   dominant term is the DSP waiting to finish -- which is an argument for
-  cross-frame overlap (7.4a step 7), not against transport work.  It is no
+  cross-frame overlap (7.4c step 7), not against transport work.  It is no
   longer true to say the gap is purely a host-side optimization target of the
   size section 3.9 met twice over.
 - **The former 1,600-triangle LOD reached 3 FPS, but it is removed.** Its
@@ -6303,11 +6344,11 @@ The packet stage reads 185.7, 185.7 and 186.0 across the normal and both
 profile builds, which is the cross-check that the patches touch only the
 rasterizer.
 
-**This whole table is pre-2.4b and is retained as the stock-clock reference
+**This whole table is pre-2.4g and is retained as the stock-clock reference
 only.**  Section 8.2's current column supersedes it: the same split re-taken
-on the corrected emulator, after 2.4d's light cache, is 252.1 / 112.7 / 68.5 /
+on the corrected emulator, after 2.4i's light cache, is 252.1 / 112.7 / 68.5 /
 62.5 / 30.8 for **526.6 ms / 1.90 FPS**.  The four non-packet terms reproduce
-this table to 0.7 ms, and the packet stage grows 185.7 to 252.1 -- 2.4d's
+this table to 0.7 ms, and the packet stage grows 185.7 to 252.1 -- 2.4i's
 light cache removing 7.6 ms of what the clock correction added.  **The
 distance to 333.3 ms is 193.3 ms**, not the 126.7 ms this section derived from
 the inflated baseline.  The two named levers below total about 66 ms, which
@@ -6325,7 +6366,7 @@ already pinned to 250 bytes by 3.9 step 4.  Whatever that stage is, it is not
 loop-body eviction.  7bece90 later split it directly on the corrected build:
 of 252.1 ms, about 177 ms is DSP-rate-sensitive, about 13 ms is host-port wait
 states and about 69 ms is CPU-side unpack and packet build.  That commit's own
-reading of the port share was zero; 2.4b retracts it and re-measures 13.4 ms
+reading of the port share was zero; 2.4g retracts it and re-measures 13.4 ms
 in this stage.
 
 **What it is, in the part that can be named:** the wire is about 26,800 words
@@ -6411,6 +6452,11 @@ correction and hardens:
   ~73 ms host CPU term rather than a fraction of a 185.7 ms mystery.
 #### 8.2b Direct-to-packet unpack -- implemented, -27.2 ms/frame, byte-identical
 
+**This is the implementation in the tree; 3.11 is an independent one of the
+same change, measured separately and in agreement.** See 3.11 for the
+reconciliation of the two sets of figures and why the runtime gate below is
+the form that survives.
+
 8.2a's duplicated-work item is built (2026-08-29).  The frame path is decided
 once per frame at chunk-pipeline start: on a direct frame the record unpack
 writes the 22 span/level fields straight into each packet's own slots w4..w25
@@ -6447,8 +6493,8 @@ reproduces `d89958b3…3d16` byte-identically, cumulative pixels 9,049,666 and
 `trex_m68030_ssi_rows` build (copy path forced) reproduces the same frame-100
 hash and its row stream passes `verify_ssi_rows`; the armed-prepass build
 reproduces the hash with zero protocol failures.  The shipped release,
-re-timed by 2.4c's two-byte instrumentation patch (`cmp -l` confirms exactly
-two bytes): **502.2 ms / 1.99 FPS** over 265 frames, against 2.4d's recorded
+re-timed by 2.4h's two-byte instrumentation patch (`cmp -l` confirms exactly
+two bytes): **502.2 ms / 1.99 FPS** over 265 frames, against 2.4i's recorded
 525.5 / 1.90.
 
 One pre-existing condition surfaced by the regression pass, not caused by
@@ -6461,7 +6507,7 @@ Until it is re-aligned with the current 18-word record, the byte-identity
 checkpoints are the only span-record gate.
 
 The gate arithmetic moves: 499.5 ms against 333.3 is **166.2 ms**, from
-193.3 -- and 2.4e's object-lights adoption takes the composed build to
+193.3 -- and 2.4j's object-lights adoption takes the composed build to
 **497.2 ms / 2.01 FPS (163.9 ms)**.  The remaining named lever is item 19's
 occlusion yield (~41 ms conditional on unbuilt yield work); the rest still
 has no mechanism short of item 15.
@@ -7079,7 +7125,7 @@ The open roadmap, in recommended order (expected effects from the section
     sites then carried to **57.18** (re-measured, section 2.4b) -- a
     quarter of the stage -- leaving **190 words free** to the `$09BF` ceiling
     (**173** since 3.12 spent seventeen restoring `command_get_vertices`, and
-    **144** since 2.4d's normal-light cache took twenty-nine more)
+    **144** since 2.4i's normal-light cache took twenty-nine more)
     against 51 when the audit began, at byte-identical output
     throughout.  The
     prepass cost is hidden by the FINISH window today, and every
@@ -7090,7 +7136,7 @@ The open roadmap, in recommended order (expected effects from the section
     extent at or below `$09BF`, byte-identical frame-100 `fb.res` against
     the recorded checkpoint.
 22. Cache repeated per-corner normal lighting. **Done and measured** -- see
-    section 2.4d. A 128-entry direct-mapped frame-local cache keeps the two
+    section 2.4i. A 128-entry direct-mapped frame-local cache keeps the two
     clamped direct-light channel sums before per-triangle depth cueing. Exact
     full-index tags make collisions harmless; invalidation follows the
     prepass/order lifetime boundary, and X:R carries each miss result into

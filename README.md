@@ -69,7 +69,7 @@ against DSPBench's real-Falcon figures. On this program the difference is 84.5
 ms per frame — 449.7 ms / 2.22 FPS becomes 534.2 ms / 1.87 FPS, all of it in
 the DSP readback and packet-build stage, with byte-identical output.
 `make measure` runs the documented headless timing recipe against that build
-and prints the stage report; OPTIMIZATION.md 2.4b has the measurement, the
+and prints the stage report; OPTIMIZATION.md 2.4g has the measurement, the
 mechanism and what it changes. Stock Hatari remains fine for simply watching
 the program run. **TOS 4.04 is not
 compatible with the current DSP load path**: the program reaches its
@@ -128,14 +128,14 @@ occlusion implementation is retained but default-disarmed;
 `TREX.LOD` is the matching DSP program. The deprecated reduced-mesh variant
 and its build assets have been removed. Performance figures in
 OPTIMIZATION.md are identified as Hatari/emulator results; physical Falcon030
-timing remains unmeasured. Figures predating OPTIMIZATION.md 2.4b were taken
+timing remains unmeasured. Figures predating OPTIMIZATION.md 2.4g were taken
 with the DSP at twice its real clock and are superseded by the re-measurement
 there. Over the 265-frame prefix the current full-mesh **diagnostic** build
 measures **497.2 ms / 2.01 FPS**, and `TREX.TOS` measures **499.9 ms / 2.00
 FPS** with its release-only overlay and default-disarmed prepass. The
 frame-local normal-light cache removes 7.6 ms from the diagnostic DSP/packet
-path (section 2.4d), section 8.2b's direct-to-packet record unpack removes
-another 24.9 ms of the packet stage at byte-identical output, and 2.4e's
+path (section 2.4i), section 8.2b's direct-to-packet record unpack removes
+another 24.9 ms of the packet stage at byte-identical output, and 2.4j's
 object-space lighting a further 2.1 ms at whole-choreography pixel identity;
 each section carries its fixed-prefix gates.
 
@@ -143,12 +143,12 @@ The v1.2 release has a measured figure: **511.2 ms per frame, 1.956 FPS**
 under a Hatari corrected to run the DSP at the Falcon's real clock
 (OPTIMIZATION.md 2.4e). Older figures in that file were taken on a stock
 emulator that ran the DSP at twice its rate and are ~24% optimistic on the
-whole frame; sections 2.4b--2.4e are the corrected ones. Still not a Falcon
+whole frame; sections 2.4b--2.4j are the corrected ones. Still not a Falcon
 measurement.
 
 The DSP program is the post-harvest build of OPTIMIZATION.md section 2.3h --
 nine sites reworked for size and speed at byte-identical output, with the
-armed occlusion prepass measured 25.6% cheaper in Hatari -- plus 2.4d's
+armed occlusion prepass measured 25.6% cheaper in Hatari -- plus 2.4i's
 128-entry normal-light cache, which lets repeated corner normals bypass their
 3x3 rotation and six direct-light dot products while retaining the
 per-triangle depth cue, and object-space lighting: the six light vectors
