@@ -30,8 +30,10 @@ M68030 model/texture setup, choreography lookup, XYZ16 stream expansion,
        preshaded CLUT banks
         |
         v
-DSP56001: build exact morph pose, transform, project, cull, light,
-          and build packed span-setup records in chunks
+DSP56001: build exact morph pose, transform, project, then cull and
+          light every survivor ahead of the chunks (2.4k, inside the
+          host's rasterization window); build packed span-setup records
+          in chunks, reading the lighting table
         |
         v
 M68030: packet construction and Ordering Table setup
@@ -78,9 +80,32 @@ in [`TREX/m68030/trex_m68030.s`](TREX/m68030/trex_m68030.s).
 
 ## 2. Current measured baseline
 
-The current diagnostic baseline is the frame-local normal-light-cache build
-from section 2.4i, measured over the fixed 265-frame prefix on the corrected
-DSP-clock Hatari described in 2.4g:
+The current diagnostic baseline is the prelight build of section 2.4k --
+frame-ahead lighting in the FINISH window over two-word packed normals, on
+top of 2.4i's normal-light cache, 8.2b's direct unpack and 2.4j's object-space
+lights -- measured over the fixed 265-frame prefix on the corrected DSP-clock
+Hatari described in 2.4g:
+
+| Stage | Time per frame | Share of frame |
+|---|---:|---:|
+| DSP set_frame | 13.2 ms | 2.9% |
+| DSP triangle setup/readback and packet build | 186.5 ms | 40.6% |
+| Framebuffer clear | 14.6 ms | 3.2% |
+| Ordering Table insertion | 2.5 ms | 0.5% |
+| Software span rasterizer | 242.5 ms | 52.8% |
+| **Total** | **459.6 ms / 2.18 FPS** | **100.0%** |
+
+The frame-100 framebuffer remains byte-identical to the recorded diagnostic
+checkpoint `d89958b3…3d16`, and the whole 483-frame choreography-plus-hold
+hashes identically to the previous build (2.4k).  Relative to the immediately
+re-run 498.2 ms control, 39.4 ms of the 38.6 ms saving lands in DSP
+readback/packet build and the rasterizer moves +1.0 ms of host layout.  The
+two-byte timing copy of `TREX.TOS` measures **457.1 ms / 2.19
+FPS**.  These are corrected-Hatari emulator measurements, not physical-Falcon
+timings.
+
+The table below is the previous baseline, 2.4i's normal-light-cache build,
+retained because sections 2.4i-2.4j and 8.2b are measured against it:
 
 | Stage | Time per frame | Share of frame |
 |---|---:|---:|
@@ -91,11 +116,9 @@ DSP-clock Hatari described in 2.4g:
 | Software span rasterizer | 243.8 ms | 46.3% |
 | **Total** | **526.6 ms / 1.90 FPS** | **100.0%** |
 
-The frame-100 framebuffer remains byte-identical to the recorded diagnostic
-checkpoint `d89958b3…3d16`.  Relative to the immediately re-run 534.2 ms
-baseline below, all 7.7 ms of stage saving lands in DSP readback/packet build;
-the rasterizer is identical to the tick.  These are corrected-Hatari emulator
-measurements, not physical-Falcon timings.
+Relative to the immediately re-run 534.2 ms baseline below, all 7.7 ms of
+that stage saving landed in DSP readback/packet build; the rasterizer was
+identical to the tick.
 
 The release now keeps the occlusion implementation compiled in but defaults it
 to disarmed, following 2.4h's measured +3.5 ms net loss at the current yield.
@@ -2225,8 +2248,10 @@ competition and this had not been stated.
 
 #### The resident probe costs nothing, re-measured on the release
 
-The probe stays in the shipping `.lod` at `probe_units = 0`, so its cost had to
-be shown rather than argued. The release re-measured by 2.4e's method on the
+The probe stayed in the shipping `.lod` at `probe_units = 0` until 2.4k's
+prelight pass took its program words (it is `WINPROBE=0` in the default build
+now, and re-assembles only beside `OBJLIGHTS=0`), so its cost had to be shown
+rather than argued. The release re-measured by 2.4e's method on the
 **current** artefacts -- `TREX.TOS` unchanged, `TREX.LOD` carrying the probe --
 at a matched frame count:
 
@@ -2863,11 +2888,14 @@ became the checked-in default -- the rebuilt shipping `.lod` is
 byte-identical to the exact variant the sweep ran -- and every recorded
 framebuffer checkpoint remains the gate, `d89958b3…3d16` included.  `make
 trex_dsp_camlights` rebuilds the camera-space reference (`trex_dsp_cam.lod`,
-extent `P:$099E`).  Composed with 8.2b's direct unpack, the diagnostic
-build measures **497.2 ms / 2.01 FPS** and the re-timed release **499.9 ms
-/ 2.00 FPS** over the converged 265-frame prefix.  A change to the light
-vectors, the choreography or the quantizer re-opens the question; the sweep
-is one `make trex_m68030_framehash` pair away from re-answering it.
+extent `P:$099E` then; `P:$0993` on the 2.4k source, which it must be rebuilt
+from because the packed-normal protocol makes any older image incompatible
+with the current host).  Composed with 8.2b's direct unpack, the diagnostic
+build measured **497.2 ms / 2.01 FPS** and the re-timed release **499.9 ms
+/ 2.00 FPS** over the converged 265-frame prefix; 2.4k takes both further.
+A change to the light vectors, the choreography or the quantizer re-opens the
+question; the sweep is one `make trex_m68030_framehash` pair away from
+re-answering it, and 2.4k ran it again over 483 frames.
 
 **What this leaves of the ~177 ms DSP-rate-sensitive estimate.**  With
 lighting's 51.2 ms (2.4h) the only attributed phase, ~2 ms of it now
@@ -2876,6 +2904,158 @@ ms, the unattributed remainder -- projection, both classify passes, span
 setup, `span_div`, record packing -- still has no per-phase timer.  The
 `prepass_arm=2` freestanding-and-timed bracket remains the mechanism that
 could name it, and is the remaining measurement this section did not build.
+
+### 2.4k Frame-ahead lighting: the prelight table and the two-word normal pack -- implemented, -38.6 ms/frame
+
+2.4j closed with lighting as the only attributed phase of the exposed DSP
+term, and 2.4f had shown the FINISH window sitting on ~221 ms of spare DSP
+capacity per frame with the prepass disarmed.  Those two facts compose.  With
+object-space lights (2.4j) a corner's Lambert sums depend only on the frame's
+light vectors and the static normal, and the per-triangle depth cue only on
+the projection -- all of it final before the host's FINISH acknowledgement,
+none of it dependent on BUILD.  BUILD nonetheless computed every survivor's
+lighting while the host waited on the port for the chunk.  This change
+(2026-09-02) moves that work into the window and leaves BUILD one table read
+per survivor.
+
+**What blocked it was memory, not time.**  A per-triangle result table needs
+2,724 words and the DSP had 293 spare.  The corner-normal table was the slack:
+3,610 normals stored as three 24-bit words each, 10,830 words, holding TMD
+components that are 1.3.12 values (-4096..4096) shifted left eleven, with
+exactly +1.0 clamped to `$7FFFFF`.  Three 14-bit integers fit two words with
+six bits spare -- word A = `vx<<10 | (vy>>4)&$3ff`, word B = `(vy&$f)<<20 |
+vz<<6` -- so the table now takes 7,220 words and frees 3,610.  The host
+packs at upload (`dsp_upload_face_normals`, 7,222 words on the wire instead of
+10,832, once per run) and `make_triangle_shade` unpacks per corner.  The
+clamp costs no compare: each component is rebuilt as `v<<10` with a clean
+sign extension and then doubled through a **limited** accumulator move, and
+`4096<<11` is the one value that overflows 24 bits, so the limiter saturates
+it to `$7FFFFF` and passes every other value unchanged.  That is the host's
+old conversion, reproduced by the arithmetic unit's own clamp.
+
+**The pass.**  `prelight_run` runs at the end of `command_finish_animated_frame`
+and `command_set_frame`, immediately after `cache_light_directions_x` (which
+copies and rotates the light vectors and invalidates the normal-light cache
+tags, both of which the Lambert loops read).  It walks the resident index list
+once, calls `make_triangle_area` and `make_triangle_bbox` -- the routines BUILD
+calls, in BUILD's order, so the two passes cannot disagree about a survivor --
+and for each survivor calls `make_triangle_zkey` and `make_triangle_shade`,
+then stores `shade<<12 | c2<<8 | c1<<4 | c0` (three 0..15 corner levels in
+slot order and the six-bit tint/level word) in `prelight_table` at the
+triangle's **global** index.  Indexing by global index rather than by survivor
+ordinal is what makes the table need no synchronisation with BUILD: BUILD
+reads `prelight_table + triangle_base + triangle_index` for exactly the
+triangles it accepts, and an entry no survivor names is never read.  R3 walks
+the table in BUILD's chunk loop, advanced in the countdown's free parallel
+slot, so the read costs one address register and no arithmetic.  BUILD then
+unpacks the word into `corner_levels` and `triangle_shade` -- the cells
+`make_triangle_span` and the record write consume -- in place of the
+`make_triangle_shade` call.  The pass saves and restores
+`y:triangles_processed` around itself as `prepass_run` does, since
+`make_triangle_zkey` counts.  The six index fields are unpacked by one shared
+routine now (`prepass_unpack_indices`, extended to the normal fields and
+called by BUILD, the prelight pass and the prepass classify), which also
+returned the 21 words BUILD's inline copy had cost.
+
+Byte identity is by construction: the same routines see the same inputs and
+run in the same order, only earlier, and the levels are integers that pack
+losslessly.  The window pays the classify of all 2,724 triangles plus the
+lighting of ~1,149 survivors, modelled at ~50-60 ms of DSP time against the
+221.3 ms mean spare capacity 2.4f measured for the disarmed window.  BUILD
+keeps `make_triangle_zkey` because the record's `w1` needs the key.
+
+**Measured**, corrected-clock Hatari, the 2.4g recipe, the converged 265-frame
+prefix (`MEASURE_VBLS` re-converged 7,215 -> 6,700).  The control is the
+unchanged tree re-run first, which reproduced the recorded 497.2 ms figure to
+within the run-to-run band:
+
+| Stage | before (control) | prelight | Delta |
+|---|---:|---:|---:|
+| DSP set_frame | 13.0 ms | 13.2 ms | +0.2 ms |
+| DSP readback + packet build | 225.9 ms | **186.5 ms** | **-39.4 ms** |
+| Framebuffer clear | 14.5 ms | 14.6 ms | +0.1 ms |
+| Ordering Table insertion | 2.6 ms | 2.5 ms | -0.1 ms |
+| Software span rasterizer | 241.5 ms | 242.5 ms | +1.0 ms |
+| **Total** | **498.2 ms / 2.01 FPS** | **459.6 ms / 2.18 FPS** | **-38.6 ms (-7.7%)** |
+
+A same-configuration repeat of the prelight build read 186.4 ms
+packet stage, 242.6 ms rasterizer and 459.6 ms/frame,
+which bounds the noise at the 0.1-0.2 ms per stage 2.4g established.  The
+saving lands where it must: 2.4h priced BUILD-side lighting at 51.2 ms before
+the normal-light cache (-7.7) and object-space lights (-2.1), i.e. ~41 ms, and
+the packet stage moved 39.4.  Had the pass leaked past the window, the leak
+would have surfaced as DSP wait in this same stage, since the host collects
+the FINISH acknowledgement at the next frame's `dsp_packets_begin`; the ~2 ms
+between the two figures is BUILD's table read and nibble unpack, ~25
+instructions per survivor, which is exposed.  The rasterizer's +1.0 ms is
+host-binary layout: the upload routine grew the text by 32 bytes, the data
+section's own alignment pad absorbed them, and the BSS -- every pinned cache
+phase -- is byte-for-byte where it was.
+
+**The two halves, separated.**  The normal pack alone is not free in BUILD:
+the per-corner unpack is ~15 more instructions per cache miss.  `PRELIGHT=0`
+under the same host binary keeps the packed normals and the BUILD-side
+shading, and measures 230.3 ms packet stage, 242.5 ms
+rasterizer, **503.7 ms / 1.99 FPS** (7,300 VBLs for 265
+frames).  That is the price of the pack on the exposed path, and the
+difference to the prelight column is what the window absorbs.
+
+**The release, re-timed** by 2.4e's two-byte method (`cmp -l` confirms exactly
+two bytes; the flag offsets are now 1,178,489 and 1,178,493 on the current
+`TREX.TOS`, re-derived from the link map): 187.2 ms packet stage,
+239.3 ms rasterizer, **457.1 ms / 2.19 FPS** over 265 frames (6,675 VBLs),
+against the recorded 499.9 / 2.00.  It lands 2.5 ms under the diagnostic
+build, where 2.4e measured it 4.8 ms over: 3.7 of those were the armed prepass
+the release no longer arms (2.4i), and the rest is the release's own text
+layout, inside the band section 2 documents and with the sign it happens to
+have this time.
+
+**Gates.**  Frame-100 `fb.res` reproduces `d89958b3…3d16`; cumulative pixels
+9,049,666 and 1,149 final packets equal.  The `TREX_FRAME_HASH` sweep (2.4j's
+instrument) was run on both trees over a 12,000-VBL budget: the unchanged tree
+hashed 483 frames, the prelight tree 512 -- the faster build completes more of
+the hold inside the same budget, and 512 is the sidecar's capacity -- and
+**all 483 common frames hash identically**, 274 choreography records and 209
+hold frames, every one of them distinct.  The tracked `trex_dsp.lod` is the
+default configuration's image of this source, 0 errors, 0 warnings, and
+re-assembles byte-identical.
+
+**Memory and program words.**  X: `corner_normals_x` shrinks to 753 normals
+(1,506 words, `$25E4-$2BC5`), `prelight_table` takes `$2BC6-$3669`, and an
+explicit pad (`CHUNK_UVS_BASE`) keeps `chunk_uvs` at `$39DF`, so the chunk
+buffers, the phase-local light copy, the normal-light cache and the whole
+prepass overlay keep their addresses; 885 X words are spare in the pad.  Y:
+`corner_normals_y` holds 2,857 normals in 5,714 words (`$29AC-$3FFD`).  The
+pass, BUILD's table read and its cursor cost **66 program words** (`PRELIGHT=0`
+ends at `P:$0964`); the two-word corner unpack and the shared index unpack,
+which returned BUILD's inline copy, net to two more; the default build ends at
+**`P:$09A6`, 25 words free**.  That headroom exists only because the two
+resident instruments left the default configuration: `WINPROBE` (44 words)
+and `PREPASSDIAG` (30) now default to 0 in the Makefile.  Each still assembles
+beside `OBJLIGHTS=0` -- `WINPROBE=1 OBJLIGHTS=0` ends exactly at `P:$09BF`,
+`PREPASSDIAG=1 OBJLIGHTS=0` at `P:$09B1` -- or beside `PRELIGHT=0`, and
+neither fits beside the shipping configuration alone.  The SSI bring-up
+configuration takes `PRELIGHT=0` with its other four zeros and ends at
+`P:$09B8`, 7 words free; `trex_dsp_camlights` (OBJLIGHTS=0 alone) at
+`P:$0993`.  2.4f's statement that the window probe ships resident at
+`probe_units = 0` is therefore no longer true of the default image; a
+capacity sweep of this build needs the `WINPROBE=1 OBJLIGHTS=0` variant.
+
+**What it changes.**  The three-FPS gap is **126.3 ms** (459.6 against 333.3),
+from 163.9.  Of the ~167 ms exposed DSP term 2.4j left, ~128 ms remains, and
+lighting is no longer part of it: what is left in BUILD's exposed time is
+projection lookups, both classify passes, span setup, `span_div` and record
+packing, still without a per-phase timer.  The window's spare capacity is
+correspondingly smaller by the pass -- ~160 ms mean by the model above -- and
+item 15's overlap has that much less room, which the same trade-off 2.4f named
+for items 11 and 15 already covers.  The prelight table is also the first
+per-frame result the DSP produces ahead of BUILD; the record stream itself
+still cannot follow it, for the reason 2.4d gives (20,682 words against a
+full X space), and the 885 spare words in the pad are not enough to change
+that.
+
+Every figure here is an emulator measurement under 2.4a's caveats; none is a
+Falcon timing.
 
 ### 2.5 Delta clearing: built, measured, rejected
 
@@ -4496,7 +4676,9 @@ runs:
 | `X:$0040-$0043` | 4 | command and translation |
 | `X:$0044-$1063` | 4,128 | static base vertices |
 | `X:$1064-$25E3` | 5,504 | object/camera pose, then projected vertices in place |
-| `X:$25E4-$39DE` | 5,115 | X half of the corner-normal table |
+| `X:$25E4-$2BC5` | 1,506 | X half of the corner-normal table, two packed words per normal (2.4k) |
+| `X:$2BC6-$3669` | 2,724 | `prelight_table`, one lighting word per triangle by global index (2.4k) |
+| `X:$366A-$39DE` | 885 | spare; an explicit pad pins the chunk buffers where they were |
 | `X:$39DF-$3A1E` | 64 | one chunk's packed UV pairs |
 | `X:$3A1F-$3C5E` | 576 | 32 survivor records at 18 words each |
 | `X:$3C5F-$3C70` | 18 | paired direct-light vectors |
@@ -4525,33 +4707,33 @@ is where a DSP program larger than 512 words keeps its own code. Placing a
 resident array at the bottom of external Y overwrites executable P words.
 
 Both arrays therefore start above the program. The tracked LOD's first free P
-address is currently **`P:$0996`** — `$094D` before 2.4f's window-capacity
-probe added 44 words for its burn loop and hook, and `$0979` before 2.4i's
-normal-light cache. The current exact map is:
+address is currently **`P:$09A7`** (2.4k; `$0996` before it, `$094D` before
+2.4f's window-capacity probe added 44 words for its burn loop and hook, and
+`$0979` before 2.4i's normal-light cache). The current exact map is:
 
 | Array | Range | Words |
 |---|---|---:|
 | `triangle_indices` | `Y:$09C0-$29AB` | 8,172 (2,724 × 3 packed words) |
-| `corner_normals_y` | `Y:$29AC-$3FFE` | 5,715 (1,905 × XYZ) |
+| `corner_normals_y` | `Y:$29AC-$3FFD` | 5,714 (2,857 × 2 packed words, 2.4k) |
 
-`Y:$09C0` leaves **42** external words (`$0996-$09BF`) free above the default
-build for code growth. That is the SSIPROBE=0 configuration; the SSI bring-up
+`Y:$09C0` leaves **25** external words (`$09A7-$09BF`) free above the default
+build for code growth. That is the shipping configuration (SSIPROBE=0,
+WINPROBE=0, PIOBURST=0, PREPASSDIAG=0, OBJLIGHTS=1, PRELIGHT=1); the SSI
 bring-up build (SSIPROBE=1, WINPROBE=0, PIOBURST=0, PREPASSDIAG=0,
-OBJLIGHTS=0) ends at `$09B6` with 9 words free: carrying the 103-word
-transport probe costs it the window burn loop, 2.3j's diagnostic counters and
-object-space lighting, none of which it exercises. The frontend reserves
-16,120 Y words through `Y:$3EF7`, so only four reserved words remain above
-`face_normals`.
+OBJLIGHTS=0, PRELIGHT=0) ends at `$09B8` with 7 words free: carrying the
+103-word transport probe costs it object-space lighting and the prelight
+pass, neither of which it exercises. The frontend reserves 16,120 Y words
+through `Y:$3EF7`, so only four reserved words remain above `face_normals`.
 
-The remaining 1,705 corner normals are the X-bank allocation above. The
+The remaining 753 corner normals are the X-bank allocation above. The
 on-chip scalar/counter block ends at `Y:$00DE`; `Y:$0100-$01FF` remains
 deliberately unused because the available Falcon mapping descriptions
 disagree about it. X memory is unaffected by the P/Y overlay: its external
 portion maps to `P:$4000-$7FFF`, which no realistic program size reaches.
 
-The two arrays use 13,620 words. That is why the index list is packed at two
-words per triangle: the unpacked three-word form would need 8,172 and does not
-fit in the remaining P/Y window.
+The two Y arrays use 13,886 words. That is why the index list is packed at
+three words per triangle carrying six fields: the unpacked six-word form would
+need 16,344 and does not fit in the P/Y window.
 
 Anything that grows the DSP program past `P:$09BF` silently corrupts the first
 triangle indices instead of failing to assemble. Check the first free P
@@ -4561,11 +4743,12 @@ address in the LOD after adding DSP code:
 awk '/^_DATA P 0040/{f=1;next} /^_DATA/{f=0} f{n+=NF} END{printf "first free P address: $%X\n", 0x40+n}' TREX/dsp/trex_dsp.lod
 ```
 
-The current program ends at `P:$09B1`, leaving 14 words `$09B2-$09BF` before
+The current program ends at `P:$09A6`, leaving 25 words `$09A7-$09BF` before
 `triangle_indices`: the normal-cache build ended at `P:$091E`, section
-7.4b's `CMD_SSI_STREAM` transport probe added 103 words, and section 2.4j's
-`CMD_PIO_BURST` calibration burst and adopted object-space lighting the
-rest. The complete
+7.4b's `CMD_SSI_STREAM` transport probe added 103 words, section 2.4j's
+`CMD_PIO_BURST` calibration burst and adopted object-space lighting took the
+rest to `P:$09B1`, and 2.4k's prelight pass spent 66 words after retiring
+the window probe and the prepass counters (74) from the default build. The complete
 animation-pose/transform/projection stage is 2.5% of the current frame. It is
 already DSP-side except for XYZ16 expansion and programmed-I/O transport; the
 remaining measured DSP lever was repeated per-corner lighting, which 2.4i now
@@ -4819,13 +5002,16 @@ two concrete departures from the plan are called out where they occur.
    proposed.**
 2. The complete 3,610-entry PS1 corner-normal table is resident, split on a
    normal index rather than a triangle boundary: `corner_normals_y` holds the
-   first `NORMAL_Y_COUNT` = 1,905 normals (5,715 words, `Y:$29AC-$3FFE`)
-   directly behind the now-resident `triangle_indices` (`Y:$09C0-$29AB`,
-   8,172 words) — 13,887 of the Y window's 13,888 words — and
-   `corner_normals_x` holds the remaining `NORMAL_X_COUNT` = 1,705 (5,115
-   words, `X:$25E4-$39DE`) in the X allocation the resident UV pairs used to
-   occupy. **Done as proposed**, address for address: 8,172 + 5,715 = 13,887,
-   and 5,115 fits the displaced X allocation exactly. This layout does not
+   first `NORMAL_Y_COUNT` normals directly behind the now-resident
+   `triangle_indices` (`Y:$09C0-$29AB`, 8,172 words) and `corner_normals_x`
+   the remaining `NORMAL_X_COUNT` in the X allocation the resident UV pairs
+   used to occupy. **Done as proposed** at three words per normal -- 1,905 in
+   Y (5,715 words, `Y:$29AC-$3FFE`, 13,887 of the window's 13,888 words) and
+   1,705 in X (5,115 words, `X:$25E4-$39DE`, the displaced allocation
+   exactly). Section 2.4k then packed each normal into two words and moved
+   the split to 2,857 in Y (5,714 words, `Y:$29AC-$3FFD`) and 753 in X (1,506
+   words, `X:$25E4-$2BC5`), freeing 3,610 X words for the prelight table.
+   This layout does not
    depend on which mesh LOD is linked in — the corner-normal table's size
    comes from the source TMD, not from how many triangles the decimated mesh
    keeps; `triangle_indices` is sized for the full 2,724-triangle mesh and a
@@ -6509,8 +6695,9 @@ Until it is re-aligned with the current 18-word record, the byte-identity
 checkpoints are the only span-record gate.
 
 The gate arithmetic moves: 499.5 ms against 333.3 is **166.2 ms**, from
-193.3 -- and 2.4j's object-lights adoption takes the composed build to
-**497.2 ms / 2.01 FPS (163.9 ms)**.  The remaining named lever is item 19's
+193.3 -- 2.4j's object-lights adoption takes the composed build to
+**497.2 ms / 2.01 FPS (163.9 ms)**, and 2.4k's frame-ahead lighting to
+**459.6 ms / 2.18 FPS (126.3 ms)**.  The remaining named lever is item 19's
 occlusion yield (~41 ms conditional on unbuilt yield work); the rest still
 has no mechanism short of item 15.
 
@@ -7161,6 +7348,28 @@ The open roadmap, in recommended order (expected effects from the section
     adds one costing 117.70 ms/frame freestanding (2.4b) into a FINISH window
     that is already DSP-bound, so whether it still hides is an open
     measurement, and `arm0/`/`arm1/` can answer it without new code.
+23. Frame-ahead lighting over two-word packed normals. **Done and measured**
+    -- see section 2.4k.  Item 22's reopening named the exposed DSP term as a
+    frame-rate lever and 2.4j left lighting as its only attributed phase;
+    2.4f had measured the disarmed FINISH window at 221 ms of spare DSP time.
+    The corner-normal table is packed from three 24-bit words per normal to
+    two (the components are 14-bit integers; the old +1.0 clamp comes back
+    for free through a limited accumulator move), the 3,610 X words that
+    frees hold one lighting word per triangle by global index, and
+    `prelight_run` lights every area/box survivor at the end of FINISH and
+    SET_FRAME with the routines BUILD calls, in BUILD's order.  BUILD reads
+    the word instead of calling `make_triangle_shade`.  Corrected-clock
+    Hatari, 265-frame prefix: **498.2 -> 459.6 ms/frame, 2.01 -> 2.18 FPS**,
+    -39.4 ms of it in the packet stage, frame-100 checkpoint and all 483
+    hashed choreography-plus-hold frames byte-identical.  Cost: 66 program
+    words, which displaced the window probe and the prepass counters from the
+    default build (each re-assembles beside `OBJLIGHTS=0`), and ~50-60 ms of
+    the window's spare capacity, which item 15 would otherwise have.  The
+    three-FPS gap is 126.3 ms.  What remains exposed on the DSP -- ~128 ms of
+    projection lookups, classify, span setup, `span_div` and record packing --
+    still has no per-phase timer, and the record stream still cannot follow
+    the lighting into the window for 2.4d's reason: there is no room for a
+    frame of records, 885 spare X words included.
 
 ## 11. References
 

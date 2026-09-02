@@ -4,26 +4,36 @@ DOSBOX=dosbox
 # leave it out; the SSI bring-up targets set it to 1.  See trex_dsp.asm's
 # "SSI transport probe" block and the P:$09BF ceiling note beside it.
 SSIPROBE=0
-# Assemble the cross-frame window capacity probe (2.4f).  Default on, as the
-# shipping build pays only three instructions per frame for it.  The SSI
-# bring-up build turns it off: both instruments together exceed P:$09BF.
-WINPROBE=1
+# Assemble the cross-frame window capacity probe (2.4f).  Default OFF since
+# the prelight pass (2.4k) took the program words it used to occupy.  To
+# re-take a window-capacity sweep build WINPROBE=1 OBJLIGHTS=0, which ends
+# exactly at the P:$09BF ceiling (tools/probe_units.py then patches that
+# variant image, not the tracked one); WINPROBE=1 alone no longer fits.
+WINPROBE=0
 # Assemble the host-port per-word calibration burst (CMD_PIO_BURST, 8.2a).
 # Its calibration is already taken and recorded, so the default build leaves
 # it out; set to 1 to re-take it.
 PIOBURST=0
-# Assemble the 2.3j occlusion-prepass diagnostic counters and their mode-4
-# readout.  Default on: they are what section 2.3j is measured with, and the
-# shipping build has room for them.  The SSI bring-up build turns them off to
-# fit its transport probe under the P:$09BF ceiling.  They are write-only --
+# Assemble the 2.3j occlusion-prepass diagnostic counters.  Default OFF since
+# the prelight pass (2.4k) needed their program words; the mode-4 readout
+# keeps its seven-word reply shape and reports zeros.  Rebuild with
+# PREPASSDIAG=1 OBJLIGHTS=0 (P:$09B1) to re-take a 2.3j counter measurement;
+# PREPASSDIAG=1 alone no longer fits.  They are write-only --
 # nothing but mode 4 reads prepass_status+2..+7 -- so dropping them cannot
 # change rendered output, which the frame-100 checkpoint verifies.
-PREPASSDIAG=1
+PREPASSDIAG=0
 # Rotate the light vectors into object space once per frame instead of
 # transforming every corner normal.  Pixel-identical to OBJLIGHTS=0 over the
 # 321-frame hash sweep (2.4j), and 19 program words cheaper is the reason the
 # SSI bring-up build takes the 0 form.
 OBJLIGHTS=1
+# Light each frame's survivors inside the FINISH window (prelight_run) and
+# have BUILD read the results from prelight_table, instead of calling
+# make_triangle_shade per survivor in the exposed packet stage
+# (OPTIMIZATION.md 2.4k).  Byte-identical output by construction; 0 restores
+# the BUILD-side shading and is what the SSI bring-up configuration needs to
+# fit its transport probe under P:$09BF.
+PRELIGHT=1
 
 # One generator for the assembler-visible build switches, used by every DSP
 # rule so a variant can never assemble against a stale or missing config.
@@ -35,7 +45,7 @@ OBJLIGHTS=1
 # lands in the same second as its own source is otherwise skipped -- and before
 # the stamp existed nothing tied the image to its configuration at all, so
 # asking for one variant could silently leave you the previous one.
-DSPCONF_ID=$(SSIPROBE)$(WINPROBE)$(PIOBURST)$(PREPASSDIAG)$(OBJLIGHTS)
+DSPCONF_ID=$(SSIPROBE)$(WINPROBE)$(PIOBURST)$(PREPASSDIAG)$(OBJLIGHTS)$(PRELIGHT)
 DSPCONF_STAMP=./TREX/dsp/build/dspconf-$(DSPCONF_ID).stamp
 # Each configuration assembles to its own image, so asking for one names a file
 # that either exists (and is current) or does not (and is built).  Existence is
@@ -49,8 +59,8 @@ DSPVARIANT=./TREX/dsp/build/trex_dsp-$(DSPCONF_ID)-$(DSPSRC_ID).lod
 # The identity of the default: only this configuration may write the tracked
 # ./TREX/dsp/trex_dsp.lod, so a variant build can never leave the wrong image
 # in the tree for `make measure` or a release to pick up.
-DSPCONF_DEFAULT_ID=01011
-DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' > ./TREX/dsp/build/dspconf.inc
+DSPCONF_DEFAULT_ID=000011
+DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\nPRELIGHT\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' '$(PRELIGHT)' > ./TREX/dsp/build/dspconf.inc
 # Extra flags for the DSP assembly run.  Plain DOSBox needs none.  DOSBox-X
 # opens a working-folder prompt and a menu on macOS and then never reaches
 # BUILD.BAT, so it needs:
@@ -68,8 +78,9 @@ TOS402=../F030Arcade/third_party/tos/tos402.img
 MEASURE_DIR=./TREX/m68030/measure
 # 265-frame prefix on the corrected build; re-converge after any program change
 # (OPTIMIZATION.md 2.4b) rather than trusting this constant.  Re-converged for
-# the 8.2b direct-unpack + 2.4e object-lights build (497.2 ms/frame).
-MEASURE_VBLS=7215
+# the 2.4k prelight build (459.6 ms/frame); it was 7215 for the 8.2b
+# direct-unpack + 2.4j object-lights build (497.2 ms/frame).
+MEASURE_VBLS=6700
 # Converged VBL budgets for the three-build rasterizer split (measure_split).
 # Each has to land on the SAME frame count as MEASURE_FRAMES or the averages
 # are taken over different stretches of the choreography and do not subtract;

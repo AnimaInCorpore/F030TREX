@@ -21,8 +21,9 @@
 ;       count, followed by count * (x,y,z)
 ;
 ;   CMD_LOAD_NORMALS:
-;       count, followed by count * (nx,ny,nz)
-;       one unit object-space face normal per triangle, in triangle order
+;       count, followed by count * NORMAL_WORDS packed words -- the complete
+;       PS1 corner-normal table in TMD normal order, two words per unit
+;       object-space normal (see NORMAL_WORDS for the field layout)
 ;
 ;   CMD_SET_FRAME:
 ;       9 matrix words, 3 translation words, 3 animation-bias words,
@@ -143,14 +144,32 @@ TRI_OCCLUDER_BIT	= 23
 ; The PS1 corner-normal table, resident in full so the packed indices above
 ; address it directly with no remap.  It does not fit in one bank beside the
 ; index list: the Y window $09C0..$3FFF holds 13,888 words, the indices take
-; 8,172, so the first NORMAL_Y_COUNT normals live there (5,715 words -- the
-; window is full to its last-but-one word) and the remaining 1,705 sit in
-; the X allocation the resident UV pairs used to occupy.  The split is on a
-; NORMAL index, so the shading loop picks a bank with one compare per
-; corner.  The displaced UV pairs now travel with each BUILD chunk instead.
+; 8,172, so the first NORMAL_Y_COUNT normals live there and the remainder
+; sit in the X allocation the resident UV pairs used to occupy.  The split
+; is on a NORMAL index, so the shading loop picks a bank with one compare
+; per corner.  The displaced UV pairs now travel with each BUILD chunk.
+;
+; Each normal is PACKED into two words (NORMAL_WORDS).  The TMD components
+; are 1.3.12 values, -4096..4096, and this program consumed them as 1.23
+; words: v<<11, except that +4096 (exactly +1.0) was clamped to $7FFFFF.
+; Two words hold the three 14-bit integers with six bits to spare:
+;
+;   word A = vx<<10 | (vy>>4) & $3ff      (vx in bits 23..10, vy's top ten)
+;   word B = (vy & $f)<<20 | vz<<6        (vy's low four bits, vz in 19..6)
+;
+; make_triangle_shade restores each 1.23 word as 2*(v<<10) through a LIMITED
+; accumulator move, which reproduces the clamp exactly: 4096<<11 overflows
+; 24 bits and saturates to $7FFFFF, every other value passes unchanged.
+; The packing frees 3,610 X words, which hold prelight_table; 2,857 normals
+; fill the Y window to its last-but-two word (5,714 words).
 NORMAL_TOTAL	= 3610
-NORMAL_Y_COUNT	= 1905
+NORMAL_WORDS	= 2
+NORMAL_Y_COUNT	= 2857
 NORMAL_X_COUNT	= NORMAL_TOTAL-NORMAL_Y_COUNT
+; Where the BUILD chunk buffers start in X.  prelight_table ends below it and
+; the gap is padded, so chunk_uvs, triangle_out, the phase-local light copy,
+; the normal-light cache and the whole prepass overlay keep their addresses.
+CHUNK_UVS_BASE	= $39df
 
 ; Direct-mapped, frame-local cache of the two clamped direct-light channel sums
 ; produced for a corner normal.  Normal indices repeat often in the O3D
@@ -500,8 +519,8 @@ load_vertex_loop
 	jmp	<main_loop
 
 command_load_normals
-	; The complete PS1 corner-normal table, one unit object-space normal
-	; per entry in TMD normal order, split across the banks as NORMAL_Y_COUNT
+	; The complete PS1 corner-normal table, two packed words per unit normal
+	; (NORMAL_WORDS) in TMD normal order, split across the banks as NORMAL_Y_COUNT
 	; documents: the first block fills the Y window behind the index list,
 	; the remainder lands in X where the resident UV pairs used to live.
 	; The host sends the full table for both mesh variants; the packed
@@ -509,14 +528,14 @@ command_load_normals
 	jsr	<receive_word
 	move	x0,y:<normal_count
 	move	#corner_normals_y,r0
-	move	#>3*NORMAL_Y_COUNT,x0
+	move	#>NORMAL_WORDS*NORMAL_Y_COUNT,x0
 	do	x0,load_normal_y_loop
 	jsr	<receive_word
 	move	x0,y:(r0)+
 load_normal_y_loop
 
 	move	#corner_normals_x,r0
-	move	#>3*NORMAL_X_COUNT,x0
+	move	#>NORMAL_WORDS*NORMAL_X_COUNT,x0
 	do	x0,load_normal_x_loop
 	jsr	<receive_word
 	move	x0,x:(r0)+
@@ -611,6 +630,9 @@ set_light_loop
 	jsr	<transform_vertices
 	jsr	<project_vertices
 	jsr	<cache_light_directions_x
+	IF	PRELIGHT
+	jsr	<prelight_run
+	ENDIF
 
 	move	#ACK_FRAME,x0
 	jsr	<send_word
@@ -782,6 +804,14 @@ finish_no_prepass
 	; stream their normal components from Y.  It must follow prepass_run:
 	; that pass owns the same overlay until it has consumed prepass_order.
 	jsr	<cache_light_directions_x
+
+	IF	PRELIGHT
+	; Light this frame's survivors here, inside the window, so BUILD reads
+	; results instead of computing them (prelight_run).  After
+	; cache_light_directions_x by necessity: the Lambert loops read the
+	; phase-local light copy and the cache tags it has just invalidated.
+	jsr	<prelight_run
+	ENDIF
 
 	; ---- cross-frame window capacity probe ------------------------------
 	; A calibrated load of settable size, placed at the very END of the
@@ -969,6 +999,15 @@ build_no_uvs
 	move	#triangle_indices,x0
 	add	x0,a
 	move	a1,r2
+	IF	PRELIGHT
+	; r3 -> this chunk's first prelight word (one per triangle, global
+	; index).  triangle_advance steps it in lockstep with R2's three-word
+	; stride, so it needs no per-triangle address arithmetic.
+	move	y:triangle_base,a
+	move	#prelight_table,x0
+	add	x0,a
+	move	a1,r3
+	ENDIF
 
 	move	y:triangle_count,x0
 	move	x0,y:triangle_remaining
@@ -977,36 +1016,9 @@ build_no_uvs
 	jeq	<triangle_reply
 triangle_count_loop
 	; Unpack the three resident words into three vertex and three corner-
-	; normal indices.  LSR, not ASR: the fields are unsigned and a stray
-	; sign extension would index far outside either table.
-	move	y:(r2)+,x1
-	move	y:(r2)+,y1
-	move	#>TRI_VERTEX_MASK,x0
-	tfr	x1,a
-	and	x0,a
-	; Each TFR's parallel slot stores the PREVIOUS field: the parallel
-	; move reads A1 at the start of the instruction, before the transfer
-	; lands -- the read-at-start rule working for us here.
-	tfr	x1,a	a1,y:triangle_i0
-	rep	#TRI_INDEX_BITS
-	lsr	a
-	; The occluder bit lands in bit 11 after this shift; mask it off or the
-	; vertex lookup reads 2,048 entries past v1.
-	and	x0,a
-	tfr	y1,a	a1,y:triangle_i1
-	and	x0,a
-	tfr	y1,a	a1,y:triangle_i2
-	rep	#TRI_INDEX_BITS
-	lsr	a
-	move	a1,y:triangle_n0
-	move	y:(r2)+,y1
-	move	#>TRI_INDEX_MASK,x0
-	tfr	y1,a
-	and	x0,a
-	tfr	y1,a	a1,y:triangle_n1
-	rep	#TRI_INDEX_BITS
-	lsr	a
-	move	a1,y:triangle_n2
+	; normal indices through the routine the prelight pass and the prepass
+	; classify share, so no two passes can disagree about a field.
+	jsr	<prepass_unpack_indices
 
 	; The armed prepass has already classified and bucket-ordered this frame.
 	; Its kill bitmap is conservative and is indexed by the GLOBAL triangle
@@ -1064,7 +1076,32 @@ build_triangle_not_killed
 	jeq	<triangle_culled
 
 	jsr	<make_triangle_zkey
+	IF	PRELIGHT
+	; This triangle's lighting was computed in the FINISH window by
+	; prelight_run: shade<<12 | c2<<8 | c1<<4 | c0.  Unpack it into the
+	; cells make_triangle_span and the record write consume, in place of
+	; the make_triangle_shade call the exposed packet stage used to pay
+	; for.  Each TFR's parallel slot stores the PREVIOUS nibble -- the
+	; read-at-start rule, as in the index unpack.
+	move	x:(r3),a
+	move	#>$f,x0
+	tfr	a,b
+	and	x0,b
+	rep	#4
+	lsr	a
+	tfr	a,b	b1,y:<corner_levels
+	and	x0,b
+	rep	#4
+	lsr	a
+	tfr	a,b	b1,y:<corner_levels+1
+	and	x0,b
+	rep	#4
+	lsr	a
+	move	a1,y:triangle_shade
+	move	b1,y:<corner_levels+2
+	ELSE
 	jsr	<make_triangle_shade
+	ENDIF
 	jsr	<make_triangle_span
 
 	; Survivor record, eighteen packed words -- see SPAN_RECORD_WORDS for
@@ -1156,7 +1193,13 @@ triangle_advance
 	move	#>1,x0
 	add	x0,a	y:triangle_remaining,b
 	move	a1,y:triangle_index
+	IF	PRELIGHT
+	; The countdown's free parallel slot steps the prelight cursor, so every
+	; triangle -- culled or not -- advances it in lockstep with R2.
+	sub	x0,b	(r3)+
+	ELSE
 	sub	x0,b
+	ENDIF
 	move	b1,y:triangle_remaining
 	tst	b
 	jne	<triangle_count_loop
@@ -1342,6 +1385,78 @@ cache_light_direction_loop
 	rep	#SHADE_CACHE_ENTRIES
 	move	a1,x:(r1)+
 	rts
+
+	IF	PRELIGHT
+; -----------------------------------------------------------------------------
+; Prelight pass -- this frame's lighting, computed inside the host's
+; cross-frame window instead of the exposed packet stage (OPTIMIZATION.md
+; 2.4k).
+;
+; BUILD used to call make_triangle_shade per survivor while the host waited
+; on the port for the chunk, so every corner's Lambert work was exposed frame
+; time.  Nothing in it depends on BUILD: the inputs are the projected
+; vertices, the frame's light vectors (copied and, with OBJLIGHTS, rotated by
+; cache_light_directions_x) and the static normals.  So FINISH and SET_FRAME
+; walk the resident index list once more, keep the area and box survivors --
+; the SAME routines BUILD calls, in the same order, so the two passes cannot
+; disagree -- and store each survivor's three corner levels and shade word
+; in prelight_table at its global index.  BUILD then reads one word per
+; survivor.  Same arithmetic on the same inputs, only earlier: byte-identical
+; output by construction.
+;
+; make_triangle_zkey bumps y:triangles_processed, which CMD_GET_STATUS
+; reports; it is saved and restored around the pass as prepass_run does,
+; through a projection temporary that is dead here.  R1 and R2 are the
+; walk's cursors: no routine called below touches either, the contract
+; BUILD's chunk loop already relies on.
+; -----------------------------------------------------------------------------
+prelight_run
+	move	y:<triangles_processed,x0
+	move	x0,y:<project_temp_x
+	move	#triangle_indices,r2
+	move	#prelight_table,r1
+	; A hardware DO with a zero count runs 65,536 times.
+	move	y:<triangle_list_count,a
+	tst	a
+	jeq	<prelight_done
+	move	a1,x0
+	do	x0,prelight_end
+	jsr	<prepass_unpack_indices
+	jsr	<make_triangle_area
+	tst	a
+	jge	<prelight_next
+	jsr	<make_triangle_bbox
+	tst	a
+	jeq	<prelight_next
+	jsr	<make_triangle_zkey
+	jsr	<make_triangle_shade
+	; shade<<12 | c2<<8 | c1<<4 | c0: the levels are 0..15 and the shade
+	; word is tint<<4 | level, six bits, so nothing reaches bit 18.
+	move	y:triangle_shade,a
+	rep	#4
+	asl	a
+	move	y:<corner_levels+2,x0
+	add	x0,a
+	rep	#4
+	asl	a
+	move	y:<corner_levels+1,x0
+	add	x0,a
+	rep	#4
+	asl	a
+	move	y:<corner_levels,x0
+	add	x0,a
+	move	a1,x:(r1)
+prelight_next
+	; Every triangle advances the table cursor.  The loop's last word is a
+	; NOP nobody jumps to, for the reason prepass_classify_next gives.
+	move	(r1)+
+	nop
+prelight_end
+prelight_done
+	move	y:<project_temp_x,x0
+	move	x0,y:<triangles_processed
+	rts
+	ENDIF
 
 transform_vertices
 	; This is the MAC pipeline from src/3d.asm:rotate_translate, with the
@@ -1658,9 +1773,10 @@ shade_depth_diff_clamped
 
 	; Bank-split load of this corner's normal: index below NORMAL_Y_COUNT
 	; reads the Y block behind the triangle indices, at or above it the X
-	; block that displaced the UV pairs.  The three components load
-	; straight into x1/y1/x0 and stay there through the whole rotation
-	; below, which writes only A and Y0 -- no staging cells, no reloads.
+	; block that displaced the UV pairs.  Two packed words per normal (see
+	; NORMAL_WORDS): word A lands in A1, word B in B1, and the shared unpack
+	; below leaves the 1.23 components in x1/y1/x0, where they stay through
+	; the Lambert loops -- no staging cells, no reloads.
 	; Cache the full tag in the compare's parallel slot.  CMP does not write
 	; A, and the move reads A1 at instruction start, so the following bank
 	; address calculation still sees the same normal index.
@@ -1668,27 +1784,55 @@ shade_depth_diff_clamped
 	jge	<shade_corner_x_bank
 	move	a1,x0
 	add	x0,a
-	add	x0,a
 	move	#corner_normals_y,x0
 	add	x0,a
 	move	a1,r0
 	nop
-	move	y:(r0)+,x1
-	move	y:(r0)+,y1
-	move	y:(r0),x0
-	jmp	<shade_corner_loaded
+	move	y:(r0)+,a
+	move	y:(r0),b
+	jmp	<shade_corner_unpack
 shade_corner_x_bank
 	sub	x1,a
 	move	a1,x0
-	add	x0,a
 	add	x0,a
 	move	#corner_normals_x,x0
 	add	x0,a
 	move	a1,r0
 	nop
-	move	x:(r0)+,x1
-	move	x:(r0)+,y1
-	move	x:(r0),x0
+	move	x:(r0)+,a
+	move	x:(r0),b
+shade_corner_unpack
+	; A1 = vx<<10 | vy>>4 and B1 = (vy&$f)<<20 | vz<<6, each v a 14-bit
+	; integer (NORMAL_WORDS).  Every component becomes v<<10 with a clean
+	; sign extension and then doubles through a LIMITED move: v<<11 for
+	; every value but +4096, which saturates to $7FFFFF exactly as the host
+	; used to clamp it.
+	;   vy: A1:A0 = A:B shifted left 14 puts vy's ten high bits at 23..14
+	;       and its four low bits at 13..10; the mask drops vz's spill.
+	;   vx: A masked to its top fourteen bits.
+	;   vz: B shifted left four; its low six bits are zero by layout.
+	; A2/B2 carry shifted-out bits after the REPs, so each result passes
+	; through a data register to re-extend its sign before the doubling.
+	move	#>$fffc00,y0
+	move	a1,x1
+	move	b1,a0
+	rep	#14
+	asl	a
+	and	y0,a
+	move	a1,y1
+	move	y1,a
+	asl	a
+	move	a,y1
+	move	x1,a
+	and	y0,a
+	asl	a
+	move	a,x1
+	rep	#4
+	asl	b
+	move	b1,x0
+	move	x0,b
+	asl	b
+	move	b,x0
 shade_corner_loaded
 	; Camera-space normal, one matrix row per pass into the consecutive
 	; shade_cx..shade_cz cells.  x1*y0, y1*y0 and x0*y0 are all legal
@@ -2804,9 +2948,9 @@ prepass_classify_hit
 
 prepass_classify_full
 	; Only the three VERTEX indices matter here; the corner-normal fields
-	; feed shading, which the prepass never reaches.  Word C is therefore
-	; never read at all -- the +N2 post-increment steps over it while word
-	; B is being fetched.
+	; feed shading, which the prepass never reaches.  The shared unpack
+	; stores them anyway (it serves BUILD and the prelight pass too); the
+	; cache-hit path above skips the same three words through N2.
 	jsr	<prepass_unpack_indices
 
 	; The chunk pass's own survivor test, called rather than copied.  Area
@@ -3138,27 +3282,42 @@ prepass_occlusion_loop_end
 prepass_occlusion_done
 	rts
 
-; Unpack the two index words R2 points at into triangle_i0/i1/i2.  Word C is
-; never read at all -- the +N2 post-increment steps over it while word B is
-; being fetched.  The classification loop enters with N2 = 2; the sweep's
-; reload below enters with N2 holding its pixel anchor, which is just as
-; harmless because R2 is dead after the second read.  Word A stays in X1 for
-; the callers that read the occluder qualification bit.
+; Unpack one resident triangle at R2 -- three vertex and three corner-normal
+; indices -- and step R2 past its three words.  Shared by BUILD's chunk loop,
+; the prelight pass and the prepass classify, so no two passes can disagree
+; about a field.  LSR, not ASR: the fields are unsigned and a stray sign
+; extension would index far outside either table.  Word A stays in X1 for
+; the callers that read the occluder qualification bit.  N2 is no longer
+; used here; the classify's cache-hit path still skips a triangle with it.
 prepass_unpack_indices
 	move	y:(r2)+,x1
-	move	y:(r2)+n2,y1
+	move	y:(r2)+,y1
 	move	#>TRI_VERTEX_MASK,x0
 	tfr	x1,a
 	and	x0,a
-	; The TFRs' parallel slots store the previous field -- read-at-start.
+	; Each TFR's parallel slot stores the PREVIOUS field: the parallel
+	; move reads A1 at the start of the instruction, before the transfer
+	; lands -- the read-at-start rule working for us here.
 	tfr	x1,a	a1,y:triangle_i0
 	rep	#TRI_INDEX_BITS
 	lsr	a
-	; Bit 11 here is the occluder qualification, not part of v1.
+	; The occluder bit lands in bit 11 after this shift; mask it off or the
+	; vertex lookup reads 2,048 entries past v1.
 	and	x0,a
 	tfr	y1,a	a1,y:triangle_i1
 	and	x0,a
-	move	a1,y:triangle_i2
+	tfr	y1,a	a1,y:triangle_i2
+	rep	#TRI_INDEX_BITS
+	lsr	a
+	move	a1,y:triangle_n0
+	move	y:(r2)+,y1
+	move	#>TRI_INDEX_MASK,x0
+	tfr	y1,a
+	and	x0,a
+	tfr	y1,a	a1,y:triangle_n1
+	rep	#TRI_INDEX_BITS
+	lsr	a
+	move	a1,y:triangle_n2
 	rts
 
 ; Reload one resident triangle.  X0 is the triangle number on entry.  The
@@ -3667,9 +3826,24 @@ camera_vertices
 projected_vertices	equ	camera_vertices
 
 ; The X half of the corner-normal table (entries NORMAL_Y_COUNT and up),
-; occupying the allocation the resident UV pairs held before Gouraud.
+; two packed words per normal (NORMAL_WORDS), in the allocation the resident
+; UV pairs held before Gouraud.
 corner_normals_x
-	ds	NORMAL_X_COUNT*3
+	ds	NORMAL_X_COUNT*NORMAL_WORDS
+
+; Prelight table: one word per triangle, indexed by GLOBAL triangle number,
+; written by prelight_run inside the FINISH window and read by BUILD in place
+; of make_triangle_shade -- shade<<12 | c2<<8 | c1<<4 | c0, the three 0..15
+; corner levels in slot order and the six-bit tint/level word.  Entries of
+; culled triangles are neither written nor read.  It sits in the 3,610 X
+; words the two-word normal packing freed; the padding after it pins
+; chunk_uvs at CHUNK_UVS_BASE so the BUILD chunk buffers, the phase-local
+; caches above them and the prepass overlay all keep their addresses.
+; A negative pad is an assembly error, which is the intended failure mode
+; for anything that grows the two tables past the chunk buffers.
+prelight_table
+	ds	TREX_PRIMITIVES
+	ds	CHUNK_UVS_BASE-prelight_table-TREX_PRIMITIVES
 
 ; One BUILD chunk's UV pairs, received with the command in chunk order and
 ; read chunk-locally by the span-setup pass.  Two packed words per triangle:
@@ -4117,14 +4291,15 @@ ssi_status
 ; normals made the DSP execute normal[151].z as an instruction at P:$0202.
 ;
 ; Both resident arrays therefore start above the program.  Y:$09C0 leaves
-; room for the span-setup code the record revision added, and the Gouraud
-; layout fills the window to its last-but-one word:
+; room for the span-setup code the record revision added, and the two-word
+; normal packing (NORMAL_WORDS) fills the window to its last-but-two word:
 ;
 ;   triangle_indices   $09C0 - $29AB   2724 * 3 =  8172 words
-;   corner_normals_y   $29AC - $3FFE   1905 * 3 =  5715 words
+;   corner_normals_y   $29AC - $3FFD   2857 * 2 =  5714 words
 ;
-; That is 13,887 of the window's 13,888 words; the other 1,705 normals live
-; in X (corner_normals_x), where the resident UV pairs used to be.
+; That is 13,886 of the window's 13,888 words; the other 753 normals live in
+; X (corner_normals_x), where the resident UV pairs used to be, and the
+; 3,610 X words the packing freed hold prelight_table below them.
 ;
 ; Anything that grows the program past P:$09BF silently corrupts the first
 ; triangle index.  Check the P extent in the assembled DSP program
@@ -4141,23 +4316,27 @@ ssi_status
 ; overwritten by the next upload and reports garbage, which cost this stage
 ; one full round of contradictory measurements once.
 ;
-; Five switches select what is assembled, all of them in the generated
+; Six switches select what is assembled, all of them in the generated
 ; dspconf.inc (see the Makefile).  Two configurations matter, and both fit:
 ;
-;   default   SSIPROBE=0 WINPROBE=1 PIOBURST=0 PREPASSDIAG=1 OBJLIGHTS=1
-;             ends P:$09AC, 19 words free.  Ships, and every timing run uses it.
-;   SSI       SSIPROBE=1 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=0
-;             ends P:$09B6, 9 words free.  Transport bring-up only.
+;   default   SSIPROBE=0 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=1 PRELIGHT=1
+;             ends P:$09A6, 25 words free.  Ships, and every timing run uses it.
+;   SSI       SSIPROBE=1 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=0 PRELIGHT=0
+;             ends P:$09B8, 7 words free.  Transport bring-up only.
 ;
 ; The camera-lights A/B reference (OBJLIGHTS=0 alone, make trex_dsp_camlights)
-; ends P:$0999.
+; ends P:$0993; the BUILD-side shading reference (PRELIGHT=0 alone) P:$0964.
 ;
 ; What each switch is worth in program words: SSIPROBE (the CMD_SSI_STREAM
-; transport probe) 103, WINPROBE (the cross-frame window burn loop) 44,
+; transport probe) 103, PRELIGHT (the window-phase lighting pass and BUILD's
+; table read, 2.4k) 66, WINPROBE (the cross-frame window burn loop) 44,
 ; PREPASSDIAG (2.3j's six diagnostic counters) 30, PIOBURST (the host-port
 ; calibration burst) 25, OBJLIGHTS 19.  The probe alone is larger than the
-; default build's headroom, which is why the SSI configuration turns four
-; things off to carry it.
+; default build's headroom, which is why the SSI configuration turns five
+; things off to carry it.  PRELIGHT displaced the two instruments from the
+; default build; either fits again beside OBJLIGHTS=0 (WINPROBE=1 OBJLIGHTS=0
+; ends exactly at P:$09BF, PREPASSDIAG=1 OBJLIGHTS=0 at P:$09B1) or beside
+; PRELIGHT=0.
 ;
 ; Two of those are safe to drop only because of what they are NOT.  PREPASSDIAG
 ; guards the counter INCREMENTS, never the mode-4 dispatch or its reply: with
@@ -4203,9 +4382,10 @@ triangle_indices
 	ds	TREX_PRIMITIVES*3
 
 ; The Y half of the corner-normal table (entries 0 .. NORMAL_Y_COUNT-1),
-; uploaded by CMD_LOAD_NORMALS together with the X half.
+; two packed words per normal (NORMAL_WORDS), uploaded by CMD_LOAD_NORMALS
+; together with the X half.
 corner_normals_y
-	ds	NORMAL_Y_COUNT*3
+	ds	NORMAL_Y_COUNT*NORMAL_WORDS
 
 ; -----------------------------------------------------------------------------
 	end

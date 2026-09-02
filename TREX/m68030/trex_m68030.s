@@ -542,7 +542,13 @@ TREX_TMD_NORMALS	= 3610
 ; File offset of the TMD normal block (object-table normal_top $150CC plus
 ; the 12-byte header), hard-coded like TMD_VERTEX_DATA_OFFSET above.
 TMD_NORMAL_DATA_OFFSET	= $150d8
-DSP_NORMAL_UPLOAD_WORDS	= 2+(TREX_TMD_NORMALS*3)
+; Two packed words per normal since the DSP's two-word normal table
+; (trex_dsp.asm, NORMAL_WORDS): the transaction is 7,222 words where it was
+; 10,832.  The transmit buffer keeps its old three-word allocation so the
+; BSS layout -- and with it every measured data-cache phase -- is unchanged.
+DSP_NORMAL_WORDS	= 2
+DSP_NORMAL_UPLOAD_WORDS	= 2+(TREX_TMD_NORMALS*DSP_NORMAL_WORDS)
+DSP_NORMAL_TX_LONGS	= 2+(TREX_TMD_NORMALS*3)
 DSP_LIGHT_COUNT		= 3
 ; Six vectors per frame (each light scaled for red and for green) plus the two
 ; ambient words.
@@ -2209,36 +2215,54 @@ dsp_upload_mesh
 ; degrees off the polygon plane and turns per-face shading into noise.
 dsp_upload_face_normals
 	; Gouraud: the complete PS1 corner-normal table straight from the TMD's
-	; own normal block -- little-endian Q12 SVECTORs, byte-swapped and
-	; shifted into 1.23 here, no offline sidecar involved.  The DSP splits
-	; the table across its Y and X banks (NORMAL_Y_COUNT there).
+	; own normal block -- little-endian Q12 SVECTORs, byte-swapped here, no
+	; offline sidecar involved.  The DSP splits the table across its Y and X
+	; banks (NORMAL_Y_COUNT there).
+	;
+	; Two packed words per normal (trex_dsp.asm, NORMAL_WORDS).  The three
+	; 1.3.12 components stay 14-bit integers here, -4096..4096; the DSP
+	; restores the 1.23 words this routine used to send -- including the
+	; +1.0 clamp to $7FFFFF -- when make_triangle_shade unpacks a corner:
+	;   word A = vx<<10 | (vy>>4) & $3ff
+	;   word B = (vy & $f)<<20 | (vz & $3fff)<<6
 	addq.l	#1,dsp_call_count
 	tst.l	dsp_program_loaded
 	beq	.dsp_upload_normals_shadow
 
+	movem.l	d4-d5,-(sp)
 	lea	dsp_normal_tx_buffer,a1
 	move.l	#DSP_CMD_LOAD_NORMALS,(a1)+
 	move.l	#TREX_TMD_NORMALS,(a1)+
 	lea	trex_tmd_data+TMD_NORMAL_DATA_OFFSET,a0
 	move.l	#TREX_TMD_NORMALS-1,d0
-	moveq	#11,d2
 .copy_corner_normal
-	moveq	#3-1,d3
-.copy_corner_component
 	move.w	(a0)+,d1
 	ror.w	#8,d1			; PS1 TMD is little-endian
-	ext.l	d1
-	lsl.l	d2,d1			; Q12 -> 1.23
-	cmpi.l	#$00800000,d1
-	bne	.corner_component_ready
-	subq.l	#1,d1			; +1.0 -> largest positive, as the
-					; matrix conversion does: +4096 would
-					; otherwise wrap to -1.0
-.corner_component_ready
-	move.l	d1,(a1)+
-	dbra	d3,.copy_corner_component
+	ext.l	d1			; vx
+	move.w	(a0)+,d2
+	ror.w	#8,d2
+	ext.l	d2			; vy
+	move.w	(a0)+,d3
+	ror.w	#8,d3
+	ext.l	d3			; vz
 	addq.l	#2,a0			; discard SVECTOR pad
+	andi.l	#$3fff,d1
+	moveq	#10,d4
+	lsl.l	d4,d1
+	move.l	d2,d5
+	asr.l	#4,d5
+	andi.l	#$3ff,d5
+	or.l	d5,d1
+	move.l	d1,(a1)+			; word A
+	andi.l	#$f,d2
+	moveq	#20,d4
+	lsl.l	d4,d2
+	andi.l	#$3fff,d3
+	lsl.l	#6,d3
+	or.l	d3,d2
+	move.l	d2,(a1)+			; word B
 	dbra	d0,.copy_corner_normal
+	movem.l	(sp)+,d4-d5
 
 	Dsp_BlkUnpacked	dsp_normal_tx_buffer,#DSP_NORMAL_UPLOAD_WORDS,dsp_rx_buffer,#2
 	move.l	dsp_rx_buffer,dsp_protocol_shadow
@@ -7962,7 +7986,7 @@ dsp_tx_buffer
 ; The face-normal upload is the largest single transaction of the whole run,
 ; so it gets its own buffer instead of resizing the vertex one.
 dsp_normal_tx_buffer
-	ds.l	DSP_NORMAL_UPLOAD_WORDS
+	ds.l	DSP_NORMAL_TX_LONGS
 
 ; Overallocate once and choose a 64-KiB-aligned DSP_ANIMATION_WORDS window at
 ; startup.  See trex_init: TOS 4.02's unpacked-block source address wraps at

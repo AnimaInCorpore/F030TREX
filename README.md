@@ -131,13 +131,16 @@ OPTIMIZATION.md are identified as Hatari/emulator results; physical Falcon030
 timing remains unmeasured. Figures predating OPTIMIZATION.md 2.4g were taken
 with the DSP at twice its real clock and are superseded by the re-measurement
 there. Over the 265-frame prefix the current full-mesh **diagnostic** build
-measures **497.2 ms / 2.01 FPS**, and `TREX.TOS` measures **499.9 ms / 2.00
-FPS** with its release-only overlay and default-disarmed prepass. The
-frame-local normal-light cache removes 7.6 ms from the diagnostic DSP/packet
-path (section 2.4i), section 8.2b's direct-to-packet record unpack removes
-another 24.9 ms of the packet stage at byte-identical output, and 2.4j's
-object-space lighting a further 2.1 ms at whole-choreography pixel identity;
-each section carries its fixed-prefix gates.
+measures **459.6 ms / 2.18 FPS**, and `TREX.TOS` measures **457.1 ms /
+2.19 FPS** with its release-only overlay and default-disarmed prepass.
+The frame-local normal-light cache removes 7.6 ms from the diagnostic
+DSP/packet path (section 2.4i), section 8.2b's direct-to-packet record unpack
+removes another 24.9 ms of the packet stage at byte-identical output, 2.4j's
+object-space lighting a further 2.1 ms at whole-choreography pixel identity,
+and 2.4k's frame-ahead lighting -- every survivor lit inside the FINISH window
+over a two-word packed normal table, BUILD reading one word per survivor --
+38.6 ms more at byte-identical output over all 483 hashed frames; each section
+carries its fixed-prefix gates.
 
 The v1.2 release has a measured figure: **511.2 ms per frame, 1.956 FPS**
 under a Hatari corrected to run the DSP at the Falcon's real clock
@@ -154,18 +157,24 @@ armed occlusion prepass measured 25.6% cheaper in Hatari -- plus 2.4i's
 per-triangle depth cue, and object-space lighting: the six light vectors
 rotate through the frame-matrix transpose once per frame and the Lambert loops
 dot the raw corner normal, measured pixel-identical over a 321-frame
-whole-choreography hash sweep.
+whole-choreography hash sweep, and 2.4k's prelight pass: the corner-normal
+table is packed two words per normal, the 3,610 words that frees hold one
+lighting word per triangle, and the FINISH window -- otherwise idle DSP time
+while the 68030 rasterizes -- lights every survivor of the frame ahead of
+BUILD, which reads the table instead of computing.
 
-The default build ends at `P:$09AC`, 19 words below the resident-index
+The default build ends at `P:$09A6`, 25 words below the resident-index
 ceiling; the camera-lights A/B reference (`make trex_dsp_camlights`) ends at
-`P:$0999`. Five switches in the generated `dspconf.inc` select what is
+`P:$0993`. Six switches in the generated `dspconf.inc` select what is
 assembled, because it does not all fit: the `CMD_SSI_STREAM` transport probe
-of section 7.4b (`SSIPROBE`, 103 words), the cross-frame window burn loop
-(`WINPROBE`, 44), section 2.3j's prepass diagnostic counters (`PREPASSDIAG`,
-30), the host-port calibration burst (`PIOBURST`, 25) and object-space
-lighting (`OBJLIGHTS`, 19). The shipping and measurement builds take the
-window probe, the counters and object-space lighting; the SSI transport
-bring-up build trades all four for the probe and ends at `P:$09B6` with 9
+of section 7.4b (`SSIPROBE`, 103 words), the prelight pass (`PRELIGHT`, 66),
+the cross-frame window burn loop (`WINPROBE`, 44), section 2.3j's prepass
+diagnostic counters (`PREPASSDIAG`, 30), the host-port calibration burst
+(`PIOBURST`, 25) and object-space lighting (`OBJLIGHTS`, 19). The shipping
+and measurement builds take object-space lighting and the prelight pass; the
+window probe and the counters each re-assemble only beside `OBJLIGHTS=0`
+(`WINPROBE=1 OBJLIGHTS=0` ends exactly at `P:$09BF`); the SSI transport
+bring-up build trades everything but the probe and ends at `P:$09B8` with 7
 words to spare.
 
 ## Feature comparison with the PS1 reference
