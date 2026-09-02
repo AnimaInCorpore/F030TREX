@@ -103,7 +103,7 @@ MEASURE_SPLIT_VBLS=7605
 MEASURE_SPLIT_NOPIX_VBLS=6760
 MEASURE_SPLIT_NOROWS_VBLS=5270
 
-.PHONY: dspconf measure_split_run all clean trex_m68030 trex_m68030_phase measure_phase measure_phase_control trex_m68030_run trex_m68030_prepass trex_m68030_prepass_run trex_m68030_ssi_shadow trex_m68030_ssi_rows trex_m68030_ssi_hatari trex_m68030_ssi_dma ssi_dma_verify measure_split trex_ssi_loopback ssi_rows_verify ssi_hatari_verify trex_release trex_dsp ssi_stream_model_test ssi_dma_compile_test measure create_dirs
+.PHONY: dspconf measure_split_run all clean ssi_dma_package trex_m68030 trex_m68030_phase measure_phase measure_phase_control trex_m68030_run trex_m68030_prepass trex_m68030_prepass_run trex_m68030_ssi_shadow trex_m68030_ssi_rows trex_m68030_ssi_hatari trex_m68030_ssi_dma ssi_dma_verify measure_split trex_ssi_loopback ssi_rows_verify ssi_hatari_verify trex_release trex_dsp ssi_stream_model_test ssi_dma_compile_test measure create_dirs
 
 all: create_dirs $(VASM) $(VLINK) ./TREX/m68030/TREX.TOS ./TREX/m68030/TREX.LOD
 
@@ -209,6 +209,33 @@ ssi_stream_model_test:
 # runs one framed burst before the renderer starts and writes ssi_dma.res
 # plus the raw capture ssi_dcap.res.
 trex_m68030_ssi_dma: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_dma.tos ./TREX/m68030/trex_dsp.lod
+
+# Falcon-runnable SSI/DMA transport test package (OPTIMIZATION.md 7.4b).
+#
+# This is the one package that claims the sound channel and starts the record
+# engine on real hardware, so its DSP image is not a detail: CMD_SSI_STREAM
+# ($40) exists only with SSIPROBE=1, and an image without it decodes $40 as
+# command_reset.  The binary therefore loads TREXDMA.LOD and this target is
+# what puts the right image under that name -- the tracked trex_dsp.lod is
+# the WRONG one here and cannot be substituted.
+#
+# The DSP configuration is the documented bring-up set: the probe, and
+# everything else off to fit it under P:$09BF.
+SSI_DMA_LOD=./TREX/dsp/build/trex_dsp-1000000-$(DSPSRC_ID).lod
+SSI_DMA_PKG=./TREX/m68030/ssi_dma_package
+
+ssi_dma_package: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_dma.tos
+	@$(MAKE) --no-print-directory SSIPROBE=1 WINPROBE=0 PIOBURST=0 \
+	  PREPASSDIAG=0 OBJLIGHTS=0 PRELIGHT=0 trex_dsp
+	@test -f $(SSI_DMA_LOD) || { echo "no SSI bring-up image at $(SSI_DMA_LOD) -- it needs DOSBOX=/path/to/DOSBox"; exit 1; }
+	@rm -rf $(SSI_DMA_PKG) && mkdir -p $(SSI_DMA_PKG)
+	@cp ./TREX/m68030/trex_ssi_dma.tos $(SSI_DMA_PKG)/TREXDMA.TOS
+	@cp $(SSI_DMA_LOD) $(SSI_DMA_PKG)/TREXDMA.LOD
+	@cp ./TREX/m68030/SSIDMA.TXT $(SSI_DMA_PKG)/README.TXT
+	@python3 ./tools/check_ssi_dma_package.py $(SSI_DMA_PKG)
+	@cd $(SSI_DMA_PKG) && zip -q -X ../TREXDMA.ZIP TREXDMA.TOS TREXDMA.LOD README.TXT
+	@echo "package: ./TREX/m68030/TREXDMA.ZIP"
+	@unzip -l ./TREX/m68030/TREXDMA.ZIP | tail -6
 
 # Decode and independently re-derive the transport probe's capture.
 ssi_dma_verify:

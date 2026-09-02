@@ -88,6 +88,18 @@ diagnostic sidecars (`ssi_rows.res`, `ssi_rows.pkt`, `ssi_rows.status` and
 `ssihatri.sta`) so the transport and feed verdict can be copied back for
 inspection; later frames use the normal CPU path.
 
+`make ssi_dma_package` builds the Falcon-testable form of that probe:
+`TREXDMA.ZIP`, holding `TREXDMA.TOS`, `TREXDMA.LOD` and a 40-column
+`README.TXT` that says what the test does to the machine and which files to
+send back. **Its DSP image is not interchangeable with the release's**:
+`CMD_SSI_STREAM` is assembled only with `SSIPROBE=1`, and any other image
+decodes the command as a DSP reset, so the binary loads `TREXDMA.LOD` and
+`tools/check_ssi_dma_package.py` refuses to package a mismatched pair. The
+packaged files were run from their own directory under the corrected Hatari
+and reproduce 7.4b's byte-exact 16,304-word transfer; a deliberately
+mis-paired build reports `0 bytes moved` within its 400-tick bound and does
+not hang.
+
 `make trex_m68030_ssi_dma` builds the one target that really does claim the
 sound channel and start the Falcon record engine. It routes DSP transmit to
 DMA record, has the DSP transmit one framed 16,304-word burst over the SSI,

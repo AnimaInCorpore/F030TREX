@@ -1,0 +1,102 @@
+========================================
+  T-REX  -  SSI/DMA TRANSPORT TEST
+  Falcon030 hardware bring-up probe
+========================================
+
+This is NOT the T-Rex release.  It is a
+one-shot hardware test of the Falcon's
+DSP-XMIT -> DMA-RECORD path, which has
+only ever run under emulation.  What it
+does on your machine is written out in
+full below.  Please read it before you
+run it.
+
+WHAT IT DOES
+----------------------------------------
+
+Once, before it draws anything:
+
+ 1. Locks the sound system and saves the
+    idle DMA and Crossbar registers.
+ 2. Routes DSP transmit to DMA record
+    and arms a one-shot record window.
+ 3. Has the DSP transmit one framed
+    burst of 16,304 words (32,608
+    bytes): an 8-word header, a
+    generated ramp, a 6-word footer.
+ 4. Waits for the declared end address,
+    invalidates the 68030 data cache,
+    and compares the captured bytes
+    against the frame the host built
+    beforehand.
+ 5. Hands the sound channel back and
+    restores every register it saved.
+
+Then it runs the normal T-Rex renderer
+through the ordinary host port, exactly
+as the release does.  The test does not
+touch the picture.
+
+It claims the sound channel, so do not
+run it with a sound program or a driver
+active.  Every wait is bounded -- 400
+ticks on the host, a spin count on the
+DSP -- so a route that does not work
+reports and carries on rather than
+hanging the machine.  A fault-injected
+build was used to check that.
+
+WHAT TO RUN
+----------------------------------------
+
+Copy all three files into one empty
+folder on a hard drive (it writes files
+next to itself, so not a write-
+protected floppy) and run TREXDMA.TOS.
+
+  TREXDMA.TOS   the test
+  TREXDMA.LOD   its DSP program
+  README.TXT    this file
+
+TREXDMA.LOD is NOT the release's DSP
+program and they cannot be swapped.
+The transmit command exists only in
+this image; the release image decodes
+it as a reset.
+
+Falcon030, 4 MB ST RAM, TOS 4.02.
+TOS 4.04 does not work with the current
+DSP load path.
+
+WHAT TO SEND BACK
+----------------------------------------
+
+The run writes these next to itself:
+
+  SSI_DMA.RES   verdict and every raw
+                register value it read
+  SSI_DCAP.RES  the captured bytes
+  RENDER_S.RES  frame timings
+
+All three, please, whatever happened --
+a failed route is a result and the file
+says at which of the thirteen stages it
+stopped.  If it never gets that far,
+what is on screen is the next best
+thing.
+
+WHAT IS BEING ASKED
+----------------------------------------
+
+Under a corrected Hatari the transfer
+arrives byte-exact at 245 KB/s -- but
+that figure is the emulator's own
+structural rate, not the Falcon's
+specified 1 MB/s, so the real transfer
+time is unknown.  Hatari also does not
+model the 68030 caches against DMA at
+all, so the cache handling in step 4 is
+written but unproven.  Those two are
+what this asks your machine.
+
+========================================

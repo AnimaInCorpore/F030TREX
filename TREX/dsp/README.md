@@ -275,6 +275,13 @@ first N phases for exactly the triangles BUILD would run them on: both cull
 branches stay inside the ladder. The mask defaults to `$7f`, so an image
 whose host never sends the mode word builds complete records.
 
+`SSI_STREAM` exists only with `SSIPROBE=1`.  In any other image the
+dispatcher's control-range leaf falls through to `command_reset`, so a host
+that sends `$40` to the wrong `.lod` resets the DSP and is told `ACK_RESET`.
+That is why the `TREX_SSI_DMA` build loads `TREXDMA.LOD` rather than
+`trex_dsp.lod` and why `make ssi_dma_package` gates the pair on the image's
+`P:$09B8` extent before it can be shipped to a Falcon.
+
 `SSI_STREAM` is the only command that does not answer over the host port
 immediately. It is the DSP half of the Falcon SSI transport probe: it
 configures the SSI for 16-bit transmit, drives PC5 by hand as the DMA-RECORD

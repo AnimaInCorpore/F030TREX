@@ -6262,6 +6262,37 @@ bus contention against true-colour Videl, and DMA data ownership on hardware.
 The first hardware implementation must field-compare every decoded row
 against the existing host record before it is allowed to feed the rasterizer.
 
+**The probe is packaged for hardware** (2026-09-02).  `make ssi_dma_package`
+produces `TREXDMA.ZIP` -- `TREXDMA.TOS`, `TREXDMA.LOD` and a 40-column
+`README.TXT` -- for running on a physical Falcon, which is the only place the
+two outstanding questions above can be answered.
+
+The packaging exists because the pair cannot be assembled by hand safely.
+`CMD_SSI_STREAM` is `$40`, in the DSP's bit-6 control range, and it is
+assembled **only** with `SSIPROBE=1`.  Sent to any other image the
+dispatcher's control-range leaf falls through to `command_reset`, so the
+probe would reset the DSP, read `ACK_RESET` where it waits for
+`ACK_SSI_STREAM`, and report a transport failure against a machine that is
+fine -- the exact false negative this campaign cannot afford on hardware,
+where a re-run is not cheap.  Until now nothing paired the two: the
+`trex_m68030_ssi_dma` rule copied the *tracked default* image, which has no
+`CMD_SSI_STREAM` in it at all.  The `TREX_SSI_DMA` build therefore loads
+`TREXDMA.LOD` rather than `trex_dsp.lod`, and
+`tools/check_ssi_dma_package.py` gates the package on the pairing: the `.TOS`
+must name `TREXDMA.LOD`, and the `.LOD` must end at `P:$09B8` -- the SSI
+bring-up configuration's extent, which the default's `P:$09A6` cannot be
+mistaken for -- and must not be byte-identical to the tracked image.
+
+Both halves were then exercised.  The packaged files, unzipped into their own
+directory and run there, reproduce this section's table exactly: claim stage
+13, `$FF8930`/`$FF8932` = `$00C0`/`$0002`, 32,608 bytes in 130 ms, footer CRC
+`$0809`, and `verify_ssi_dma.py` confirms the capture against an
+independently rebuilt frame.  The same binary with the default image
+substituted reports `transfer did not complete: 0 bytes moved in 400 ticks`,
+writes both sidecars and does not hang -- it renders nothing afterwards,
+because the stray `command_reset` cleared the DSP's resident geometry, which
+makes the mis-pairing unmistakable rather than subtle.
+
 #### 7.4c Implementation plan and current slice
 
 Implementation is deliberately staged so every failure can return to the

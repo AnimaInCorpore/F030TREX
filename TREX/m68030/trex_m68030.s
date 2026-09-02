@@ -6916,7 +6916,21 @@ trex_dsp_lod_path
 	; The measure_phase targets copy the intended image under this name.
 	dc.b	'TREXPHAS.LOD',0
 	else
+	ifd TREX_SSI_DMA
+	; Its own name for the same reason, and here the mis-pairing is worse
+	; than a wrong number.  CMD_SSI_STREAM is $40, in the DSP's bit-6
+	; control range, and it is assembled only with SSIPROBE=1.  Sent to an
+	; image without it, the dispatcher's control-range leaf falls through
+	; to command_reset -- so the probe would RESET the DSP, get ACK_RESET
+	; where it waits for ACK_SSI_STREAM, and report a transport failure
+	; against a machine that is fine.  On a Falcon, where this is the one
+	; binary that claims the sound channel, that is the last thing the run
+	; should be ambiguous about.  ssi_dma_package copies the SSIPROBE=1
+	; image under this name.
+	dc.b	'TREXDMA.LOD',0
+	else
 	dc.b	'trex_dsp.lod',0
+	endc
 	endc
 	endc
 	endc

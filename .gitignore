@@ -16,6 +16,10 @@ TREX/m68030/measure/
 TREX/dsp/build/
 TREX/m68030/TREX.LOD
 TREX/m68030/TREXSSI.LOD
+# Staging directory for the Falcon SSI/DMA test package (make ssi_dma_package).
+# Rebuildable, and its .LOD is a variant image that must never be mistaken for
+# the tracked default -- see OPTIMIZATION.md 7.4b.
+TREX/m68030/ssi_dma_package/
 __pycache__/
 *.pyc
 .DS_Store
