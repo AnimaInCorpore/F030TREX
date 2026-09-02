@@ -143,8 +143,17 @@ uses the 2,724-triangle model and textured Gouraud shading; the optional DSP
 occlusion implementation is retained but default-disarmed;
 `TREX.LOD` is the matching DSP program. The deprecated reduced-mesh variant
 and its build assets have been removed. Performance figures in
-OPTIMIZATION.md are identified as Hatari/emulator results; physical Falcon030
-timing remains unmeasured. Figures predating OPTIMIZATION.md 2.4g were taken
+OPTIMIZATION.md are identified as Hatari/emulator results.  **The first
+physical Falcon030 measurement (2026-09-02) reads 1.05 FPS on the close-up
+frames, against the emulator's 2.17 for the same stretch** -- and the
+emulated choreography is flat (377-504 ms end to end), so that is a uniform
+~2x, not a hard scene.  The renderer itself is correct on hardware.  Section
+2.7 has the curve, the two candidate causes that this file named *before* the
+run -- Videl stealing the ST-RAM bus, and the host-port PIO loop, neither of
+which the emulator charges for -- and the `make prof_package` build that
+separates them.  Emulator A/B results are unaffected, since they compare two
+builds under the same emulator; the absolute frame times are not Falcon
+figures. Figures predating OPTIMIZATION.md 2.4g were taken
 with the DSP at twice its real clock and are superseded by the re-measurement
 there. Over the 265-frame prefix the current full-mesh **diagnostic** build
 measures **459.6 ms / 2.18 FPS**, and `TREX.TOS` measures **457.1 ms /

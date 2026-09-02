@@ -3451,6 +3451,81 @@ holding the same columns. These are emulator readings of an emulator's frame
 rate; they are not a physical Falcon030 measurement, and the overlay running on
 hardware will report whatever that machine actually does.
 
+### 2.7 The first physical Falcon measurement: 1.05 FPS, and the emulator is 2x optimistic
+
+Every figure in this file before this section is a corrected-Hatari
+measurement, and every one of them is labelled as such because a physical
+Falcon030 timing had never been taken.  On 2026-09-02 one was.  Running the
+viewing package (`make fps_package`: the release configuration, frame-rate
+field on, no GEMDOS writes at all) on a Falcon030 with an SC1224 RGB
+monitor, the counter reads **01.05** during the close-up head frames --
+**952 ms/frame** against the emulator's 461.7 ms mean.
+
+**The renderer is correct on hardware.**  The photographed frame is the
+textured, lit, correctly ordered T-Rex head: teeth, eye, tint and depth cue
+all as the emulator draws them.  The port runs on the machine it was written
+for.  A pixel-level check is a separate matter and is what the profile
+package's `fb.res` is for.
+
+**It is not the close-up that is expensive.**  The obvious reading of a slow
+frame during the closest approach is that those frames are the hard ones,
+and that reading is wrong.  A per-segment curve was taken to settle it, using
+an instrument this file did not have: the diagnostic build rewrites
+`render_stats.res` after every frame, so sampling that file *during* a run
+and differencing consecutive samples gives the mean frame time over each
+stretch of the choreography, from one run and with no change to the binary.
+Over the whole 276-frame run:
+
+| frames | ms/frame | | frames | ms/frame |
+|---|---:|---|---|---:|
+| 0-15 | 377.3 | | 135-180 | 468.8 |
+| 15-45 | 423.7 | | 180-210 | 454.3 |
+| 45-75 | 447.7 | | 210-240 | 482.3 |
+| 75-105 | 467.3 | | 240-270 | 491.3 |
+| 105-135 | 486.0 | | **overall** | **461.7** |
+
+The spread is 377 to 504 ms across the entire animation -- the first frames
+are cheapest because the model is distant, and the trend is mildly upward to
+the end.  There is no 952 ms scene anywhere in it.  The hardware is
+**2.06x** the emulator's mean and **1.89x** its worst segment, which makes
+this a uniform factor rather than a scene effect.
+
+**Both leading causes were named in this file before the run, which is what
+makes them predictions rather than excuses.**  Section 8 states that 2.4a's
+core "charges nothing for executing the transfer loop and models no Videl
+contention, so PIO's real cost on a Falcon is invisible to this measurement
+by construction"; section 3.10 establishes that the clear stage already sits
+at the memory-bus floor, so the rasterizer is bandwidth-bound and not
+instruction-bound.  A 256x224 true-colour screen is 114,688 bytes that Videl
+reads out of ST-RAM every displayed frame, on the same 16-bit bus the
+rasterizer writes pixels through, and Hatari charges the 68030 nothing for
+it.  Either that or the host-port PIO loop, or both.
+
+**What separates them is one hardware run, and the instrument is built.**
+`make prof_package` produces `TREXPROF.ZIP`: the diagnostic build, whose
+`render_stats.res` splits the frame into DSP set-up, DSP readback and packet
+build, framebuffer clear, Ordering Table insertion, rasterizer and present,
+with `stats_flush_enabled` patched to 0 so it costs no per-frame disk
+traffic and `trex_shutdown` still writes the file once on a clean keypress
+exit.  Against the emulator's 13.2 / 186.6 / 14.5 / 2.5 / 242.4 ms the answer
+is mechanical: a rasterizer that grew disproportionately is Videl stealing
+the bus, a packet stage that grew disproportionately is the host port.  The
+same run also writes the frame-100 `fb.res`, so the checkpoint that has
+gated every change in this file -- `d89958b3...3d16` -- gets its first test on
+real silicon.
+
+**What this changes about everything above.**  Nothing is retracted: the
+emulator figures are reproducible, internally consistent and were correct as
+comparisons between builds, which is what they were used for.  A/B results
+measured here -- 2.4k's -38.6 ms, 8.2b's -24.9, 2.4j's -2.1 -- compare two
+builds under the same emulator and are unaffected by a constant factor.  What
+is now known is that the ABSOLUTE figures understate the machine by about
+2x, so "2.19 FPS" was never a Falcon number and the three-FPS gate of section
+8.2 is further away than it looked.  The corrected clock of 2.4g fixed the
+DSP's rate; this is a second, independent correction of the same kind, and
+until it is attributed no absolute frame time in this file should be quoted
+as a Falcon figure.
+
 ## 3. Rasterizer cost model
 
 **This model describes the retired bounding-box edge-function rasterizer.**

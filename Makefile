@@ -103,7 +103,7 @@ MEASURE_SPLIT_VBLS=7605
 MEASURE_SPLIT_NOPIX_VBLS=6760
 MEASURE_SPLIT_NOROWS_VBLS=5270
 
-.PHONY: dspconf measure_split_run all clean ssi_dma_package fps_package trex_m68030 trex_m68030_phase measure_phase measure_phase_control trex_m68030_run trex_m68030_prepass trex_m68030_prepass_run trex_m68030_ssi_shadow trex_m68030_ssi_rows trex_m68030_ssi_hatari trex_m68030_ssi_dma ssi_dma_verify measure_split trex_ssi_loopback ssi_rows_verify ssi_hatari_verify trex_release trex_dsp ssi_stream_model_test ssi_dma_compile_test measure create_dirs
+.PHONY: dspconf measure_split_run all clean ssi_dma_package fps_package prof_package trex_m68030 trex_m68030_phase measure_phase measure_phase_control trex_m68030_run trex_m68030_prepass trex_m68030_prepass_run trex_m68030_ssi_shadow trex_m68030_ssi_rows trex_m68030_ssi_hatari trex_m68030_ssi_dma ssi_dma_verify measure_split trex_ssi_loopback ssi_rows_verify ssi_hatari_verify trex_release trex_dsp ssi_stream_model_test ssi_dma_compile_test measure create_dirs
 
 all: create_dirs $(VASM) $(VLINK) ./TREX/m68030/TREX.TOS ./TREX/m68030/TREX.LOD
 
@@ -263,6 +263,25 @@ fps_package: create_dirs $(VASM) $(VLINK) trex_release
 	@cd $(FPS_PKG) && zip -q -X ../TREXFPS.ZIP TREX.TOS TREX.LOD README.TXT
 	@echo "package: ./TREX/m68030/TREXFPS.ZIP"
 	@unzip -l ./TREX/m68030/TREXFPS.ZIP | tail -6
+
+# Falcon-runnable stage-profile package.  The diagnostic build, whose
+# render_stats.res splits the frame into its six stages, with the per-frame
+# flush patched off so it costs no disk traffic: trex_shutdown still writes
+# the file once on a clean keypress exit, and the frame-100 framebuffer
+# checkpoint still lands, which gives a hardware fb.res to SHA against the
+# emulator's d89958b3...3d16.
+PROF_PKG=./TREX/m68030/prof_package
+
+prof_package: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_m68030.tos ./TREX/m68030/trex_dsp.lod
+	@rm -rf $(PROF_PKG) && mkdir -p $(PROF_PKG)
+	@cp ./TREX/m68030/trex_m68030.tos $(PROF_PKG)/TREXPROF.TOS
+	@cp ./TREX/m68030/trex_dsp.lod $(PROF_PKG)/trex_dsp.lod
+	@cp ./TREX/m68030/PROFTEST.TXT $(PROF_PKG)/README.TXT
+	@python3 ./tools/patch_data_flag.py $(PROF_PKG)/TREXPROF.TOS \
+	  ./TREX/m68030/build/trex_m68030.lst stats_flush_enabled 0 1
+	@cd $(PROF_PKG) && zip -q -X ../TREXPROF.ZIP TREXPROF.TOS trex_dsp.lod README.TXT
+	@echo "package: ./TREX/m68030/TREXPROF.ZIP"
+	@unzip -l ./TREX/m68030/TREXPROF.ZIP | tail -6
 
 # Decode and independently re-derive the transport probe's capture.
 ssi_dma_verify:

@@ -21,6 +21,7 @@ TREX/m68030/TREXSSI.LOD
 # the tracked default -- see OPTIMIZATION.md 7.4b.
 TREX/m68030/ssi_dma_package/
 TREX/m68030/fps_package/
+TREX/m68030/prof_package/
 __pycache__/
 *.pyc
 .DS_Store

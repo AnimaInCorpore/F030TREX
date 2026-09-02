@@ -1,0 +1,74 @@
+========================================
+  T-REX  -  WHERE THE TIME GOES
+  Falcon030 stage profile
+========================================
+
+You measured 1.05 FPS on the real
+machine.  The corrected emulator says
+2.17 for the same frames, and the whole
+animation is flat there -- 377 to 504 ms
+from the first frame to the last -- so
+the close-up is not a hard scene.  The
+machine is about twice as slow as the
+emulator everywhere, and this build says
+in which stage.
+
+It has no FPS field and draws nothing
+extra.  It writes ONE file when you
+quit, and one picture at frame 100.
+
+WHAT TO RUN
+----------------------------------------
+
+Both files in one folder on a hard
+drive, then run TREXPROF.TOS.
+
+  TREXPROF.TOS   the profiling build
+  trex_dsp.lod   its DSP program
+
+Let it run at least three minutes.  At
+about 1 FPS, frame 100 arrives after
+roughly a minute and a half, and the
+timings get steadier the longer it
+goes.  Then press any key -- that
+keypress is what writes the timing
+file, so do not reset.
+
+WHAT TO SEND BACK
+----------------------------------------
+
+  RENDER_S.RES  the stage timings
+  FB.RES        the frame-100 picture
+
+RENDER_S.RES splits the frame into DSP
+set-up, DSP readback and packet build,
+framebuffer clear, ordering table,
+rasterizer and present.  In the emulator
+those are 13, 187, 15, 3 and 242 ms.
+Whichever of them has grown on your
+machine is the answer, and the two
+candidates behave very differently:
+
+ - if the RASTERIZER grew most, it is
+   Videl stealing the memory bus.  True
+   colour reads 114 KB from ST RAM every
+   frame and the emulator charges the
+   68030 nothing for it.
+ - if the PACKET BUILD grew most, it is
+   the host port.  The emulator's CPU
+   does not pay for the transfer loop
+   either.
+
+Both are known blind spots, written down
+before your run, not after it.
+
+FB.RES is the framebuffer at frame 100.
+The emulator's is known byte for byte,
+so yours either matches it exactly or it
+does not -- and that is the first
+pixel-level check this port has ever had
+on real hardware.
+
+It is 107 KB of raw pixels; fine to zip.
+
+========================================
