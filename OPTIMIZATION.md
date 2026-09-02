@@ -3526,6 +3526,19 @@ DSP's rate; this is a second, independent correction of the same kind, and
 until it is attributed no absolute frame time in this file should be quoted
 as a Falcon figure.
 
+**Frame 100 on hardware is byte-identical (2026-09-02).**  Both hardware
+packages, `TREXPROF` and `TREXDMA`, wrote their `FB.RES` on the Falcon, and
+both hash to `d89958b3...3d16`, the emulator's checkpoint.  The entire
+pipeline -- DSP morph, transform, culling, lighting and span setup, the
+host-port transport, the packet build and the rasterizer -- produces the same
+107,520 bytes on the machine as under Hatari.  The 2x is therefore timing
+alone; nothing in what the emulator *computes* is wrong.  The files that
+attribute the 2x did not come back with the pictures: `RENDER_S.RES` from
+either package (written only on a keypress exit) and `TREXDMA`'s
+`SSI_DMA.RES` and `SSI_DCAP.RES` (written before the renderer starts) were
+not among the returned files, so the stage split and the SSI/DMA verdict are
+still outstanding until those three are collected from the run directories.
+
 ## 3. Rasterizer cost model
 
 **This model describes the retired bounding-box edge-function rasterizer.**
