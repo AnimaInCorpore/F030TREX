@@ -34,6 +34,12 @@ OBJLIGHTS=1
 # the BUILD-side shading and is what the SSI bring-up configuration needs to
 # fit its transport probe under P:$09BF.
 PRELIGHT=1
+# Assemble the per-phase BUILD timing ladder (OPTIMIZATION.md 2.4l): seven
+# JCLRs against phase_mask inside the per-triangle body, plus the mode word
+# that sets it.  Measurement only -- the guards cost real time in the exposed
+# packet stage of the image that carries them, so no timing figure of THAT
+# stage may be quoted from a PHASEPROBE build, only the ladder's own bracket.
+PHASEPROBE=0
 
 # One generator for the assembler-visible build switches, used by every DSP
 # rule so a variant can never assemble against a stale or missing config.
@@ -45,7 +51,7 @@ PRELIGHT=1
 # lands in the same second as its own source is otherwise skipped -- and before
 # the stamp existed nothing tied the image to its configuration at all, so
 # asking for one variant could silently leave you the previous one.
-DSPCONF_ID=$(SSIPROBE)$(WINPROBE)$(PIOBURST)$(PREPASSDIAG)$(OBJLIGHTS)$(PRELIGHT)
+DSPCONF_ID=$(SSIPROBE)$(WINPROBE)$(PIOBURST)$(PREPASSDIAG)$(OBJLIGHTS)$(PRELIGHT)$(PHASEPROBE)
 DSPCONF_STAMP=./TREX/dsp/build/dspconf-$(DSPCONF_ID).stamp
 # Each configuration assembles to its own image, so asking for one names a file
 # that either exists (and is current) or does not (and is built).  Existence is
@@ -56,11 +62,14 @@ DSPCONF_STAMP=./TREX/dsp/build/dspconf-$(DSPCONF_ID).stamp
 # whole-second comparison reads as up to date -- cannot skip the assembly.
 DSPSRC_ID=$(shell cat ./TREX/dsp/trex_dsp.asm ./src/ioequ.inc 2>/dev/null | shasum -a 256 | cut -c1-8)
 DSPVARIANT=./TREX/dsp/build/trex_dsp-$(DSPCONF_ID)-$(DSPSRC_ID).lod
+# The ladder image's own name, so measure_phase can never pick up the tracked
+# default by accident: it is the default configuration with PHASEPROBE=1.
+PHASE_LOD=./TREX/dsp/build/trex_dsp-0000111-$(DSPSRC_ID).lod
 # The identity of the default: only this configuration may write the tracked
 # ./TREX/dsp/trex_dsp.lod, so a variant build can never leave the wrong image
 # in the tree for `make measure` or a release to pick up.
-DSPCONF_DEFAULT_ID=000011
-DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\nPRELIGHT\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' '$(PRELIGHT)' > ./TREX/dsp/build/dspconf.inc
+DSPCONF_DEFAULT_ID=0000110
+DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\nPRELIGHT\tequ\t%s\nPHASEPROBE\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' '$(PRELIGHT)' '$(PHASEPROBE)' > ./TREX/dsp/build/dspconf.inc
 # Extra flags for the DSP assembly run.  Plain DOSBox needs none.  DOSBox-X
 # opens a working-folder prompt and a menu on macOS and then never reaches
 # BUILD.BAT, so it needs:
@@ -94,7 +103,7 @@ MEASURE_SPLIT_VBLS=7605
 MEASURE_SPLIT_NOPIX_VBLS=6760
 MEASURE_SPLIT_NOROWS_VBLS=5270
 
-.PHONY: dspconf measure_split_run all clean trex_m68030 trex_m68030_run trex_m68030_prepass trex_m68030_prepass_run trex_m68030_ssi_shadow trex_m68030_ssi_rows trex_m68030_ssi_hatari trex_m68030_ssi_dma ssi_dma_verify measure_split trex_ssi_loopback ssi_rows_verify ssi_hatari_verify trex_release trex_dsp ssi_stream_model_test ssi_dma_compile_test measure create_dirs
+.PHONY: dspconf measure_split_run all clean trex_m68030 trex_m68030_phase measure_phase measure_phase_control trex_m68030_run trex_m68030_prepass trex_m68030_prepass_run trex_m68030_ssi_shadow trex_m68030_ssi_rows trex_m68030_ssi_hatari trex_m68030_ssi_dma ssi_dma_verify measure_split trex_ssi_loopback ssi_rows_verify ssi_hatari_verify trex_release trex_dsp ssi_stream_model_test ssi_dma_compile_test measure create_dirs
 
 all: create_dirs $(VASM) $(VLINK) ./TREX/m68030/TREX.TOS ./TREX/m68030/TREX.LOD
 
@@ -108,6 +117,19 @@ trex_m68030_prepass: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_prepass.tos
 # DSP occlusion-culling viewing binary.  TREX_RUN suppresses diagnostic GEMDOS
 # writes so the Hatari disk indicator is not hit once per frame.
 trex_m68030_prepass_run: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_prepass_run.tos ./TREX/m68030/trex_dsp.lod
+
+# Per-phase BUILD timing ladder (OPTIMIZATION.md 2.4l).  The host binary is
+# arm-patchable and the same for both arms; the DSP image is NOT -- arm 1
+# needs the PHASEPROBE .lod and arm 2 is meant to run against one without it.
+# It loads TREXPHAS.LOD, not trex_dsp.lod, so it cannot pick up a stale
+# runtime image lying beside it: an image without the ladder decodes this
+# binary's mode word as an ARMING mode.  The measure_phase targets place the
+# intended image under that name; this target deliberately does not, so
+# running the binary in place fails loudly rather than measuring the wrong
+# thing.  Build the pair with:
+#   make DOSBOX=... PHASEPROBE=1 trex_dsp     (the ladder image)
+#   make trex_m68030_phase
+trex_m68030_phase: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_phase.tos
 
 # Optional host-shadow diagnostic: links the compact frame builder and the
 # stopped ownership/read-back probe into a separate binary.
@@ -229,6 +251,80 @@ measure: trex_m68030
 	@python3 ./tools/decode_render_stats.py $(MEASURE_DIR)/render_stats.res
 	@echo "frame-100 checkpoint (expect d89958b3...3d16):"
 	@shasum -a 256 $(MEASURE_DIR)/fb.res
+
+# Per-phase BUILD timing ladder (OPTIMIZATION.md 2.4l).  Two runs of ONE host
+# binary: arm 1 against the PHASEPROBE .lod walks all eight levels in every
+# frame, arm 2 against the ordinary .lod repeats the top level without the
+# ladder's guards, which prices the instrumentation itself.
+#
+# Both targets print the stage report of the same run as the ladder, because
+# the sweeps sit INSIDE this build's t_packets: that stage minus the ladder's
+# "all eight sweeps" line is the renderer's own packet stage, and the two
+# figures only subtract when they come from one run.  No other figure of a
+# PHASEPROBE build's stages may be quoted -- the guards are in BUILD's hot
+# loop and the sweeps are on the critical path.
+#
+# MEASURE_PHASE_VBLS is NOT MEASURE_VBLS: the sweeps are extra work on the
+# critical path and a frame costs several times what it does in the renderer
+# alone.  The ladder's own subtractions do not depend on the budget -- every
+# level shares one frame set by construction -- so this only has to be large
+# enough to average.  It is converged on the standard 265-frame prefix anyway,
+# so the ladder's absolute figures sit beside section 2's stage table and so
+# that the control arm's top level, which has a budget of its own, subtracts.
+MEASURE_PHASE_VBLS=14830
+# The control arm runs ONE sweep per frame instead of eight, so its frame is
+# several hundred milliseconds cheaper and it needs its own budget to land on
+# the same 265 frames.  The two top-level figures are per-frame means, so they
+# only subtract when both runs cover the same stretch of the choreography.
+MEASURE_PHASE_CONTROL_VBLS=8672
+
+measure_phase: trex_m68030_phase
+	@test -x "$(HATARI)" || { echo "no Hatari at $(HATARI) -- build it in F030Arcade (see its hatari.md) or pass HATARI=..."; exit 1; }
+	@test -f "$(TOS402)" || { echo "no TOS 4.02 image at $(TOS402) -- pass TOS402=..."; exit 1; }
+	@$(MAKE) --no-print-directory PHASEPROBE=1 trex_dsp
+	@test -f $(PHASE_LOD) || { echo "no ladder image at $(PHASE_LOD) -- build it with: make DOSBOX=... PHASEPROBE=1 trex_dsp"; exit 1; }
+	@mkdir -p $(MEASURE_DIR)
+	@python3 ./tools/patch_phase_arm.py ./TREX/m68030/trex_phase.tos $(MEASURE_DIR)/TREX_PHA.TOS 1
+	@rm -f $(MEASURE_DIR)/TREXPHAS.LOD
+	@cp $(PHASE_LOD) $(MEASURE_DIR)/TREXPHAS.LOD
+	@rm -f $(MEASURE_DIR)/phas_sta.res $(MEASURE_DIR)/render_stats.res $(MEASURE_DIR)/fb.res
+	cd $(MEASURE_DIR) && "$(abspath $(HATARI))" \
+	  --machine falcon --cpulevel 3 --cpuclock 16 --mmu true \
+	  --patch-tos true --fast-boot true --tos "$(abspath $(TOS402))" \
+	  --dsp emu --memsize 4 --ttram 0 --monitor rgb \
+	  --frameskips 4 --sound off --benchmark --confirm-quit off \
+	  --log-level warn --alert-level fatal \
+	  --harddrive . --auto 'C:\TREX_PHA.TOS' --run-vbls $(MEASURE_PHASE_VBLS)
+	@python3 ./tools/decode_phase_stats.py $(MEASURE_DIR)/phas_sta.res
+	@python3 ./tools/decode_render_stats.py $(MEASURE_DIR)/render_stats.res
+	@echo "frame-100 checkpoint (expect d89958b3...3d16):"
+	@shasum -a 256 $(MEASURE_DIR)/fb.res
+	@cp $(MEASURE_DIR)/phas_sta.res $(MEASURE_DIR)/phas_ladder.res
+
+# The guard-cost control: the SAME host binary, arm 2, against the ordinary
+# .lod -- which has no ladder in it at all, which is the point.
+measure_phase_control: trex_m68030_phase
+	@test -x "$(HATARI)" || { echo "no Hatari at $(HATARI) -- build it in F030Arcade (see its hatari.md) or pass HATARI=..."; exit 1; }
+	@test -f "$(TOS402)" || { echo "no TOS 4.02 image at $(TOS402) -- pass TOS402=..."; exit 1; }
+	@test -f $(MEASURE_DIR)/phas_ladder.res || { echo "no ladder run to compare against -- run make measure_phase first"; exit 1; }
+	@mkdir -p $(MEASURE_DIR)
+	@python3 ./tools/patch_phase_arm.py ./TREX/m68030/trex_phase.tos $(MEASURE_DIR)/TREX_PHA.TOS 2
+	@rm -f $(MEASURE_DIR)/TREXPHAS.LOD
+	@cp ./TREX/dsp/trex_dsp.lod $(MEASURE_DIR)/TREXPHAS.LOD
+	@rm -f $(MEASURE_DIR)/phas_sta.res $(MEASURE_DIR)/render_stats.res $(MEASURE_DIR)/fb.res
+	cd $(MEASURE_DIR) && "$(abspath $(HATARI))" \
+	  --machine falcon --cpulevel 3 --cpuclock 16 --mmu true \
+	  --patch-tos true --fast-boot true --tos "$(abspath $(TOS402))" \
+	  --dsp emu --memsize 4 --ttram 0 --monitor rgb \
+	  --frameskips 4 --sound off --benchmark --confirm-quit off \
+	  --log-level warn --alert-level fatal \
+	  --harddrive . --auto 'C:\TREX_PHA.TOS' --run-vbls $(MEASURE_PHASE_CONTROL_VBLS)
+	@python3 ./tools/decode_phase_stats.py $(MEASURE_DIR)/phas_sta.res
+	@python3 ./tools/decode_render_stats.py $(MEASURE_DIR)/render_stats.res
+	@echo "frame-100 checkpoint (expect d89958b3...3d16):"
+	@shasum -a 256 $(MEASURE_DIR)/fb.res
+	@cp $(MEASURE_DIR)/phas_sta.res $(MEASURE_DIR)/phas_control.res
+	@python3 ./tools/decode_phase_stats.py --guards $(MEASURE_DIR)/phas_ladder.res $(MEASURE_DIR)/phas_control.res
 
 # The section 3.5 rasterizer split: per-packet setup, row/span walk and pixel
 # loops, from three builds over one identical prefix.  NO_ROWS keeps only the
@@ -410,6 +506,12 @@ TREX_MESH_DEPS = ./TREX/model/trex.o3d ./TREX/model/trex_facenormals.bin \
 ./TREX/m68030/trex_prepass.tos: ./TREX/m68030/build/trex_prepass.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
+./TREX/m68030/build/trex_phase.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) $< -quiet -Felf -m68030 -DTREX_PHASEPROBE -o $@ -L ./TREX/m68030/build/trex_phase.lst
+
+./TREX/m68030/trex_phase.tos: ./TREX/m68030/build/trex_phase.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
 ./TREX/m68030/build/trex_prepass_run.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
 	$(VASM) $< -quiet -Felf -m68030 -DTREX_PREPASS -DTREX_RUN -o $@ -L ./TREX/m68030/build/trex_prepass_run.lst
 
@@ -530,6 +632,8 @@ clean:
 	rm -f ./TREX/m68030/build/trex_run.lst
 	rm -f ./TREX/m68030/trex_prepass.tos
 	rm -f ./TREX/m68030/build/trex_prepass.o
+	rm -f ./TREX/m68030/trex_phase.tos
+	rm -f ./TREX/m68030/build/trex_phase.o
 	rm -f ./TREX/m68030/build/trex_prepass.lst
 	rm -f ./TREX/m68030/trex_prepass_run.tos
 	rm -f ./TREX/m68030/build/trex_prepass_run.o

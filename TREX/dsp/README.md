@@ -145,14 +145,34 @@ their mode-4 readout and the flow-compare sign fix took 58 more, the 2.4f
 window-capacity probe took 44 and 2.4i's normal-light cache took its own
 share.
 
-Five switches in the generated `dspconf.inc` select what is assembled, because
-it no longer all fits — `SSIPROBE` (the `CMD_SSI_STREAM` transport probe, 103
-words), `WINPROBE` (the window burn loop, 44), `PREPASSDIAG` (2.3j's counter
-increments, 30), `PIOBURST` (the host-port calibration burst, 25) and
-`OBJLIGHTS` (object-space lighting, 19). The default build takes `WINPROBE`,
-`PREPASSDIAG` and `OBJLIGHTS`; the SSI transport bring-up build
-(`SSIPROBE=1 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=0`) trades all
-three for the probe and ends at `$09B6` with 9 words free.
+Seven switches in the generated `dspconf.inc` select what is assembled,
+because it no longer all fits — `SSIPROBE` (the `CMD_SSI_STREAM` transport
+probe, 103 words), `PRELIGHT` (the FINISH-window lighting pass and BUILD's
+table read, 66), `WINPROBE` (the window burn loop, 44), `PREPASSDIAG` (2.3j's
+counter increments, 30), `PIOBURST` (the host-port calibration burst, 25),
+`PHASEPROBE` (2.4l's per-phase BUILD timing ladder, 21) and `OBJLIGHTS`
+(object-space lighting, 19). The default build takes `OBJLIGHTS` and
+`PRELIGHT` and ends at `P:$09A6`; the SSI transport bring-up build
+(`SSIPROBE=1 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=0 PRELIGHT=0`)
+trades everything else for the probe and ends at `$09B8` with 7 words free.
+
+`PHASEPROBE` is the only instrument that fits **beside** the shipping
+configuration: `$09BB`, 4 words free, with `OBJLIGHTS` and `PRELIGHT` at
+their shipping values. That is what makes its ladder a measurement of the
+BUILD body `TREX.TOS` actually runs rather than of a substitute. It adds
+seven `JCLR`s against `phase_mask` inside the per-triangle body, so the
+image that carries it is measurably slower in the exposed packet stage —
+no whole-frame or `t_packets` figure may be taken from it, and its arm-2
+control run exists to price those guards.
+
+`phase_mask` lives in the short-addressable Y page, in the slot of the
+write-only `triangles_loaded` flag, because `JCLR` has no long-absolute
+form: its second word *is* the jump address, so the operand must be short
+absolute, I/O short or register indirect, and no address register survives
+`make_triangle_area`/`bbox`/`zkey`/`span`. The `phase_mask` equate names
+that address directly (the Y section is assembled after every use of it, and
+a forward reference cannot be sized short) and the Y section asserts the two
+agree with `FAIL`.
 
 `PREPASSDIAG` guards only the counter *increments*. The mode-4 dispatch and
 its reply are unconditional in every configuration, because a guarded-out
@@ -236,11 +256,24 @@ PREPASS:
     cmd, mode -> ACK_PREPASS, survivor_count       (modes 0-3)
     cmd, 4    -> ACK_PREPASS, stamp_calls, stamped_cells, query_kills,
                  dirty_merges, query_cells_visited, stamp_cells_visited
+    cmd, $100|mask -> ACK_PREPASS, survivor_count  (only with PHASEPROBE=1)
 
 SSI_STREAM ($40), only when assembled with SSIPROBE=1:
     cmd, payload_count, seed, 8 header words, 6 footer words
     -> ACK_SSI_STREAM, stall_status
 ```
+
+Mode `$100|mask` is the per-phase BUILD timing ladder of `OPTIMIZATION.md`
+2.4l. It only stores `phase_mask` and acknowledges — it runs nothing, and the
+survivor count it returns is the occlusion prepass's, which the ladder never
+sets. Bit 8 is the selector because modes 0..7 are the whole low octal range
+the arming and counter decodes already occupy, so a mask sent to a build
+without `PHASEPROBE` would arm the prepass or draw the seven-word counter
+reply instead. A clear bit in bits 0..6 makes BUILD's per-triangle body jump
+to `triangle_advance` at that phase, so a mask of `(1<<N)-1` executes the
+first N phases for exactly the triangles BUILD would run them on: both cull
+branches stay inside the ladder. The mask defaults to `$7f`, so an image
+whose host never sends the mode word builds complete records.
 
 `SSI_STREAM` is the only command that does not answer over the host port
 immediately. It is the DSP half of the Falcon SSI transport probe: it
@@ -393,3 +426,21 @@ frame and the largest single term outside the rasterizer.** The earlier
 conclusion that DSP-side savings buy program words rather than frame rate was
 an artefact of the double clock; at the real clock, work removed from this
 program is frame time removed from the render.
+
+`OPTIMIZATION.md` 2.4l then divides that exposed term per phase.
+`make measure_phase` sweeps the whole mesh through the BUILD chunk protocol
+once per phase prefix, with `GET_TRIANGLES` omitted so every level moves the
+same words and the all-clear level subtracts the transport, and all eight
+levels run inside the same frame so the deltas are paired.  Over the 265-frame
+prefix, of **130.4 ms** of DSP compute per frame: `make_triangle_span`
+(`span_div` included) **70.1 ms**, `make_triangle_area` 22.3, the chunk loop
+and index unpack 13.3, the record pack 11.2, `make_triangle_bbox` 6.3,
+`make_triangle_zkey` 5.1, the prelight fetch 2.1.  Span setup is over half of
+it and is where a DSP-side lever has to look next.  `make
+measure_phase_control` re-runs the top level against an image built *without*
+the ladder and prices the seven guards at ~2 ms/frame (1.2-1.5%), which puts
+the guard-free compute at 128.1 ms; decode either with
+`tools/decode_phase_stats.py`.  The probe host loads `TREXPHAS.LOD` rather
+than `trex_dsp.lod`: an image without the ladder decodes the mask as a
+`CMD_PREPASS` *arming* mode, so the distinct name makes the wrong pairing
+fail to load instead of measuring the wrong thing.

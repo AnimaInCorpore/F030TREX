@@ -140,7 +140,13 @@ object-space lighting a further 2.1 ms at whole-choreography pixel identity,
 and 2.4k's frame-ahead lighting -- every survivor lit inside the FINISH window
 over a two-word packed normal table, BUILD reading one word per survivor --
 38.6 ms more at byte-identical output over all 483 hashed frames; each section
-carries its fixed-prefix gates.
+carries its fixed-prefix gates.  Section 2.4l then put a per-phase timer on
+what is left of the DSP's exposed work: of 130.4 ms of compute over the whole
+mesh, **span setup is 70.1 ms**, the backface classify 22.3, the chunk loop
+and index unpack 13.3, the record pack 11.2, the bounding box 6.3, the sort
+key 5.1 and the prelight fetch 2.1 -- 128.1 ms once the ladder's own guards
+(~2 ms, measured by its control arm) are taken out.  `make_triangle_span` is
+the largest measured item left inside BUILD.
 
 The v1.2 release has a measured figure: **511.2 ms per frame, 1.956 FPS**
 under a Hatari corrected to run the DSP at the Falcon's real clock
@@ -165,17 +171,22 @@ BUILD, which reads the table instead of computing.
 
 The default build ends at `P:$09A6`, 25 words below the resident-index
 ceiling; the camera-lights A/B reference (`make trex_dsp_camlights`) ends at
-`P:$0993`. Six switches in the generated `dspconf.inc` select what is
+`P:$0993`. Seven switches in the generated `dspconf.inc` select what is
 assembled, because it does not all fit: the `CMD_SSI_STREAM` transport probe
 of section 7.4b (`SSIPROBE`, 103 words), the prelight pass (`PRELIGHT`, 66),
 the cross-frame window burn loop (`WINPROBE`, 44), section 2.3j's prepass
 diagnostic counters (`PREPASSDIAG`, 30), the host-port calibration burst
-(`PIOBURST`, 25) and object-space lighting (`OBJLIGHTS`, 19). The shipping
+(`PIOBURST`, 25), section 2.4l's per-phase BUILD timing ladder
+(`PHASEPROBE`, 21) and object-space lighting (`OBJLIGHTS`, 19). The shipping
 and measurement builds take object-space lighting and the prelight pass; the
 window probe and the counters each re-assemble only beside `OBJLIGHTS=0`
 (`WINPROBE=1 OBJLIGHTS=0` ends exactly at `P:$09BF`); the SSI transport
 bring-up build trades everything but the probe and ends at `P:$09B8` with 7
-words to spare.
+words to spare. `PHASEPROBE` is the only one that fits beside the shipping
+configuration unchanged (`P:$09BB`, 4 words free), which is what lets its
+ladder time the BUILD body the release actually runs -- `make measure_phase`
+and `make measure_phase_control`, decoded by
+`tools/decode_phase_stats.py`.
 
 ## Feature comparison with the PS1 reference
 

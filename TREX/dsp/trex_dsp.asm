@@ -63,6 +63,10 @@
 ;       disarms, 1 arms the FINISH hook, and 2 or 3 runs the full prepass now.
 ;       The reply is always exactly two words; the old ordered-list dump was
 ;       removed to keep the full-mesh path inside the stock P/Y overlay.
+;       Mode 4 reads the diagnostic counters back (a seven-word reply).  With
+;       PHASEPROBE, bit 8 selects the per-phase timing ladder instead: the low
+;       seven bits of the mode word become phase_mask and the reply keeps the
+;       two-word shape.  See "Per-phase BUILD timing ladder" below.
 ;
 ;   CMD_GET_TRIANGLES:
 ;       returns ACK_GET_TRIANGLES, survivor count, and survivor count *
@@ -241,6 +245,62 @@ CMD_FINISH_ANIMATED_FRAME	= 15
 CMD_SSI_STREAM		= $40
 CMD_PIO_BURST		= $42
 CMD_RESET		= $7f
+
+; -----------------------------------------------------------------------------
+; Per-phase BUILD timing ladder (PHASEPROBE, OPTIMIZATION.md 2.4l)
+;
+; BUILD's exposed per-triangle cost has never had a per-phase timer: 2.4h
+; priced lighting, 2.4k moved it into the FINISH window, and what remained --
+; the index unpack, both classify passes, the average-Z key, the prelight
+; fetch, span setup with span_div, and the eighteen-word record pack -- is one
+; undivided number.  This is the mechanism that divides it.
+;
+; phase_mask holds one bit per phase of the per-triangle body.  A clear bit
+; makes the body jump to triangle_advance at that point, so a mask of
+; (1<<N)-1 executes exactly the first N phases -- for exactly the triangles
+; BUILD would run them on, since the two cull branches stay inside the ladder
+; and keep their positions.  The host then sends the whole 86-chunk mesh once
+; per mask, WITHOUT the matching GET_TRIANGLES, and times it: every mask moves
+; the identical 5,706 words out and 172 back over the port -- 85 chunks of 32
+; and one of 4 -- so mask 0 subtracts the transport and consecutive masks
+; subtract into one phase each.
+;
+; The mask defaults to PHASE_MASK_FULL, so a probe image whose host never
+; sends a mode word builds complete records exactly as the shipping image
+; does; the host restores PHASE_MASK_FULL after its last sweep of the frame.
+; Nothing in the ladder writes projected_vertices, prelight_table or the
+; normal-light cache, so a sweep cannot change what the following BUILD
+; produces -- the frame-100 checkpoint is the gate on that claim.
+PHASE_BIT_WALK		= 0	; index unpack + kill test + the loop itself
+PHASE_BIT_AREA		= 1	; make_triangle_area and the backface cull
+PHASE_BIT_BBOX		= 2	; make_triangle_bbox and the screen cull
+PHASE_BIT_ZKEY		= 3	; make_triangle_zkey
+PHASE_BIT_SHADE		= 4	; prelight fetch (make_triangle_shade at PRELIGHT=0)
+PHASE_BIT_SPAN		= 5	; make_triangle_span, span_div included
+PHASE_BIT_RECORD	= 6	; the eighteen-word record pack
+PHASE_MASK_FULL		= $7f
+
+; JCLR has no long-absolute form -- its second word IS the jump address, so
+; the operand must be short absolute (Y:$00-$3F), I/O short, or register
+; indirect.  Register indirect would need an address register that survives
+; make_triangle_area/bbox/zkey/span, and there is none; so the mask has to
+; live in the 64-word short-addressable Y page, which is exactly full.
+;
+; It therefore takes the slot of triangles_loaded, which is WRITE-ONLY:
+; CMD_LOAD_TRIANGLES sets it once at startup and CMD_RESET clears it, and
+; nothing in the program ever reads it back.  That is what makes the slot
+; safe to reuse -- no code path can overwrite the mask between the host's
+; mode word and the BUILD sweep it times.  triangles_loaded moves above
+; Y:$3F in this configuration and its two writes take the long form there,
+; two program words that only the probe image pays.
+;
+; The address is written out here because the Y section is assembled after
+; every use of it and a forward reference cannot be sized short.  The Y
+; section asserts that the two agree, so a layout change above it stops the
+; assembly instead of silently moving the mask somewhere BUILD does not test;
+; that assertion uses FAIL, and the note beside it says why the negative-DS
+; trick the prelight_table pad uses does not work here.
+phase_mask		equ	$0004
 
 ACK_PING		= $700001
 ACK_LOAD		= $700002
@@ -575,7 +635,11 @@ command_load_triangles
 load_triangle_loop
 
 	move	#>1,x0
+	IF	PHASEPROBE
+	move	x0,y:triangles_loaded
+	ELSE
 	move	x0,y:<triangles_loaded
+	ENDIF
 
 	move	#ACK_LOAD_TRIANGLES,x0
 	jsr	<send_word
@@ -1015,6 +1079,12 @@ build_no_uvs
 	tst	a
 	jeq	<triangle_reply
 triangle_count_loop
+	IF	PHASEPROBE
+	; Ladder stop 0.  With every bit clear the loop still runs 2,724 times
+	; and still pays the countdown, so this level is the chunk protocol and
+	; nothing else -- the transport term every other level also carries.
+	jclr	#PHASE_BIT_WALK,y:<phase_mask,triangle_advance
+	ENDIF
 	; Unpack the three resident words into three vertex and three corner-
 	; normal indices through the routine the prelight pass and the prepass
 	; classify share, so no two passes can disagree about a field.
@@ -1056,6 +1126,9 @@ build_prepass_kill_advance_store
 	jne	<triangle_culled
 build_triangle_not_killed
 
+	IF	PHASEPROBE
+	jclr	#PHASE_BIT_AREA,y:<phase_mask,triangle_advance
+	ENDIF
 	jsr	<make_triangle_area
 	tst	a
 	; Backface culling.  The sign of the screen-space area is the winding, so
@@ -1071,11 +1144,20 @@ build_triangle_not_killed
 	; as often here as it would before the area test.  A box that clips
 	; empty is fully off-screen and rejected -- the same set the separate
 	; fully-outside pre-test used to catch before it was subsumed here.
+	IF	PHASEPROBE
+	jclr	#PHASE_BIT_BBOX,y:<phase_mask,triangle_advance
+	ENDIF
 	jsr	<make_triangle_bbox
 	tst	a
 	jeq	<triangle_culled
 
+	IF	PHASEPROBE
+	jclr	#PHASE_BIT_ZKEY,y:<phase_mask,triangle_advance
+	ENDIF
 	jsr	<make_triangle_zkey
+	IF	PHASEPROBE
+	jclr	#PHASE_BIT_SHADE,y:<phase_mask,triangle_advance
+	ENDIF
 	IF	PRELIGHT
 	; This triangle's lighting was computed in the FINISH window by
 	; prelight_run: shade<<12 | c2<<8 | c1<<4 | c0.  Unpack it into the
@@ -1102,8 +1184,14 @@ build_triangle_not_killed
 	ELSE
 	jsr	<make_triangle_shade
 	ENDIF
+	IF	PHASEPROBE
+	jclr	#PHASE_BIT_SPAN,y:<phase_mask,triangle_advance
+	ENDIF
 	jsr	<make_triangle_span
 
+	IF	PHASEPROBE
+	jclr	#PHASE_BIT_RECORD,y:<phase_mask,triangle_advance
+	ENDIF
 	; Survivor record, eighteen packed words -- see SPAN_RECORD_WORDS for
 	; the exact layout.  w0 composes by shifting fields in from the top:
 	; slot_mid, slot_top, mid, shade, chunk-local index.  The host unpacks
@@ -1264,7 +1352,11 @@ command_reset
 	move	a1,y:<normal_count
 	move	a1,y:<normals_loaded
 	move	a1,y:<triangle_list_count
+	IF	PHASEPROBE
+	move	a1,y:triangles_loaded
+	ELSE
 	move	a1,y:<triangles_loaded
+	ENDIF
 	move	a1,y:<frames_processed
 	move	a1,y:<triangles_processed
 	move	#ACK_RESET,x0
@@ -2747,6 +2839,15 @@ lookup_projected_z
 command_prepass
 	jsr	<receive_word
 
+	IF	PHASEPROBE
+	; Bit 8: the per-phase ladder mask, checked before everything else so
+	; the arming and counter decodes below keep their exact shape.  It has
+	; to be a bit the existing modes cannot set -- modes 0..7 are the whole
+	; low octal range -- or a ladder mask would arm the occlusion prepass or
+	; answer seven words where the host expects two.
+	jset	#8,x0,phase_probe_set
+	nop
+	ENDIF
 	; Mode 4 (bit 2): diagnostic counter readout, checked first so the
 	; bit-0/1 decode below keeps its shape.  Replies ACK_PREPASS plus the
 	; six status-cell counters of the last run and computes nothing;
@@ -2763,6 +2864,16 @@ command_prepass
 	; Mode 3 is retained as a second run-now selector for old measurement
 	; binaries.  It has the same fixed two-word reply as mode 2.
 	jmp	<prepass_run_now
+
+	IF	PHASEPROBE
+phase_probe_set
+	; The mode word IS the mask: only bits 0..6 are ever tested, so bit 8's
+	; selector rides along harmlessly and no masking instruction is needed.
+	; Nothing runs here -- the host times the BUILD chunk sweep it sends
+	; next, not this command.
+	move	x0,y:<phase_mask
+	jmp	<prepass_ack_exit
+	ENDIF
 
 prepass_arm
 	; Modes 0 and 1 share one path because the flag IS the mode word.
@@ -3924,8 +4035,26 @@ normals_loaded
 	dc	0
 triangle_list_count
 	ds	1
+; The ladder mask lands here, in triangles_loaded's short-addressable slot
+; (see the phase_mask equate).  The assertion below turns a moved slot into
+; an assembly error instead of a mask BUILD never tests.
+PHASE_MASK_SLOT	equ	*
+	IF	PHASEPROBE
+	dc	PHASE_MASK_FULL
+	ELSE
 triangles_loaded
 	dc	0
+	ENDIF
+; The slot assertion, and why it is shaped like this.  It is NOT wrapped in
+; IF PHASEPROBE, because ASM56000 6.1 skips a nested IF block silently
+; instead of diagnosing it -- and it does not need to be, since the equate
+; names the same word in both configurations.  FAIL is the primitive because
+; the negative-DS trick the prelight_table pad uses does not work here: DS
+; rejects 0 but accepts a negative count with nothing worse than a
+; location-counter warning, so an assertion built on it never fires.
+	IF	PHASE_MASK_SLOT-phase_mask
+	FAIL	'phase_mask equate no longer names its Y slot'
+	ENDIF
 frames_processed
 	ds	1
 triangles_processed
@@ -4273,6 +4402,14 @@ ssi_spin
 ssi_status
 	ds	1
 	ENDIF
+
+; Displaced by the ladder mask, which needs this flag's short-addressable
+; slot (see the phase_mask equate).  Write-only in every configuration, so
+; the move costs one program word per write site and nothing else.
+	IF	PHASEPROBE
+triangles_loaded
+	dc	0
+	ENDIF
 	ds	3
 
 ; -----------------------------------------------------------------------------
@@ -4316,12 +4453,20 @@ ssi_status
 ; overwritten by the next upload and reports garbage, which cost this stage
 ; one full round of contradictory measurements once.
 ;
-; Six switches select what is assembled, all of them in the generated
-; dspconf.inc (see the Makefile).  Two configurations matter, and both fit:
+; Seven switches select what is assembled, all of them in the generated
+; dspconf.inc (see the Makefile).  Three configurations matter, and all fit:
 ;
-;   default   SSIPROBE=0 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=1 PRELIGHT=1
-;             ends P:$09A6, 25 words free.  Ships, and every timing run uses it.
-;   SSI       SSIPROBE=1 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=0 PRELIGHT=0
+;   default   SSIPROBE=0 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=1 PRELIGHT=1 PHASEPROBE=0
+;             ends P:$09A6, 25 words free.  Ships, and every whole-frame
+;             timing run uses it.
+;   ladder    the default plus PHASEPROBE=1
+;             ends P:$09BB, 4 words free.  The per-phase BUILD timing ladder
+;             of 2.4l.  It fits BESIDE the shipping configuration, which is
+;             what makes its measurement one of the shipping BUILD body and
+;             not of a substitute: OBJLIGHTS and PRELIGHT keep their shipping
+;             values, so every phase the ladder times is the phase that runs
+;             in TREX.TOS.
+;   SSI       SSIPROBE=1 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=0 PRELIGHT=0 PHASEPROBE=0
 ;             ends P:$09B8, 7 words free.  Transport bring-up only.
 ;
 ; The camera-lights A/B reference (OBJLIGHTS=0 alone, make trex_dsp_camlights)
@@ -4331,12 +4476,24 @@ ssi_status
 ; transport probe) 103, PRELIGHT (the window-phase lighting pass and BUILD's
 ; table read, 2.4k) 66, WINPROBE (the cross-frame window burn loop) 44,
 ; PREPASSDIAG (2.3j's six diagnostic counters) 30, PIOBURST (the host-port
-; calibration burst) 25, OBJLIGHTS 19.  The probe alone is larger than the
-; default build's headroom, which is why the SSI configuration turns five
-; things off to carry it.  PRELIGHT displaced the two instruments from the
-; default build; either fits again beside OBJLIGHTS=0 (WINPROBE=1 OBJLIGHTS=0
-; ends exactly at P:$09BF, PREPASSDIAG=1 OBJLIGHTS=0 at P:$09B1) or beside
-; PRELIGHT=0.
+; calibration burst) 25, PHASEPROBE (2.4l's seven ladder JCLRs, the mode-word
+; leaf that sets the mask, and the two long-form writes of the displaced
+; triangles_loaded) 21, OBJLIGHTS 19.  The SSI probe alone is larger than the
+; default build's headroom, which is why that configuration turns five things
+; off to carry it.  PRELIGHT displaced the two instruments from the default
+; build; either fits again beside OBJLIGHTS=0 (WINPROBE=1 OBJLIGHTS=0 ends
+; exactly at P:$09BF, PREPASSDIAG=1 OBJLIGHTS=0 at P:$09B1) or beside
+; PRELIGHT=0.  PHASEPROBE is the only instrument small enough to fit beside
+; the shipping configuration unchanged.
+;
+; PHASEPROBE is the one switch that changes the timing of the exposed packet
+; stage in the image that carries it: its seven JCLRs sit inside BUILD's
+; per-triangle body -- every triangle pays the first and every survivor pays
+; all seven, measured at ~2 ms/frame by 2.4l's control arm.  That is why no
+; whole-frame or t_packets figure may be taken from a ladder image, and why
+; the ladder has an arm-2 control that runs the same host sweep against an
+; image WITHOUT the guards -- the difference is the instrument's own cost,
+; measured rather than assumed away.
 ;
 ; Two of those are safe to drop only because of what they are NOT.  PREPASSDIAG
 ; guards the counter INCREMENTS, never the mode-4 dispatch or its reply: with

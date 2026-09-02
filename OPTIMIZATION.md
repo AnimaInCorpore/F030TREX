@@ -104,6 +104,28 @@ two-byte timing copy of `TREX.TOS` measures **457.1 ms / 2.19
 FPS**.  These are corrected-Hatari emulator measurements, not physical-Falcon
 timings.
 
+What the DSP spends that stage's time on is now divided.  Section 2.4l's
+per-phase ladder measures the DSP's per-triangle body over the whole mesh at
+**130.4 ms** of compute above transport, and inside that:
+
+| BUILD phase | Time per frame | Share of the 130.4 ms |
+|---|---:|---:|
+| `make_triangle_span`, `span_div` included | 70.1 ms | 53.8% |
+| `make_triangle_area` and the backface cull | 22.3 ms | 17.1% |
+| The chunk loop, kill test and index unpack | 13.3 ms | 10.2% |
+| The eighteen-word record pack | 11.2 ms | 8.6% |
+| `make_triangle_bbox` and the screen cull | 6.3 ms | 4.8% |
+| `make_triangle_zkey` | 5.1 ms | 3.9% |
+| The prelight fetch and nibble unpack | 2.1 ms | 1.6% |
+
+Those phase figures each carry the cost of the ladder guard that gated them;
+2.4l's control arm prices the whole instrument at ~2 ms/frame, which puts the
+guard-free compute at 128.1 ms.  This is a freestanding measurement of the
+phases, not a decomposition of the 186.5 ms stage itself -- the stage also carries the record transport and the
+host's unpack, and the real BUILD pipelines its chunks where the ladder does
+not.  Read it as what each phase costs the DSP, which is what decides where
+DSP-side work is worth doing.
+
 The table below is the previous baseline, 2.4i's normal-light-cache build,
 retained because sections 2.4i-2.4j and 8.2b are measured against it:
 
@@ -2901,9 +2923,10 @@ re-answering it, and 2.4k ran it again over 483 frames.
 lighting's 51.2 ms (2.4h) the only attributed phase, ~2 ms of it now
 removable, the cache measured to its ceiling, and transport measured at ~46
 ms, the unattributed remainder -- projection, both classify passes, span
-setup, `span_div`, record packing -- still has no per-phase timer.  The
-`prepass_arm=2` freestanding-and-timed bracket remains the mechanism that
-could name it, and is the remaining measurement this section did not build.
+setup, `span_div`, record packing -- had no per-phase timer when this section
+closed.  The `prepass_arm=2` freestanding-and-timed bracket was named as the
+mechanism that could divide it; **2.4l built that bracket** and did, with
+span setup at 70.1 ms of a 130.4 ms whole.
 
 ### 2.4k Frame-ahead lighting: the prelight table and the two-word normal pack -- implemented, -38.6 ms/frame
 
@@ -3045,7 +3068,11 @@ capacity sweep of this build needs the `WINPROBE=1 OBJLIGHTS=0` variant.
 from 163.9.  Of the ~167 ms exposed DSP term 2.4j left, ~128 ms remains, and
 lighting is no longer part of it: what is left in BUILD's exposed time is
 projection lookups, both classify passes, span setup, `span_div` and record
-packing, still without a per-phase timer.  The window's spare capacity is
+packing.  **2.4l put a per-phase timer on exactly that list**: span setup is
+70.1 ms of it, the two classify passes 28.6, the loop and index unpack 13.3,
+the record pack 11.2, the sort key 5.1 and this section's own table read
+2.1 -- which is the ~2 ms this section inferred rather than measured.  The
+window's spare capacity is
 correspondingly smaller by the pass -- ~160 ms mean by the model above -- and
 item 15's overlap has that much less room, which the same trade-off 2.4f named
 for items 11 and 15 already covers.  The prelight table is also the first
@@ -3056,6 +3083,184 @@ that.
 
 Every figure here is an emulator measurement under 2.4a's caveats; none is a
 Falcon timing.
+
+### 2.4l The per-phase BUILD ladder: what the exposed DSP term is actually made of
+
+2.4j and 2.4k both close on the same missing instrument.  2.4h priced
+lighting, 2.4i cached it, 2.4j rotated it into object space and 2.4k moved it
+out of BUILD entirely -- and what was left of the exposed DSP term, ~128
+ms/frame of "projection lookups, both classify passes, span setup, `span_div`
+and record packing", was one undivided number with no per-phase timer behind
+it.  2.4j named the mechanism that could divide it: a freestanding,
+separately timed bracket in the shape of `prepass_arm=2`.  This section
+(2026-09-02) builds it.
+
+**The instrument.**  `phase_mask` is one resident DSP word with one bit per
+phase of BUILD's per-triangle body.  Seven `JCLR`s inside that body jump to
+`triangle_advance` when their bit is clear, so a mask of `(1<<N)-1` executes
+exactly the first N phases -- and, because both cull branches stay inside the
+ladder in their original positions, it executes them for exactly the
+triangles BUILD runs them on.  The host sets the mask with a `CMD_PREPASS`
+mode word (bit 8 selects the ladder; modes 0..7 are the whole low octal range
+the arming and counter decodes already occupy) and then sweeps the entire
+2,724-triangle mesh through the ordinary BUILD chunk protocol, timed.
+
+**Two design choices carry the whole result.**
+
+*The sweep omits `GET_TRIANGLES`.*  That is what makes the levels subtract.
+Every level puts the identical 5,706 words on the wire -- 85 chunks of 3+64,
+one of 3+8 -- and reads the identical 86 two-word acks, so level 0, with every
+phase bit clear, IS the transport, and consecutive levels differ by exactly
+one phase of DSP compute.  Fetching the records instead would make the wire
+traffic a function of the survivor count, which is itself a function of the
+level, and nothing would subtract.
+
+*All eight levels run inside the same frame.*  The choreography is not
+uniform, so a ladder spread over eight runs would be subtracting per-frame
+means taken over eight different stretches of it -- the same objection that
+forces `measure_split`'s three budgets to converge on one frame count.  Here
+the pairing is by construction: one binary, one run, and every level sees
+every frame.
+
+**Measured**, corrected-clock Hatari, the 2.4g recipe, the converged
+265-frame prefix (`MEASURE_PHASE_VBLS` 14,830 for this arm's much heavier
+frame).  `make measure_phase`, decoded by `tools/decode_phase_stats.py`:
+
+| level | phases executed | total | delta | survivors |
+|---|---|---:|---:|---:|
+| 0 | transport only, no phase executed | 21.8 ms | -- | 0 |
+| 1 | + the loop, the kill test and `prepass_unpack_indices` | 35.1 ms | **13.3 ms** | 0 |
+| 2 | + `make_triangle_area` and the backface cull | 57.4 ms | **22.3 ms** | 0 |
+| 3 | + `make_triangle_bbox` and the screen cull | 63.7 ms | **6.3 ms** | 0 |
+| 4 | + `make_triangle_zkey` | 68.8 ms | **5.1 ms** | 0 |
+| 5 | + the prelight fetch and nibble unpack | 70.9 ms | **2.1 ms** | 0 |
+| 6 | + `make_triangle_span`, `span_div` included | 141.0 ms | **70.1 ms** | 0 |
+| 7 | + the eighteen-word record pack | 152.1 ms | **11.2 ms** | 1,149 |
+| | **DSP compute above transport** | **130.4 ms** | | |
+
+A same-configuration repeat -- an earlier link of the same source, differing
+only in four bytes of DATA and therefore in the BSS offset behind it -- read a
+21.6 ms transport level and deltas of 13.6 / 22.1 / 6.5 / 5.0 / 2.2 / 70.0 /
+10.8, for a compute total of **130.3 ms**.  No delta moves by more than
+0.4 ms and the total by 0.1, which is the run-to-run band 2.4g established
+for this recipe and is what makes the two-millisecond rows worth quoting at
+all.
+
+**Span setup is the exposed DSP term.**  `make_triangle_span` alone is
+**70.1 ms of the 130.4**, 54% of everything BUILD computes per triangle and
+more than the two classify passes, the sort key, the lighting fetch and the
+record pack put together.  The three-corner sort, the six to twelve
+`span_div` calls, the UV and level gradients and the left-chain steps have
+been one routine and one line in every profile the program has had until now;
+they are now known to be the largest single item left in BUILD.
+
+The rest lands where the earlier sections said it would.  The two classify
+passes are 28.6 ms together, and their split is the shape the ordering in
+`command_build_triangles` was chosen for: the backface test runs on all 2,724
+triangles and costs 22.3 ms, the bounding box only on the ones it passes and
+costs 6.3 -- the "a quarter as often here as it would before the area test"
+comment beside the `make_triangle_bbox` call, priced.  The prelight
+fetch is **2.1 ms**, which settles 2.4k's estimate of "~2 ms" for BUILD's
+table read and nibble unpack -- the number it inferred from the 39.4 ms the
+packet stage moved against the ~41 ms of lighting it removed.  The record
+pack, eighteen packed words and the survivor counter, is 11.2 ms.  And the
+loop itself -- the countdown, the prelight cursor, the disarmed kill test and
+the shared index unpack, over all 2,724 triangles whether they survive or not
+-- is 13.3 ms, more than the bounding box and the sort key together.
+
+**The instrument's own cost, measured.**  The seven `JCLR`s are inside the
+hot loop -- every triangle pays the first, every survivor pays all seven --
+so the ladder's numbers carry a bias the ladder cannot see.  Arm 2 measures it: the *same* host binary, one
+byte patched, running one full sweep with no mode word at all -- which is
+what lets it run against the ordinary `.lod`, assembled with no ladder in it.
+Both arms converged on the same 265 frames (`MEASURE_PHASE_CONTROL_VBLS`
+8,672, since one sweep per frame instead of eight is a much lighter frame),
+and both reproduce the frame-100 checkpoint and the same 1,149-survivor last
+frame -- the decoder refuses the subtraction otherwise, and did, on a first
+control run that landed on 267 frames.
+
+| Image | full-mesh sweep |
+|---|---:|
+| ladder (`PHASEPROBE=1`), level 7 | 152.1 ms |
+| shipping image, arm-2 control | 149.9 ms |
+| **seven `JCLR`s per triangle** | **2.3 ms, 1.5% of the sweep** |
+
+The repeat pair above put the same difference at 1.8 ms (1.2%), so call the
+instrument **~2 ms** and note that its own measurement carries the same
+half-millisecond band everything else here does.  It belongs to the ladder's
+*total*, not to any one delta: each level pays only the guards of the phases
+it executes, so the bias sits in the deltas in proportion to the triangles
+reaching them, and spread evenly over the seven it is 0.3 ms -- the order of
+the run-to-run band 2.4g established for this recipe, which is why no delta
+is corrected for it individually.  The control also gives the headline figure
+guard-free: **128.1 ms** of DSP compute over the mesh (149.9 ms of sweep less
+the 21.8 ms transport), against the instrumented 130.4.
+
+**The one pairing that can lie, and what stops it.**  A host binary that
+sends the ladder's mode word to a `.lod` assembled *without* the ladder is
+not refused: bit 8 is not decoded there, so mask 0 and mask 1 fall into the
+arming leaf and silently arm the occlusion prepass with the value 256, and
+every higher mask has bit 2 set and draws the seven-word counter reply into a
+two-word read.  The result would be a plausible, wrong ladder.  Two things
+stop it.  The probe binary loads **`TREXPHAS.LOD`**, not `trex_dsp.lod`, so
+it cannot pick up a stale runtime image lying beside it -- the wrong pairing
+fails to load the DSP program at all, which is immediately visible as an
+unrendered frame.  And the survivor gate catches a deliberately wrong copy:
+an image without the ladder builds every triangle at every level, so level 0
+reports survivors, which the decoder names.  Renaming the image moved no
+measured code -- `cmp -l` against the same source with the old name differs
+in exactly the 11 filename bytes.
+
+**What this is not.**  It is not a model of BUILD's exposed cost.  The real
+BUILD pipelines chunk N+1 against the host's unpack of chunk N and this loop
+does not, and the ladder pays the extra sweeps on the critical path on purpose
+-- the same bargain 2.3f's freestanding prepass arm made.  What the ladder
+measures is the DSP-side cost of each phase over exactly the triangle
+population BUILD runs that phase on.
+
+**Gates.**
+
+- Frame-100 `fb.res` reproduces `d89958b3...3d16`.  The ladder writes no
+  `projected_vertices`, no `prelight_table` and no normal-light cache entry,
+  so it cannot change what the following BUILD produces, and this is the
+  evidence rather than the argument.
+- The survivor gate is free and is in the sidecar: only the RECORD bit gates
+  the record write and the counter behind it, so every level below the top
+  must report zero survivors and the top level must report the same
+  population the same frame's real BUILD reports.  It does.
+- Zero protocol failures.  A desynchronised port makes a sweep return early,
+  and a bracket around a partial mesh reads as a cheap phase; failed sweeps
+  are not accumulated at all and the decoder gates every figure on the count.
+- Cross-check: the eight sweeps are inside the frame's `t_packets` bracket,
+  so subtracting them from that stage recovers the renderer's own packet
+  stage.  The eight sweeps cost 610.8 ms/frame and this
+  run's `t_packets` is 799.7 ms, so the renderer's own packet stage inside
+  the probe binary is **188.9 ms**, against the 186.5 ms 2.4k measured for
+  the diagnostic build.  Consistent, not identical: these are two different
+  linked binaries and section 2's layout caveat applies to the difference.
+  The run also reproduces the cumulative 9,049,666 pixels and 1,149 final
+  packets exactly.
+
+**Cost, and why it fits.**  21 program words: seven `JCLR`s, the mode-word
+leaf that stores the mask, and two long-form writes of the flag the mask
+displaced.  `PHASEPROBE=1` on top of the shipping configuration ends at
+**`P:$09BB`, 4 words free** -- the only instrument in the program small enough
+to assemble beside `OBJLIGHTS=1 PRELIGHT=1`, which is what makes this a
+measurement of the BUILD body `TREX.TOS` runs rather than of a substitute.
+
+`phase_mask` had to go into the 64-word short-addressable Y page, and that
+page was exactly full.  `JCLR` has no long-absolute form -- its second word
+*is* the jump address, so the operand must be short absolute, I/O short or
+register indirect, and no address register survives
+`make_triangle_area`/`bbox`/`zkey`/`span`.  The slot it took is
+`triangles_loaded`, which is **write-only**: `CMD_LOAD_TRIANGLES` sets it once
+and `CMD_RESET` clears it and nothing ever reads it back, so no code path can
+overwrite the mask between the host's mode word and the sweep it times.  The
+flag moved above `Y:$3F` and its two writes take the long form there, two
+words only the probe image pays.
+
+**Every figure here is an emulator measurement under 2.4a's caveats; none is
+a Falcon timing.**
 
 ### 2.5 Delta clearing: built, measured, rejected
 
@@ -7367,9 +7572,32 @@ The open roadmap, in recommended order (expected effects from the section
     the window's spare capacity, which item 15 would otherwise have.  The
     three-FPS gap is 126.3 ms.  What remains exposed on the DSP -- ~128 ms of
     projection lookups, classify, span setup, `span_div` and record packing --
-    still has no per-phase timer, and the record stream still cannot follow
-    the lighting into the window for 2.4d's reason: there is no room for a
-    frame of records, 885 spare X words included.
+    now has a per-phase timer (item 24), and the record stream still cannot
+    follow the lighting into the window for 2.4d's reason: there is no room
+    for a frame of records, 885 spare X words included.
+24. Per-phase timer on BUILD's exposed body. **Done and measured -- see
+    section 2.4l.**  Items 22 and 23 both closed on the same gap: the exposed
+    DSP term was a frame-rate lever with no attribution inside it.  A
+    seven-bit `phase_mask` in the per-triangle body, tested by seven `JCLR`s
+    that jump to `triangle_advance` when their bit is clear, lets the host
+    sweep the whole mesh at any prefix of the phases; omitting
+    `GET_TRIANGLES` makes every level move the same 5,706 words, so the
+    all-clear level is the transport and consecutive levels subtract into one
+    phase each, and running all eight levels inside one frame makes the
+    subtraction paired rather than a comparison of runs.  Corrected-clock
+    Hatari, 265-frame prefix, of **130.4 ms** of DSP compute over the mesh:
+    **span setup 70.1 ms**, backface classify 22.3, the loop and index unpack
+    13.3, record pack 11.2, bounding box 6.3, `zkey` 5.1, prelight fetch 2.1;
+    a repeat run reproduces every delta within 0.4 ms.  An arm-2 control --
+    the same host binary, one byte patched, one full sweep with no mode word,
+    so it runs against an image built *without* the ladder -- prices the
+    seven guards at **~2 ms/frame, 1.2-1.5%**, putting the guard-free compute
+    at 128.1 ms.  Cost: 21 program words, the only
+    instrument that fits beside the shipping configuration (`P:$09BB`, 4
+    free), frame-100 checkpoint byte-identical in both arms.
+    **`make_triangle_span` is now the largest measured item left inside
+    BUILD** and is where the next DSP-side lever has to look; nothing in this
+    item changes the shipping image, which assembles without it.
 
 ## 11. References
 

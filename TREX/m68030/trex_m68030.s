@@ -594,6 +594,14 @@ OCCL_HEADER_BYTES	= 64
 OCCL_RECORD_BYTES	= 48
 	endc
 
+; Command 10 and its acknowledgement, hoisted out of the prepass block below:
+; the per-phase timing ladder (-DTREX_PHASEPROBE) rides the SAME command with
+; a mode word the arming modes cannot reach, and must not have to define
+; TREX_PREPASS -- which would arm the occlusion prepass and change the very
+; BUILD body the ladder exists to divide.  Two equates, no code.
+DSP_CMD_PREPASS		= 10
+DSP_ACK_PREPASS		= $0070000f
+
 	ifd	TREX_PREPASS
 ; Occlusion prepass measurement build (-DTREX_PREPASS, target trex_prepass.tos,
 ; GEMDOS name TREX_PRE.TOS).  The DSP classifies the complete geometry,
@@ -619,8 +627,7 @@ OCCL_RECORD_BYTES	= 48
 ; DSP_ACK_PREPASS plus the six per-run counters of the LAST run (stamp
 ; calls, stamped cells, query kills, dirty merges, query cells visited,
 ; stamp cells visited) -- seven words, read only by this measurement build.
-DSP_CMD_PREPASS		= 10
-DSP_ACK_PREPASS		= $0070000f
+; The command and ack values themselves are defined above this block.
 PREPASS_MODE_DISARM	= 0
 PREPASS_MODE_ARM	= 1
 PREPASS_MODE_RUN	= 2
@@ -637,6 +644,54 @@ PREPASS_OVERFLOW_MARK	= $00ffffff
 ; sums and two per-run maxima appended by the 'PRE1' revision -- written
 ; next to render_stats.res.
 PREPASS_STATS_LONGS	= 17
+	endc
+
+	ifd	TREX_PHASEPROBE
+; -----------------------------------------------------------------------------
+; Per-phase BUILD timing ladder, host side (-DTREX_PHASEPROBE, target
+; trex_phase.tos).  OPTIMIZATION.md 2.4l.
+;
+; BUILD's exposed per-triangle work has never been divided: 2.4h priced
+; lighting and 2.4k moved it into the FINISH window, leaving the index
+; unpack, both classify passes, the average-Z key, the prelight fetch, span
+; setup with span_div and the eighteen-word record pack as one number.  The
+; DSP now carries a mask (phase_mask) that stops its per-triangle body after
+; any prefix of those phases.  This side sends one mask and then sweeps the
+; WHOLE mesh through the ordinary BUILD chunk protocol, timed, with the
+; matching GET_TRIANGLES deliberately omitted.
+;
+; Omitting the fetch is what makes the ladder subtract.  Every level then
+; puts the identical 5,706 words on the wire -- 85 chunks of 3+64 and one of
+; 3+8 -- and reads the identical 86 two-word acks, so level 0 (every phase bit
+; clear) IS the transport, and consecutive levels differ by exactly one phase
+; of DSP compute.  Fetching the records instead would make the wire traffic a
+; function of the survivor count, which is itself a function of the level,
+; and nothing would subtract.
+;
+; All eight levels run in the SAME frame, into eight accumulators.  That is
+; the whole reason this is one binary and one run: the choreography is not
+; uniform, so a ladder spread over eight runs would subtract per-frame means
+; taken over eight different stretches of it.  Here every level sees exactly
+; the same frames.
+;
+; The sweep is additional work on the critical path, on purpose -- the same
+; bargain 2.3f's freestanding prepass arm made.  It is NOT a model of BUILD's
+; exposed cost: the real BUILD pipelines its chunks against the host unpack
+; and this loop does not.  What it measures is the DSP-side cost of each
+; phase over exactly the triangle population BUILD runs that phase on.
+PHASE_LEVELS		= 8
+; Mode-word bit that selects the mask instead of the arming/counter modes.
+; It must be a bit the DSP's existing modes cannot reach -- modes 0..7 are
+; the whole low octal range -- or a ladder mask would arm the occlusion
+; prepass or draw the seven-word counter reply.
+DSP_PREPASS_MODE_PHASE	= $100
+PHASE_MASK_FULL		= $7f
+; Magic, arm, frames, sweeps, failures, then the eight cumulative timers and
+; the eight per-level survivor counts of the LAST completed frame -- written
+; next to render_stats.res for prep_sta.res's reason: render_stats.res is a
+; positional format with a decoder and a baseline archive behind it, and a
+; measurement-only build has no business widening it.
+PHASE_STATS_LONGS	= 5+PHASE_LEVELS+PHASE_LEVELS
 	endc
 
 O3D_HEADER_BYTES	= 24
@@ -1090,6 +1145,39 @@ trex_write_render_stats
 	Fwrite	d7,#(PREPASS_STATS_LONGS*4),prepass_stats_buffer
 	Fclose	d7
 .trex_prepass_done
+	endc
+
+	ifd	TREX_PHASEPROBE
+	; Ladder timers, in their own file for prep_sta.res's reason.
+	lea	phase_stats_buffer,a0
+	move.l	#$50485331,(a0)+		; 'PHS1'
+	move.l	phase_arm,(a0)+
+	move.l	stat_frames,(a0)+
+	move.l	phase_sweep_count,(a0)+
+	; Protocol failures MUST be visible, exactly as in prep_sta.res: a
+	; desynchronised port makes phase_sweep return early, and a bracket
+	; around a partial mesh reads as a cheap phase.  Sweeps that fail are
+	; not accumulated at all, so a nonzero count here means the run's
+	; per-frame means are taken over fewer sweeps than frames and the
+	; decoder must say so rather than divide.
+	move.l	phase_fail_count,(a0)+
+	lea	stat_t_phase,a1
+	moveq	#PHASE_LEVELS-1,d0
+.trex_phase_timers
+	move.l	(a1)+,(a0)+
+	dbra	d0,.trex_phase_timers
+	lea	phase_surv_last,a1
+	moveq	#PHASE_LEVELS-1,d0
+.trex_phase_survivors
+	move.l	(a1)+,(a0)+
+	dbra	d0,.trex_phase_survivors
+	Fcreate	phase_stats_path,#0
+	tst.l	d0
+	bmi	.trex_phase_done
+	move.w	d0,d7
+	Fwrite	d7,#(PHASE_STATS_LONGS*4),phase_stats_buffer
+	Fclose	d7
+.trex_phase_done
 	endc
 	rts
 
@@ -2515,6 +2603,16 @@ dsp_packets_begin
 	; dsp_send_build_chunk destroys the chunk in flight.
 	ifd	TREX_PREPASS
 	bsr	prepass_frame_call
+	endc
+	; The ladder sweeps go here for exactly the reasons above: the FINISH
+	; ack is in, the DSP is back in its main loop, and chunk_uvs and
+	; triangle_out -- which the sweeps overwrite chunk by chunk, as BUILD
+	; does -- are still dead because the first real chunk has not been
+	; sent.  The sweeps leave dsp_triangles_remaining and
+	; dsp_triangle_input_count consumed; the block below re-initialises
+	; both before that chunk, so this call must stay in front of it.
+	ifd	TREX_PHASEPROBE
+	bsr	phase_frame_call
 	endc
 	; The chunk unpack writes STRAIGHT INTO THE PACKET BUFFER (section 3.11).
 	; It used to expand into dsp_triangle_rx_buffer and let
@@ -6491,6 +6589,160 @@ prepass_frame_call
 
 	endc
 
+	ifd	TREX_PHASEPROBE
+; -----------------------------------------------------------------------------
+; Per-phase BUILD timing ladder, host side.  See the constants block above.
+; -----------------------------------------------------------------------------
+
+; Set the DSP's phase mask.  In: D0 = mask (0..PHASE_MASK_FULL).
+; Out: D0 = 1 when the ack was DSP_ACK_PREPASS, else 0.
+;
+; dsp_block_handshake rather than Dsp_BlkUnpacked for prepass_send_mode's
+; reason: this is a two-word command whose reply the DSP writes between them
+; under TOS 4.02's unchecked block write.  The reply's second word is the
+; occlusion prepass's own last survivor count -- the ladder neither sets nor
+; reads it, and this routine deliberately does not store it anywhere.
+; Clobbers D0/D1/A0/A1/A5.
+phase_send_mask
+	ori.l	#DSP_PREPASS_MODE_PHASE,d0
+	move.l	dsp_animation_tx_ptr,a5
+	move.l	#DSP_CMD_PREPASS,(a5)
+	move.l	d0,4(a5)
+	move.l	a5,a0
+	moveq	#2,d0
+	lea	dsp_rx_buffer,a1
+	moveq	#2,d1
+	bsr	dsp_block_handshake
+	cmpi.l	#DSP_ACK_PREPASS,dsp_rx_buffer
+	bne	.phase_mask_failed
+	moveq	#1,d0
+	rts
+.phase_mask_failed
+	addq.l	#1,phase_fail_count
+	moveq	#0,d0
+	rts
+
+; One whole-mesh BUILD sweep at the mask currently loaded, with no
+; GET_TRIANGLES.  Out: D0 = 1 on success, D1 = the survivor count summed over
+; the sweep's chunks.
+;
+; That sum is the ladder's correctness gate and costs nothing: the DSP only
+; reaches its record write -- and the increment behind it -- with the RECORD
+; bit set, so every level below the top must report 0 and the top level must
+; report exactly the survivor count the same frame's real BUILD reports.
+; A ladder whose top level disagrees with dsp_packet_count_shadow is
+; measuring a different triangle population than the renderer.
+;
+; It leaves dsp_triangles_remaining at 0 and dsp_triangle_input_count at
+; TREX_PRIMITIVES; dsp_packets_begin re-initialises both before the frame's
+; real first chunk, which is why this may only be called from there.
+; Clobbers D0-D6/A0/A1.
+phase_sweep
+	moveq	#0,d3
+	move.l	#TREX_PRIMITIVES,dsp_triangles_remaining
+	clr.l	dsp_triangle_input_count
+.phase_sweep_chunk
+	bsr	dsp_send_build_chunk
+	Dsp_BlkUnpacked	dsp_control_tx,#0,dsp_rx_buffer,#2
+	move.l	dsp_rx_buffer,d0
+	cmpi.l	#DSP_ACK_TRIANGLES,d0
+	bne	.phase_sweep_failed
+	move.l	dsp_rx_buffer+4,d0
+	cmp.l	dsp_triangle_chunk_count,d0
+	bhi	.phase_sweep_failed		; more survivors than inputs
+	add.l	d0,d3
+	move.l	dsp_triangle_input_count,d0
+	add.l	dsp_triangle_chunk_count,d0
+	move.l	d0,dsp_triangle_input_count
+	tst.l	dsp_triangles_remaining
+	bne	.phase_sweep_chunk
+	move.l	d3,d1
+	moveq	#1,d0
+	rts
+.phase_sweep_failed
+	; A desynchronised port cannot be repaired from here and must not be
+	; averaged into a timer: the bracket around a failed sweep contains a
+	; partial mesh, which reads as "this phase is cheap".  Count it, and
+	; let the decoder gate every figure in the file on the counter.
+	addq.l	#1,phase_fail_count
+	move.l	d3,d1
+	moveq	#0,d0
+	rts
+
+; Per-frame entry, called from dsp_packets_begin while the DSP is idle and
+; before the frame's first real BUILD chunk.  Preserves every register.
+phase_frame_call
+	movem.l	d0-d7/a0-a6,-(sp)
+	move.l	phase_arm,d0
+	beq	.phase_call_done
+	cmpi.l	#2,d0
+	beq	.phase_call_control
+
+	; Arm 1: the ladder.  Level N runs mask (1<<N)-1, so it executes the
+	; first N phases of the per-triangle body for exactly the triangles
+	; BUILD would run them on -- both cull branches stay inside the ladder.
+	moveq	#0,d7				; level
+.phase_call_level
+	moveq	#1,d0
+	lsl.l	d7,d0
+	subq.l	#1,d0				; mask = (1 << level) - 1
+	bsr	phase_send_mask
+	tst.l	d0
+	beq	.phase_call_restore
+	; The mark is a memory cell, not a register: dsp_send_build_chunk uses
+	; D4-D6 and phase_sweep clobbers D0-D6, so a register mark comes back
+	; holding a chunk count and every timer reads the absolute 200 Hz
+	; clock instead of an interval.
+	TimeMark	stat_mark_phase
+	bsr	phase_sweep
+	move.l	$4ba.w,d2
+	sub.l	stat_mark_phase,d2		; ticks this sweep took
+	tst.l	d0
+	beq	.phase_call_restore		; never average a partial sweep in
+	move.l	d7,d4
+	lsl.l	#2,d4
+	lea	stat_t_phase,a0
+	adda.l	d4,a0
+	add.l	d2,(a0)				; cumulative, one slot per level
+	lea	phase_surv_last,a0
+	adda.l	d4,a0
+	move.l	d1,(a0)				; last frame's value, not a sum
+	addq.l	#1,phase_sweep_count
+	addq.l	#1,d7
+	cmpi.l	#PHASE_LEVELS,d7
+	blo	.phase_call_level
+.phase_call_restore
+	; Explicit, not implied by the last level's mask: the renderer's own
+	; BUILD runs next and reads the same cell, so a future change to the
+	; level order must not be able to leave the mesh half-built.
+	moveq	#PHASE_MASK_FULL,d0
+	bsr	phase_send_mask
+	bra	.phase_call_done
+
+.phase_call_control
+	; Arm 2: the guard-cost control.  ONE full sweep, no mode word at all,
+	; so it also runs against a .lod assembled WITHOUT the ladder -- which
+	; is the point.  The probe image's level-7 sweep pays seven JCLRs per
+	; triangle that the shipping image does not; the difference between
+	; this arm on the shipping .lod and arm 1's level 7 on the probe .lod
+	; is exactly that instrumentation cost, measured rather than modelled.
+	TimeMark	stat_mark_phase
+	bsr	phase_sweep
+	move.l	$4ba.w,d2
+	sub.l	stat_mark_phase,d2
+	tst.l	d0
+	beq	.phase_call_done
+	lea	stat_t_phase,a0
+	add.l	d2,(PHASE_LEVELS-1)*4(a0)
+	lea	phase_surv_last,a0
+	move.l	d1,(PHASE_LEVELS-1)*4(a0)
+	addq.l	#1,phase_sweep_count
+.phase_call_done
+	movem.l	(sp)+,d0-d7/a0-a6
+	rts
+
+	endc
+
 	ifd	TREX_FPS
 ; -----------------------------------------------------------------------------
 ; Frame-rate overlay.  This is appended after all existing render and prepass
@@ -6652,7 +6904,20 @@ trex_dsp_lod_path
 	ifd TREX_RELEASE
 	dc.b	'TREX.LOD',0
 	else
+	ifd TREX_PHASEPROBE
+	; Its own name on purpose.  This binary sends a CMD_PREPASS mode word
+	; that only a PHASEPROBE .lod decodes as a ladder mask; an image
+	; without the ladder reads $100 as an ARMING mode and silently arms the
+	; occlusion prepass with the value 256, and reads the higher masks as
+	; mode 4 and answers seven words where this host expects two.  A
+	; distinct filename means the wrong pairing fails to load the DSP
+	; program at all -- visible immediately as an unrendered frame and
+	; dsp_state 0 -- instead of producing a plausible, wrong measurement.
+	; The measure_phase targets copy the intended image under this name.
+	dc.b	'TREXPHAS.LOD',0
+	else
 	dc.b	'trex_dsp.lod',0
+	endc
 	endc
 	endc
 
@@ -6790,6 +7055,44 @@ prepass_kills_max
 
 prepass_stats_path
 	dc.b	'prep_sta.res',0
+
+	even
+	endc
+
+	ifd	TREX_PHASEPROBE
+; The ladder arm, in prepass_arm's tradition: a plain longword, so the two
+; arms are ONE binary and switching between them is a byte patch verified
+; with cmp -l, never a rebuild (OPTIMIZATION.md 2.1).
+;   0 = off
+;   1 = the eight-level ladder, every level in every frame
+;   2 = the guard-cost control: one full sweep, NO mode word, so it runs
+;       against a .lod assembled without the ladder as well
+; The marker exists so the arm can be patched without a link map: the whole
+; point of an arm is that both are the same binary (OPTIMIZATION.md 2.1), and
+; a byte patch needs an offset that no text edit can move.  Eight bytes in
+; the DATA section, in front of a data longword: TEXT is complete before this
+; section starts, so the marker cannot move a single instruction.  It does
+; shift the BSS behind it by its own size, which is why 2.4l's figures were
+; re-taken after the marker's last change rather than carried across it.
+;
+; Eight and not four: a four-byte 'PHAS' also matches inside the string
+; 'TREXPHAS.LOD' three hundred bytes away, which is exactly the ambiguity
+; that makes a self-locating patch dangerous.  The tool refuses on more than
+; one hit rather than taking the first, and that refusal is what found this.
+phase_arm_magic
+	dc.l	$50484153			; 'PHAS'
+	dc.l	$41524D30			; 'ARM0'
+phase_arm
+	dc.l	1
+
+; Outside stat_block for prepass_fail_count's reason: it must survive the
+; one-time block clear at the top of trex_dummy_frame, because a protocol
+; failure during startup is exactly what it exists to record.
+phase_fail_count
+	dc.l	0
+
+phase_stats_path
+	dc.b	'phas_sta.res',0
 
 	even
 	endc
@@ -7680,6 +7983,20 @@ prepass_surv_max
 prepass_overflow_count
 	ds.l	1
 	endc
+	ifd	TREX_PHASEPROBE
+; Inside stat_block for stat_t_prepass's reason: per-run counters whose zero
+; start is guaranteed by the block clear.  stat_t_phase is cumulative over
+; the run, one slot per level; phase_surv_last is the last completed frame's
+; sweep total, which is the gate rather than a rate.
+stat_mark_phase
+	ds.l	1
+stat_t_phase
+	ds.l	PHASE_LEVELS
+phase_surv_last
+	ds.l	PHASE_LEVELS
+phase_sweep_count
+	ds.l	1
+	endc
 stat_block_end
 
 STAT_LONGS		= (stat_block_end-stat_block)/4
@@ -8465,6 +8782,11 @@ prepass_stats_buffer
 ; longs and stays that way -- every other command's reply fits it.
 prepass_stats_rx
 	ds.l	PREPASS_STATS_REPLY_LONGS
+	endc
+
+	ifd	TREX_PHASEPROBE
+phase_stats_buffer
+	ds.l	PHASE_STATS_LONGS
 	endc
 
 	ifd	TREX_FPS
