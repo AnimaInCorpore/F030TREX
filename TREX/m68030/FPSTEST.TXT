@@ -1,0 +1,68 @@
+========================================
+  T-REX  -  FPS BENCHMARK TEST BUILD
+  Falcon030, DSP56001 + 68030
+========================================
+
+This is the viewing build: the frame
+rate is drawn in the top-left corner and
+NOTHING is written to disk while it
+runs.  No per-frame files, no files on
+exit, nothing.  It is safe on a write-
+protected medium and the number it shows
+is not being slowed down by anything
+measuring it.
+
+It also does not touch the sound system.
+That is the other test package
+(TREXDMA), not this one.
+
+WHAT TO RUN
+----------------------------------------
+
+Put both files in the same folder and
+run TREX.TOS.
+
+  TREX.TOS   the benchmark
+  TREX.LOD   its DSP program
+
+Falcon030, 4 MB ST RAM, TOS 4.02.  TOS
+4.04 does not work with the current DSP
+load path: the T-Rex stays away and only
+the FPS field updates on black.
+
+Any key quits.
+
+WHAT IT IS
+----------------------------------------
+
+2,724 triangles, lit, projected and
+filled in software every frame.  The
+DSP56001 does the geometry and the span
+setup, the 68030 rasterizes.  It is a
+slide show by design -- the workload is
+identical on every run, which is what
+makes it a yardstick.
+
+NOT the v1.2 release.  This is built
+from the current sources, which are 18
+commits further on, and it is faster:
+the frame-ahead lighting pass and the
+packed normal table (2026-09-02) took
+the frame from 498 ms to 457 ms.
+
+WHAT IS BEING ASKED
+----------------------------------------
+
+Under a corrected Hatari this build
+measures 457.1 ms per frame, 2.19 FPS,
+against v1.2's 511.2 ms and 1.956 FPS.
+But that emulator only approximates a
+Falcon, and nothing has ever been
+measured on real hardware.
+
+The number on your own machine is the
+one nobody has.  Please report what the
+counter settles at, and on what -- stock
+Falcon, accelerator, RAM, TOS version.
+
+========================================

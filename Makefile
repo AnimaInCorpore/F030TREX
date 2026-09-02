@@ -103,7 +103,7 @@ MEASURE_SPLIT_VBLS=7605
 MEASURE_SPLIT_NOPIX_VBLS=6760
 MEASURE_SPLIT_NOROWS_VBLS=5270
 
-.PHONY: dspconf measure_split_run all clean ssi_dma_package trex_m68030 trex_m68030_phase measure_phase measure_phase_control trex_m68030_run trex_m68030_prepass trex_m68030_prepass_run trex_m68030_ssi_shadow trex_m68030_ssi_rows trex_m68030_ssi_hatari trex_m68030_ssi_dma ssi_dma_verify measure_split trex_ssi_loopback ssi_rows_verify ssi_hatari_verify trex_release trex_dsp ssi_stream_model_test ssi_dma_compile_test measure create_dirs
+.PHONY: dspconf measure_split_run all clean ssi_dma_package fps_package trex_m68030 trex_m68030_phase measure_phase measure_phase_control trex_m68030_run trex_m68030_prepass trex_m68030_prepass_run trex_m68030_ssi_shadow trex_m68030_ssi_rows trex_m68030_ssi_hatari trex_m68030_ssi_dma ssi_dma_verify measure_split trex_ssi_loopback ssi_rows_verify ssi_hatari_verify trex_release trex_dsp ssi_stream_model_test ssi_dma_compile_test measure create_dirs
 
 all: create_dirs $(VASM) $(VLINK) ./TREX/m68030/TREX.TOS ./TREX/m68030/TREX.LOD
 
@@ -246,6 +246,23 @@ ssi_dma_package: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_dma.tos
 	@cd $(SSI_DMA_PKG) && zip -q -X ../TREXDMA.ZIP TREXDMA.TOS TREXDMA.LOD README.TXT
 	@echo "package: ./TREX/m68030/TREXDMA.ZIP"
 	@unzip -l ./TREX/m68030/TREXDMA.ZIP | tail -6
+
+# Falcon-runnable FPS benchmark package: the release/viewing configuration,
+# which draws the frame-rate field and performs NO GEMDOS writes at all --
+# neither per frame nor on exit -- so the figure it shows is not being slowed
+# down by the diagnostics that would otherwise measure it.  Verified by
+# running it in an empty directory and checking that none appears.
+FPS_PKG=./TREX/m68030/fps_package
+
+fps_package: create_dirs $(VASM) $(VLINK) trex_release
+	@rm -rf $(FPS_PKG) && mkdir -p $(FPS_PKG)
+	@cp ./TREX/m68030/TREX.TOS $(FPS_PKG)/TREX.TOS
+	@cp ./TREX/m68030/TREX.LOD $(FPS_PKG)/TREX.LOD
+	@cp ./TREX/m68030/FPSTEST.TXT $(FPS_PKG)/README.TXT
+	@cmp -s $(FPS_PKG)/TREX.LOD ./TREX/dsp/trex_dsp.lod || { echo "TREX.LOD is not the tracked default image"; exit 1; }
+	@cd $(FPS_PKG) && zip -q -X ../TREXFPS.ZIP TREX.TOS TREX.LOD README.TXT
+	@echo "package: ./TREX/m68030/TREXFPS.ZIP"
+	@unzip -l ./TREX/m68030/TREXFPS.ZIP | tail -6
 
 # Decode and independently re-derive the transport probe's capture.
 ssi_dma_verify:
