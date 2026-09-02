@@ -221,6 +221,13 @@ trex_m68030_ssi_dma: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_dma.tos
 #
 # The DSP configuration is the documented bring-up set: the probe, and
 # everything else off to fit it under P:$09BF.
+#
+# The packaged binary also has stats_flush_enabled patched to 0.  Its
+# development default rewrites render_stats.res after every frame -- a GEMDOS
+# create/write/close per frame, free under Hatari's host-side emulation and a
+# real disk access on a Falcon.  It is a data longword, so the patch is
+# layout-identical to the build that was validated in emulation, and
+# trex_shutdown still writes the file once on a clean keypress exit.
 SSI_DMA_LOD=./TREX/dsp/build/trex_dsp-1000000-$(DSPSRC_ID).lod
 SSI_DMA_PKG=./TREX/m68030/ssi_dma_package
 
@@ -232,7 +239,10 @@ ssi_dma_package: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_dma.tos
 	@cp ./TREX/m68030/trex_ssi_dma.tos $(SSI_DMA_PKG)/TREXDMA.TOS
 	@cp $(SSI_DMA_LOD) $(SSI_DMA_PKG)/TREXDMA.LOD
 	@cp ./TREX/m68030/SSIDMA.TXT $(SSI_DMA_PKG)/README.TXT
-	@python3 ./tools/check_ssi_dma_package.py $(SSI_DMA_PKG)
+	@python3 ./tools/patch_data_flag.py $(SSI_DMA_PKG)/TREXDMA.TOS \
+	  ./TREX/m68030/build/trex_ssi_dma.lst stats_flush_enabled 0 1
+	@python3 ./tools/check_ssi_dma_package.py $(SSI_DMA_PKG) \
+	  ./TREX/m68030/build/trex_ssi_dma.lst
 	@cd $(SSI_DMA_PKG) && zip -q -X ../TREXDMA.ZIP TREXDMA.TOS TREXDMA.LOD README.TXT
 	@echo "package: ./TREX/m68030/TREXDMA.ZIP"
 	@unzip -l ./TREX/m68030/TREXDMA.ZIP | tail -6

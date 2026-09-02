@@ -98,7 +98,11 @@ decodes the command as a DSP reset, so the binary loads `TREXDMA.LOD` and
 packaged files were run from their own directory under the corrected Hatari
 and reproduce 7.4b's byte-exact 16,304-word transfer; a deliberately
 mis-paired build reports `0 bytes moved` within its 400-tick bound and does
-not hang.
+not hang.  The packaged binary also has `stats_flush_enabled` patched to 0 --
+the development default rewrites `render_stats.res` after every frame, which
+is free under Hatari and a real disk access on a Falcon; it is a data
+longword, so the patch is layout-identical to the validated build, and the
+file is still written once on a clean keypress exit.
 
 `make trex_m68030_ssi_dma` builds the one target that really does claim the
 sound channel and start the Falcon record engine. It routes DSP transmit to

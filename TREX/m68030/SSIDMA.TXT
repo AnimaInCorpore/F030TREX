@@ -54,6 +54,14 @@ folder on a hard drive (it writes files
 next to itself, so not a write-
 protected floppy) and run TREXDMA.TOS.
 
+The test runs first and writes its two
+result files straight away.  The T-Rex
+then draws until you press a key, and
+that keypress is what writes the timing
+file -- so quit with a key, not with a
+reset.  It does not touch the disk
+between frames.
+
   TREXDMA.TOS   the test
   TREXDMA.LOD   its DSP program
   README.TXT    this file
@@ -76,7 +84,8 @@ The run writes these next to itself:
   SSI_DMA.RES   verdict and every raw
                 register value it read
   SSI_DCAP.RES  the captured bytes
-  RENDER_S.RES  frame timings
+  RENDER_S.RES  frame timings, on a
+                keypress exit
 
 All three, please, whatever happened --
 a failed route is a result and the file

@@ -9,9 +9,15 @@ ACK_RESET where it waits for ACK_SSI_STREAM, and report a transport failure
 against a machine that is fine.  This refuses to build a package that could
 produce that.
 
-Usage: check_ssi_dma_package.py <package directory>
+Usage: check_ssi_dma_package.py <package directory> [build listing]
+
+Given the listing, it also refuses a package whose per-frame stats flush is
+still on: that is a GEMDOS create/write/close every frame, which is free
+under Hatari and a real disk access on a Falcon.
 """
 import os
+import re
+import struct
 import sys
 
 # The SSI bring-up configuration's program extent, from the end-of-file
@@ -41,10 +47,22 @@ def lod_last_p(path):
     return start + count - 1
 
 
+def stats_flush_flag(tos, lst):
+    """The packaged binary's stats_flush_enabled, via the build's listing."""
+    m = re.search(r'^stats_flush_enabled\s+01:([0-9A-Fa-f]{8})\s*$',
+                  open(lst, errors='replace').read(), re.M)
+    if not m:
+        sys.exit("%s: no stats_flush_enabled in the data section" % lst)
+    blob = open(tos, 'rb').read()
+    text_size = struct.unpack_from('>I', blob, 2)[0]
+    return struct.unpack_from('>I', blob, 28 + text_size + int(m.group(1), 16))[0]
+
+
 def main(argv):
-    if len(argv) != 2:
+    if len(argv) not in (2, 3):
         sys.exit(__doc__)
     pkg = argv[1]
+    lst = argv[2] if len(argv) == 3 else None
 
     present = sorted(os.listdir(pkg))
     if present != sorted(EXPECTED):
@@ -78,12 +96,21 @@ def main(argv):
             sys.exit("%s is byte-identical to the tracked default image, "
                      "which has no CMD_SSI_STREAM" % lod)
 
+    if lst:
+        flag = stats_flush_flag(tos, lst)
+        if flag:
+            sys.exit("%s has stats_flush_enabled=%d -- that is a GEMDOS "
+                     "create/write/close per frame, free under Hatari and a "
+                     "real disk access on the Falcon this is going to"
+                     % (tos, flag))
+
     readme = open(os.path.join(pkg, "README.TXT"), 'rb').read()
     if b'\r\n' not in readme:
         sys.exit("README.TXT has no CRLF line endings")
 
     print("package OK: TREXDMA.TOS names TREXDMA.LOD, which is the SSI "
-          "bring-up image (P:$%04X)" % last)
+          "bring-up image (P:$%04X)%s"
+          % (last, "; no per-frame disk writes" if lst else ""))
 
 
 if __name__ == '__main__':

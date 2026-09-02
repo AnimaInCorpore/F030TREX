@@ -6283,6 +6283,21 @@ must name `TREXDMA.LOD`, and the `.LOD` must end at `P:$09B8` -- the SSI
 bring-up configuration's extent, which the default's `P:$09A6` cannot be
 mistaken for -- and must not be byte-identical to the tracked image.
 
+**The package also turns the per-frame stats flush off**, which the
+development default leaves on.  `stats_flush_enabled` rewrites
+`render_stats.res` after every frame -- a GEMDOS create/write/close per
+frame, which this file's own comment already identifies as "free under
+Hatari's host-side emulation but a real disk access on hardware".  Left on,
+a Falcon run would hit the disk once per frame, distorting the frame rate it
+reports and pointlessly hammering the drive; the SSI result itself would be
+unaffected, since the probe runs once in `trex_init` before the frame loop
+and writes its two sidecars there.  It is a data longword precisely so this
+costs no layout change, so `tools/patch_data_flag.py` clears it in the
+packaged binary -- deriving the offset from the same build's listing rather
+than a hard-coded number -- and the package gate refuses a package where it
+is still set.  `trex_shutdown` still writes the file once on a clean keypress
+exit, which is what the note asks the tester for.
+
 Both halves were then exercised.  The packaged files, unzipped into their own
 directory and run there, reproduce this section's table exactly: claim stage
 13, `$FF8930`/`$FF8932` = `$00C0`/`$0002`, 32,608 bytes in 130 ms, footer CRC
