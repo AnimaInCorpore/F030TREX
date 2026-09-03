@@ -46,3 +46,12 @@ hatari_runs/
 # produces.  The build output that matters is committed at
 # TREX/dsp/trex_dsp.lod; this is the working copy it is taken from.
 TREX/dsp/build/
+
+# Scratch captures and debug dumps that the emulator and capture helpers
+# drop beside the sources. Anchored at the root: committed images live in
+# subdirectories, which the leading / does not reach.
+/*.png
+/*.ppm
+/hatari.out.txt
+/hatari.err.txt
+/*-dbg.txt
