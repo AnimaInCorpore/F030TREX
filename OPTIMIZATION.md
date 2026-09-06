@@ -80,6 +80,15 @@ in [`TREX/m68030/trex_m68030.s`](TREX/m68030/trex_m68030.s).
 
 ## 2. Current measured baseline
 
+**Latest active full-mesh baseline (2026-09-06): section 2.4m.** The
+diagnostic measures **433.7 ms / 2.31 FPS**, and the release **431.1 ms /
+2.32 FPS**, on corrected-clock Hatari over the same 265-frame prefix. The
+prelight pass now retains the visibility verdict computed while the CPU
+rasterizes the previous frame. Earlier tables below are measurement history,
+including their original mesh, clock and layout assumptions. These new
+figures are emulator measurements; section 2.7's physical-Falcon timing
+remains the hardware baseline until the revised build is measured there.
+
 The current diagnostic baseline is the prelight build of section 2.4k --
 frame-ahead lighting in the FINISH window over two-word packed normals, on
 top of 2.4i's normal-light cache, 8.2b's direct unpack and 2.4j's object-space
@@ -3261,6 +3270,104 @@ words only the probe image pays.
 
 **Every figure here is an emulator measurement under 2.4a's caveats; none is
 a Falcon timing.**
+
+### 2.4m Reuse frame-ahead visibility in BUILD — implemented, 6% more FPS
+
+The prelight pass already classifies every triangle inside the CPU's previous-
+frame rasterization window. BUILD nevertheless unpacked every triangle's
+indices, fetched its vertices and repeated both culls while the host waited.
+The area/near/box verdict depends only on the finished projection, so it can
+travel with the lighting instead of being computed again on the critical path.
+
+**Ownership and representation.** `prelight_table` stays at
+`X:$2BC6-$3669`, one word per global triangle index. Before classifying each
+entry, `prelight_run` sets bit 23. A survivor's existing lighting store writes
+bits 0..17 and clears bit 23; rejected entries keep it set. Refreshing every
+entry prevents last frame's visibility leaking into this frame. Zero lighting
+is valid and is distinct from rejection. Bits 18..22 remain unused. Both
+FINISH and SET_FRAME finish producing the table before `ACK_FRAME`, and BUILD
+only consumes it after that acknowledgement. The projected vertices stay
+unchanged throughout BUILD; no new buffer, wire field or host transaction is
+needed, and the existing chunk compute/unpack overlap is preserved.
+
+BUILD advances the armed occlusion kill cursor **before** consulting the
+cached verdict, so a cached reject cannot desynchronize the 24-bit bitmap.
+Killed/rejected triangles skip the three resident index words with
+`(r2)+n2`; each BUILD sets `N2=3`, and none of its callees changes N2. R3 and
+the chunk-local index advance on every exit as before. Survivors still call
+`make_triangle_area` to populate the coordinates/deltas used by span setup,
+but its cull branches and the box call are omitted: their verdict is final,
+and span generation reads no box scalars. `PRELIGHT=0` retains the previous
+path. All 18 output words and the host packet/raster code are unchanged.
+
+**Measured A/B**, 265 completed frames (0..264), identical host executables
+within each pair, baseline DSP from `908096d`, corrected Hatari
+`2.6.1-devel (Sep 2 2026)`, source HEAD `6ebe6b791515774a1f3648a1990c0ab635b4b990`
+with local control/CPU/MMU changes. The exact emulator, ROM, host and DSP
+SHA256s plus raw counters are recorded in
+[`docs/performance/parallelism-2026-09-06.json`](docs/performance/parallelism-2026-09-06.json).
+The fresh control reproduces 2.4k's diagnostic and release baselines.
+
+| Diagnostic stage | Before | Cached cull | Delta |
+|---|---:|---:|---:|
+| Animation send | 13.3 ms | 13.1 ms | -0.2 ms |
+| DSP readback + packet build | 186.8 ms | 160.7 ms | **-26.1 ms** |
+| Clear | 14.6 ms | 14.6 ms | 0.0 ms |
+| OT insertion | 2.3 ms | 2.5 ms | +0.2 ms |
+| Rasterizer | 242.3 ms | 242.5 ms | +0.1 ms |
+| **Whole frame** | **459.6 ms / 2.18 FPS** | **433.7 ms / 2.31 FPS** | **-25.9 ms** |
+
+The release, timed by patching only `stats_flush_enabled` in the linked
+`TREX.TOS` as in 2.4e, moves **457.1 -> 431.1 ms / 2.32 FPS**, a **6.0% FPS
+increase** and 5.7% less frame time. Its packet stage moves 186.9 -> 160.9 ms;
+the rasterizer remains 239.3 -> 239.4 ms. Both pairs write 9,049,666 pixels
+and finish with 1,149 packets. The release overlay is excluded from image
+parity checks because it displays the changed timing.
+
+**Gates.** The ordinary and armed-prepass hash binaries each preserve all
+483 frame hashes against the old DSP (274 authored frames plus 209 hold
+frames). Both armed runs report arm 1 and zero prepass protocol failures.
+Every diagnostic/hash frame-100 dump preserves SHA256
+`d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16`.
+The optional span-validator attempt produces no completed frame/stat sidecar
+with either DSP, including a 60-second bounded baseline run; it is an open
+validator/harness issue, not a passed field-level gate. No physical Falcon
+speedup is claimed.
+
+The default, camera-light reference, PHASEPROBE, WINPROBE/OBJLIGHTS=0,
+PREPASSDIAG/OBJLIGHTS=0, SSI probe and PRELIGHT=0 configurations assemble
+without errors. Program extents remain `$09A6`, `$0993`, `$09BB`, `$09BF`,
+`$09B1`, `$09B8` and `$0964` respectively; X/Y allocations are unchanged.
+The phase ladder still fits. Its WALK phase now includes cached rejection,
+AREA runs on survivors, and its BBOX boundary measures only the guard with
+PRELIGHT enabled; **2.4l's old phase timings must not be reused for this
+body**. The decoder labels now describe that change. Span setup remains the
+next substantial exposed DSP operation; this change does not offload the
+record stream or add CPU polling inside the rasterizer.
+
+**Reproduction.** `tools/measure_frames.py` mounts a new isolated directory,
+records input hashes, snapshots `render_exact.res` at precisely the requested
+completed frame count, then terminates its own Hatari. It fails if polling
+misses the prefix or the run exits/times out; it never substitutes another
+frame mix. It uses 2.4g's machine/clock/MMU/ROM flags and SDL's dummy display.
+Use a diagnostic binary with stats enabled and a new output directory per run:
+
+```sh
+make DOSBOX=/Applications/dosbox.app/Contents/MacOS/DOSBox trex_m68030 trex_release
+mkdir -p hatari_runs/cull-reference
+git show 908096d:TREX/dsp/trex_dsp.lod > hatari_runs/cull-reference/before.lod
+python3 tools/measure_frames.py TREX/m68030/trex_m68030.tos \
+  hatari_runs/cull-reference/before.lod hatari_runs/cull-before --frames 265
+python3 tools/measure_frames.py TREX/m68030/trex_m68030.tos \
+  TREX/dsp/trex_dsp.lod hatari_runs/cull-after --frames 265
+```
+
+The helper accepts `--hatari` and `--tos` for other local paths. For output
+gates, build `TREX/m68030/trex_framehash.tos` and use `--frames 483`; compare
+the `frmhash.res` files, and never quote timing from a hash build. The armed
+pair adds `-DTREX_PREPASS` to that host assembly. The conventional `make
+measure` VBL budget is also re-converged from 6700 to 6370. Use the helper
+when an exact prefix is required across different local launch conditions.
 
 ### 2.5 Delta clearing: built, measured, rejected
 
@@ -7310,6 +7417,11 @@ The open roadmap, in recommended order (expected effects from the section
    four write-throughs per row, the memory-indirect span-entry jump, and
    instruction fetch across a hot path with 22 bytes of headroom.
 12. Cross-frame pipelining. **Stage 1 done, stage 2 measured and rejected.**
+   **Current follow-up: 2.4m reuses visibility from the prelight pass.**
+   Cached rejects bypass BUILD's index/vertex fetch and survivors reuse the
+   box verdict; the same CPU/DSP schedule now saves another 25.9 ms/frame,
+   about 6% more FPS, with 483-frame parity in both occlusion modes. The
+   earlier stage-2 polling mechanism below remains rejected.
    Stage 1 sends frame N+1's animation after frame N is fully unpacked and
    defers the FINISH ack to the next slot's `dsp_packets_begin`, so the
    1,376-vertex morph/transform/projection runs inside the rasterization

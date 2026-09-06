@@ -86,10 +86,10 @@ HATARI=../F030Arcade/third_party/hatari/build/src/hatari
 TOS402=../F030Arcade/third_party/tos/tos402.img
 MEASURE_DIR=./TREX/m68030/measure
 # 265-frame prefix on the corrected build; re-converge after any program change
-# (OPTIMIZATION.md 2.4b) rather than trusting this constant.  Re-converged for
-# the 2.4k prelight build (459.6 ms/frame); it was 7215 for the 8.2b
-# direct-unpack + 2.4j object-lights build (497.2 ms/frame).
-MEASURE_VBLS=6700
+# (OPTIMIZATION.md 2.4b) rather than trusting this constant.  Section 2.4m's
+# cached cull brings the diagnostic to 433.7 ms/frame (previously 459.6).
+# tools/measure_frames.py captures an exact prefix without a VBL search.
+MEASURE_VBLS=6370
 # Converged VBL budgets for the three-build rasterizer split (measure_split).
 # Each has to land on the SAME frame count as MEASURE_FRAMES or the averages
 # are taken over different stretches of the choreography and do not subtract;

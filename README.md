@@ -156,8 +156,14 @@ builds under the same emulator; the absolute frame times are not Falcon
 figures. Figures predating OPTIMIZATION.md 2.4g were taken
 with the DSP at twice its real clock and are superseded by the re-measurement
 there. Over the 265-frame prefix the current full-mesh **diagnostic** build
-measures **459.6 ms / 2.18 FPS**, and `TREX.TOS` measures **457.1 ms /
-2.19 FPS** with its release-only overlay and default-disarmed prepass.
+measures **433.7 ms / 2.31 FPS**, and `TREX.TOS` measures **431.1 ms /
+2.32 FPS** with its release-only overlay and default-disarmed prepass
+(2026-09-06, OPTIMIZATION.md 2.4m). The prelight pass now retains its exact
+visibility verdict while the CPU rasterizes the previous frame. BUILD skips
+rejected triangles before index/vertex fetch and reuses the screen-box verdict,
+saving 25.9 ms per frame (about 6% more FPS) without changing the host binary,
+wire format, memory allocation or DSP program size. Both disarmed and armed
+occlusion runs preserve all 483 choreography-plus-hold frame hashes.
 The frame-local normal-light cache removes 7.6 ms from the diagnostic
 DSP/packet path (section 2.4i), section 8.2b's direct-to-packet record unpack
 removes another 24.9 ms of the packet stage at byte-identical output, 2.4j's
@@ -165,8 +171,8 @@ object-space lighting a further 2.1 ms at whole-choreography pixel identity,
 and 2.4k's frame-ahead lighting -- every survivor lit inside the FINISH window
 over a two-word packed normal table, BUILD reading one word per survivor --
 38.6 ms more at byte-identical output over all 483 hashed frames; each section
-carries its fixed-prefix gates.  Section 2.4l then put a per-phase timer on
-what is left of the DSP's exposed work: of 130.4 ms of compute over the whole
+carries its fixed-prefix gates. Section 2.4l put a per-phase timer on the
+exposed DSP work **before 2.4m's cached cull**: of 130.4 ms over the whole
 mesh, **span setup is 70.1 ms**, the backface classify 22.3, the chunk loop
 and index unpack 13.3, the record pack 11.2, the bounding box 6.3, the sort
 key 5.1 and the prelight fetch 2.1 -- 128.1 ms once the ladder's own guards

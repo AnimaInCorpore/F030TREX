@@ -272,7 +272,7 @@ CMD_RESET		= $7f
 ; normal-light cache, so a sweep cannot change what the following BUILD
 ; produces -- the frame-100 checkpoint is the gate on that claim.
 PHASE_BIT_WALK		= 0	; index unpack + kill test + the loop itself
-PHASE_BIT_AREA		= 1	; make_triangle_area and the backface cull
+PHASE_BIT_AREA		= 1	; area/span inputs; cull only without PRELIGHT
 PHASE_BIT_BBOX		= 2	; make_triangle_bbox and the screen cull
 PHASE_BIT_ZKEY		= 3	; make_triangle_zkey
 PHASE_BIT_SHADE		= 4	; prelight fetch (make_triangle_shade at PRELIGHT=0)
@@ -1071,6 +1071,9 @@ build_no_uvs
 	move	#prelight_table,x0
 	add	x0,a
 	move	a1,r3
+	; BUILD's callees leave N2 alone.  A rejected entry can skip the
+	; three resident index words with one AGU update instead of unpacking.
+	move	#3,n2
 	ENDIF
 
 	move	y:triangle_count,x0
@@ -1085,10 +1088,12 @@ triangle_count_loop
 	; nothing else -- the transport term every other level also carries.
 	jclr	#PHASE_BIT_WALK,y:<phase_mask,triangle_advance
 	ENDIF
+	IF	!PRELIGHT
 	; Unpack the three resident words into three vertex and three corner-
 	; normal indices through the routine the prelight pass and the prepass
 	; classify share, so no two passes can disagree about a field.
 	jsr	<prepass_unpack_indices
+	ENDIF
 
 	; The armed prepass has already classified and bucket-ordered this frame.
 	; Its kill bitmap is conservative and is indexed by the GLOBAL triangle
@@ -1123,13 +1128,26 @@ build_prepass_kill_advance_store
 	move	x1,x:prepass_status+1
 	move	y:span_flip,a
 	tst	a
+	IF	PRELIGHT
+	jne	<triangle_skip_indices
+	ELSE
 	jne	<triangle_culled
+	ENDIF
 build_triangle_not_killed
+	IF	PRELIGHT
+	; FINISH already ran the exact area/near/box tests while the CPU drew
+	; the previous frame.  Bit 23 marks a rejected triangle; zero lighting
+	; remains a valid survivor.  Test AFTER advancing the armed kill cursor
+	; and BEFORE unpacking indices or fetching projected vertices.
+	jset	#23,x:(r3),triangle_skip_indices
+	jsr	<prepass_unpack_indices
+	ENDIF
 
 	IF	PHASEPROBE
 	jclr	#PHASE_BIT_AREA,y:<phase_mask,triangle_advance
 	ENDIF
 	jsr	<make_triangle_area
+	IF	!PRELIGHT
 	tst	a
 	; Backface culling.  The sign of the screen-space area is the winding, so
 	; one comparison drops both the degenerate triangles (area 0) and the ones
@@ -1138,18 +1156,24 @@ build_triangle_not_killed
 	; choreography frames.  That handedness flip makes NEGATIVE screen area
 	; front-facing.  Zero and positive area are therefore rejected here.
 	jge	<triangle_culled
+	ENDIF
 
-	; Clipped bounding box, only for the area survivors: the two culls above
-	; need no box, and at 27% survival the min/max/clamp work runs a quarter
-	; as often here as it would before the area test.  A box that clips
-	; empty is fully off-screen and rejected -- the same set the separate
-	; fully-outside pre-test used to catch before it was subsumed here.
+	; Preserve the ladder boundary even when PRELIGHT supplies the box
+	; verdict.  Its BBOX delta then measures only the guard.  Without
+	; PRELIGHT, compute the clipped box for area survivors and reject an
+	; empty box, exactly as prelight_run does ahead of BUILD.
 	IF	PHASEPROBE
 	jclr	#PHASE_BIT_BBOX,y:<phase_mask,triangle_advance
 	ENDIF
+	IF	!PRELIGHT
 	jsr	<make_triangle_bbox
 	tst	a
 	jeq	<triangle_culled
+	ENDIF
+	; With PRELIGHT the box cull is final before FINISH replies.  BUILD
+	; still computes area to populate tri_x/tri_y and the span deltas; its
+	; sign/near verdict is already known.  No later BUILD operation reads
+	; the clamped box itself.
 
 	IF	PHASEPROBE
 	jclr	#PHASE_BIT_ZKEY,y:<phase_mask,triangle_advance
@@ -1270,6 +1294,12 @@ span_record_gradients
 	move	a1,y:triangle_out_count
 	jmp	<triangle_advance
 
+	IF	PRELIGHT
+triangle_skip_indices
+	; The cached reject / prepass kill bypassed the shared three-word
+	; unpack.  Keep R2, R3 and the chunk-local source index in lockstep.
+	move	(r2)+n2
+	ENDIF
 triangle_culled
 	; Survivors only: a culled triangle writes and later sends nothing.
 	; The chunk-local index inside the survivor key is what lets the host
@@ -1489,12 +1519,14 @@ cache_light_direction_loop
 ; time.  Nothing in it depends on BUILD: the inputs are the projected
 ; vertices, the frame's light vectors (copied and, with OBJLIGHTS, rotated by
 ; cache_light_directions_x) and the static normals.  So FINISH and SET_FRAME
-; walk the resident index list once more, keep the area and box survivors --
-; the SAME routines BUILD calls, in the same order, so the two passes cannot
-; disagree -- and store each survivor's three corner levels and shade word
-; in prelight_table at its global index.  BUILD then reads one word per
-; survivor.  Same arithmetic on the same inputs, only earlier: byte-identical
-; output by construction.
+; walk the resident index list once more, keep the area and box survivors
+; with BUILD's original classification routines, and store each survivor's
+; three corner levels and shade word in prelight_table at its global index.
+; Rejected entries carry bit 23, refreshed every frame (2.4m).  BUILD reads
+; that verdict before unpacking indices: it no longer repeats classification
+; on rejected triangles or computes a survivor's box.  It still calls area
+; for survivors to populate the coordinates/deltas span setup consumes.
+; Same arithmetic on the same inputs, only earlier.
 ;
 ; make_triangle_zkey bumps y:triangles_processed, which CMD_GET_STATUS
 ; reports; it is saved and restored around the pass as prepass_run does,
@@ -1513,6 +1545,10 @@ prelight_run
 	jeq	<prelight_done
 	move	a1,x0
 	do	x0,prelight_end
+	; Invalidate EVERY entry before classification: otherwise a triangle
+	; that was visible last frame could reuse stale lighting/visibility.
+	; A surviving shade word uses only bits 0..17 and clears this marker.
+	bset	#23,x:(r1)
 	jsr	<prepass_unpack_indices
 	jsr	<make_triangle_area
 	tst	a
@@ -3945,8 +3981,10 @@ corner_normals_x
 ; Prelight table: one word per triangle, indexed by GLOBAL triangle number,
 ; written by prelight_run inside the FINISH window and read by BUILD in place
 ; of make_triangle_shade -- shade<<12 | c2<<8 | c1<<4 | c0, the three 0..15
-; corner levels in slot order and the six-bit tint/level word.  Entries of
-; culled triangles are neither written nor read.  It sits in the 3,610 X
+; corner levels in slot order and the six-bit tint/level word.  Bit 23 is
+; set before classifying EVERY triangle and cleared by a survivor's store;
+; BUILD skips marked entries before index/vertex fetch and reuses the box
+; verdict.  Bits 18..22 stay unused.  It sits in the 3,610 X
 ; words the two-word normal packing freed; the padding after it pins
 ; chunk_uvs at CHUNK_UVS_BASE so the BUILD chunk buffers, the phase-local
 ; caches above them and the prepass overlay all keep their addresses.

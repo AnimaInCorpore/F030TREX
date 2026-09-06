@@ -12,6 +12,18 @@ Falcon030 port. The active path handles, per frame:
    the Z/OT key and the full DDA span-setup record for every visible
    triangle.
 
+The FINISH/SET_FRAME prelight pass also retains its area/near/screen-box
+verdict in bit 23 of each global-indexed `prelight_table` entry. Every entry
+is marked rejected before classification; a survivor's packed lighting store
+clears the marker, including a valid all-zero lighting result. BUILD consumes
+the verdict after advancing the optional occlusion kill cursor, skips rejected
+indices with `N2=3`, and recomputes area only for survivors to populate the span
+coordinates/deltas. It no longer repeats the box test. N2 is set at each BUILD
+and survives its callees. FINISH completes the table before acknowledging the
+frame; no host protocol, buffer lifetime or allocation changes. `PRELIGHT=0`
+retains the original classification path. See OPTIMIZATION.md 2.4m for the
+measured 25.9 ms/frame gain and output gates.
+
 The M68030 reads the 64-byte choreography records, expands the stored XYZ16
 deltas into native host-port words, builds the host packets, links the
 Ordering Table and rasterizes the prepared spans. It computes none of the
@@ -68,7 +80,9 @@ the program.
 | `X:$0040-$0043` | 4 | command and translation |
 | `X:$0044-$1063` | 4,128 | static base vertices |
 | `X:$1064-$25E3` | 5,504 | object/camera pose, then projected vertices in place |
-| `X:$25E4-$39DE` | 5,115 | X half of the corner-normal table (`corner_normals_x`) |
+| `X:$25E4-$2BC5` | 1,506 | X half of the packed corner-normal table (`corner_normals_x`) |
+| `X:$2BC6-$3669` | 2,724 | frame-ahead lighting and visibility (`prelight_table`) |
+| `X:$366A-$39DE` | 885 | padding that pins the chunk/overlay addresses |
 | `X:$39DF-$3A1E` | 64 | one BUILD chunk's UV pairs (`chunk_uvs`) |
 | `X:$3A1F-$3C5E` | 576 | 32 packed span records at 18 words each |
 | `X:$3C5F-$3C70` | 18 | phase-local paired direct-light vectors after the prepass |
@@ -77,7 +91,7 @@ the program.
 | `X:$3D71-$3DF0` | 128 | cached green direct-light sums |
 | `Y:$0096-$00D5` | 64 | on-chip 64-class prepass counters |
 | `Y:$09C0-$29AB` | 8,172 | packed resident triangle indices |
-| `Y:$29AC-$3FFE` | 5,715 | Y half of the corner-normal table (`corner_normals_y`) |
+| `Y:$29AC-$3FFD` | 5,714 | Y half of the packed corner-normal table (`corner_normals_y`) |
 
 The resident UV-pair table this used to describe no longer exists: the
 corner-normal table (needed for Gouraud shading) displaced it, and each
@@ -137,13 +151,10 @@ disarmed captures are byte-identical at frame 100 and at hold frame 291,
 with zero prepass protocol failures or capacity overruns across the hold.
 
 The frontend reserves `X:$0000-$3DFF` and `Y:$0000-$3EF7`. The full-mesh
-program occupies P from `$0040` and, in the default build, ends at `$09AC`,
-leaving the words at `$09AD-$09BF` free before the Y indices at `$09C0` — 19
-words, after `command_get_vertices` was restored for the span validator at a
-cost of seventeen (`OPTIMIZATION.md` 3.12), the 2.3j diagnostic counters,
-their mode-4 readout and the flow-compare sign fix took 58 more, the 2.4f
-window-capacity probe took 44 and 2.4i's normal-light cache took its own
-share.
+program occupies P from `$0040` and ends at `$09A6` in the default build,
+leaving 25 words before the Y indices at `$09C0`. Section 2.4m's cached cull
+preserves that extent: its marker/test and index skip replace the repeated
+area branches and box call. The optional variant extents below are unchanged.
 
 Seven switches in the generated `dspconf.inc` select what is assembled,
 because it no longer all fits — `SSIPROBE` (the `CMD_SSI_STREAM` transport

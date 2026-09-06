@@ -11,6 +11,10 @@ phase on.
 All eight levels run in the SAME frame, so the deltas are paired
 subtractions over one frame set, not a comparison of runs.
 
+Labels describe the current PRELIGHT=1 body (2.4m): cached rejection is in
+WALK, AREA populates survivor span inputs, and BBOX retains only its ladder
+boundary. Historical 2.4l captures predate that reuse of the visibility verdict.
+
 Timers are 200 Hz ticks (5 ms).  Usage:
 
   decode_phase_stats.py phas_sta.res [more.res ...]
@@ -32,9 +36,9 @@ LEVELS = 8
 # is the chunk protocol and nothing else.
 PHASES = [
     "transport only, no phase executed",
-    "+ loop, kill test and index unpack",
-    "+ make_triangle_area, backface cull",
-    "+ make_triangle_bbox, screen cull",
+    "+ loop, cached cull/kill, index unpack",
+    "+ area/span inputs (survivors)",
+    "+ box boundary (cached with PRELIGHT)",
     "+ make_triangle_zkey",
     "+ prelight fetch (shade)",
     "+ make_triangle_span, span_div",
