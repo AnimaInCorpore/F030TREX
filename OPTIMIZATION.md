@@ -1769,6 +1769,72 @@ this document was taken with it, and omitting it inflates the full-mesh
 baseline from 451.4 to 593.6 ms in a way that looks like a broken build rather
 than a different core. Any run compared against a figure here must pass it.
 
+### 2.4a.1 Videl bus contention: known hardware behavior and the Hatari gap
+
+The missing video charge is a real hardware effect, not just an emulator
+implementation detail. Atari's Falcon specification describes the main
+dual-purpose RAM as fast-page DRAM shared with the video system: while video
+refresh is in progress, the system cannot use that RAM, and the performance
+impact varies with the selected video mode. The same specification describes a
+separate 64-bit video-memory data bus and an MCU-controlled `WEN` signal that
+holds other masters off that bus while video data is being moved. See the
+[Falcon specification draft](https://mikrosk.github.io/sparrow/falcon_specification_19911203.pdf),
+sections 2.3 and 8.6.
+
+The public timing notes are less formal but give a useful first-order model:
+Videl fills an internal FIFO in bursts of 17 32-bit words, and the measured
+burst sequence is 3 initial DRAM cycles followed by 16 page-mode cycles (19
+16-MHz CPU-cycle equivalents). The [Falcon video hardware guide](https://www.atari-wiki.com/index.php?title=The_authoritative_guide_to_the_Falcon_video_hardware)
+records the 17-word FIFO burst, while [Videl in Practice](https://mikro.naprvyraz.sk/docs/mikro/videl.html)
+records the 19-cycle burst and the observed CPU halting during video loads.
+These are measured community notes, not a complete Atari timing specification;
+line-boundary rounding, prefetch and monitor timing still need hardware
+calibration.
+
+For this renderer's 256x224, 16-bit mode, the display reads 114,688 bytes per
+frame. Applying that burst model gives about 1,687 bursts and 1.60 million
+68030-cycle equivalents per second at 50 Hz, roughly 10% of the 16-MHz CPU
+before accounting for line rounding, borders or sound DMA. This is an estimate,
+not a physical-Falcon measurement.
+
+The corrected Hatari does not currently model that reservation. Its CPU path
+has only the fixed bus-phase raster in `src/cpu/custom.c`, while
+`src/falcon/videl.c:VIDEL_renderScreen()` and the line-copy path in
+`src/video.c` read ST-RAM through host-side conversion. Those reads update the
+emulated picture but do not occupy the emulated ST-RAM bus or delay a CPU
+access. The physical result in section 2.7 is therefore consistent with a
+missing Videl charge, although the existing hardware run cannot separate that
+charge from the unmodeled host-port and DMA effects.
+
+The correct Hatari improvement is an opt-in Falcon shared-memory arbiter, not a
+single average penalty added at VBL:
+
+1. Derive per-line Videl fetch windows from the active HHT/HDB/HDE/VDB/VDE,
+   line-width/offset, pixel-cycle and colour-depth registers. Schedule the
+   FIFO bursts inside those windows, with the burst length and initial/prefetch
+   cost configurable while the hardware value is being calibrated.
+2. Before each real CPU transaction to chip ST-RAM, ask the arbiter whether its
+   word or longword overlaps a Videl reservation and advance emulated time to
+   the next free bus slot. Keep the existing CPU bus-phase cost and add the
+   Videl wait on top. Cache hits and Fast RAM must bypass this arbiter; the
+   68030's write-through stores and cache-line fills must still reserve ST-RAM
+   cycles.
+3. Route sound/DMA reservations through the same arbiter so Videl, record DMA
+   and the CPU cannot each assume exclusive ST-RAM access. Keep
+   `VIDEL_renderScreen()` as a host-side pixel conversion only; host `memcpy`
+   duration must never determine emulated time.
+4. Add trace counters for Videl bytes, bursts, reserved cycles, CPU wait cycles
+   by read/write/cache-miss class, and DMA waits. Expose `off`, `burst-model`
+   and later `calibrated` modes so existing compatibility and visual tests can
+   run without the new timing until it is validated.
+
+The first validation should be a small physical Falcon benchmark that runs its
+loop from cache while reading and writing sequential ST-RAM, with Videl disabled
+and then enabled across 16-bit modes and the target true-colour mode. Sweep
+width, refresh rate and line offset, and compare the measured slowdown with the
+burst trace. Until that measurement exists, the model should be marked
+approximate and should not be used to claim a definitive 5-FPS result.
+
 ### 2.4b What the DSP-clock fix costs, measured
 
 The corrected emulator of 2.4a was run against the freestanding prepass
