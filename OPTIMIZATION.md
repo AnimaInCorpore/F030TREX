@@ -1797,6 +1797,20 @@ frame. Applying that burst model gives about 1,687 bursts and 1.60 million
 before accounting for line rounding, borders or sound DMA. This is an estimate,
 not a physical-Falcon measurement.
 
+Two forum sources add useful corroboration. In an [Exxos forum discussion](https://www.exxosforum.co.uk/forum/viewtopic.php?start=2330&t=1789),
+mikro describes the Falcon ST-RAM as two interleaved 16-bit banks, 80-ns FPM
+DRAM with a roughly 150-ns full cycle, and Videl reading 32-bit longs in the
+17-long burst. The post derives about 70 ns per Videl long from the measured
+19-cycle burst, which is consistent with the estimate above. The archived
+[Atari-Forum Falcon FAQ](https://temlib.org/AtariForumWiki/index.php/Atari_Forum_Falcon_FAQ)
+points to the original high-video-mode slowdown thread and records the useful
+workload split: large ST-RAM moves slow down because the video chip occupies
+the bus, while tight computation that stays in the 68030 cache is almost
+unaffected. The [CT60 hardware notes](https://exxosforum.co.uk/atari/mirror/powerphenix/www.powerphenix.com/CT60/english/Fitt_sold.html)
+also report timing-sensitive Videl reads and display corruption on marginal
+high-speed memory boards. These are valuable calibration clues, not an
+official, cycle-complete Videl specification.
+
 The corrected Hatari does not currently model that reservation. Its CPU path
 has only the fixed bus-phase raster in `src/cpu/custom.c`, while
 `src/falcon/videl.c:VIDEL_renderScreen()` and the line-copy path in
