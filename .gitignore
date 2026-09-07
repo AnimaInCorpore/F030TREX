@@ -22,6 +22,15 @@ TREX/m68030/TREXSSI.LOD
 TREX/m68030/ssi_dma_package/
 TREX/m68030/fps_package/
 TREX/m68030/prof_package/
+
+# Hand-assembled copies of the two hardware packages, as carried to the Falcon.
+# Same content as the staging directories above (a .TOS, its .LOD and the
+# README), rebuildable with make prof_package / make ssi_dma_package.  They are
+# not caught by the *.tos and *.lod rules because git matches case-sensitively
+# and these are 8.3 uppercase names.  Returned hardware DUMPS do not live here
+# -- if a run's .RES files ever come back, they need a tracked home.
+TREX/m68030/TREXPROF/
+TREX/m68030/TREXDMA/
 __pycache__/
 *.pyc
 .DS_Store
@@ -38,8 +47,9 @@ forum-post.txt
 # commands recorded in OPTIMIZATION.md.
 hatari_runs/
 
-# Editor settings, per developer.
+# Editor and agent settings, per developer.
 .vscode/
+.claude/
 
 # DOSBox scratch directory for the DSP assembly: copies of trex_dsp.asm,
 # BUILD.BAT, ioequ.inc and the asm56k executables, plus the .CLD/.LOD/.LST it
