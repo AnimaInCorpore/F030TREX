@@ -3726,6 +3726,79 @@ either package (written only on a keypress exit) and `TREXDMA`'s
 not among the returned files, so the stage split and the SSI/DMA verdict are
 still outstanding until those three are collected from the run directories.
 
+### 2.7a Attributing the 2x: the emulated frame, measured (2026-09-07)
+
+The stage split from hardware is still outstanding, but the *emulator* side of
+the comparison has now been taken apart with Hatari's CPU profiler, and two of
+the three candidates named above can be sized without it.
+
+**First, two configuration/model terms account for about half the factor.**
+All figures `make measure`, RGB, over the same 265-frame prefix (the contention
+arm needs `--run-vbls 6800` to reach it, or the two means cover different
+stretches of the choreography):
+
+| Arm | ms/frame | FPS | hardware / emulator |
+| --- | ---: | ---: | ---: |
+| canonical (`--mmu true`), no Videl contention | 433.7 | 2.31 | 2.19x |
+| canonical + Videl contention | 464.6 | 2.15 | 2.05x |
+| `--mmu false --cpu-exact true`, no contention | 556.1 | 1.80 | 1.71x |
+| `--mmu false --cpu-exact true` + contention | 584.4 | 1.71 | **1.63x** |
+
+Frame 100 hashes to `d89958b3...3d16` in every arm. The MMU core, which
+`make measure` has always used, charges **no instruction execution time at
+all**; moving to the cycle-exact core costs +28 %, and the new COMBEL Videl
+model costs a further +5 to +7 %. Together they take 2.19x down to 1.63x --
+roughly half the gap, and neither is a change to this program.
+
+**Second, a fifth of the emulated frame is the CPU spinning on the DSP.**
+Profiled under the cycle-exact core, differencing a VBL 0-3000 run against a
+VBL 0-1500 run so the window is pure steady-state rendering (30 s, 480.8 M
+cycles):
+
+| | cycles | share | executions | cycles each |
+| --- | ---: | ---: | ---: | ---: |
+| TREX's own code | 372.1 M | 77.4 % | 57.05 M instr | 6.52 CPI |
+| TOS ROM | 108.7 M | 22.6 % | 20.07 M instr | 5.42 CPI |
+| `$E0518E btst.b #0,$FFFFA202` (HRDF poll) | 58.4 M | **12.2 %** | 7,951,188 | 7.35 |
+| `$E05196 move.l $FFFFA204,(a1)+` (RX) | 29.2 M | **6.1 %** | 1,156,184 | 25.21 |
+| `$E0517E move.l (a0)+,$FFFFA204` (TX) | 7.1 M | **1.5 %** | 320,856 | 21.98 |
+| **TOS XBIOS DSP transport, total** | **94.6 M** | **19.7 %** | | |
+
+**5.4 poll iterations per transferred longword**, and the polling alone is 12 %
+of the machine. Everything else in TOS ROM is boot: the `$E044C4` MFP GPIP-5
+loop is 16 % of the first 1500 VBLs and 0.15 % of the second 1500, and
+`--drive-a false --drive-b false` moves the frame time by 0.4 % (462.9 against
+464.6 ms), which is noise.
+
+**What that isolates.** The emulator charges 7.35 cycles for the HRDF poll
+against dspmark's hardware figure of 7.10 for a host-port byte read -- right to
+3 %. The per-poll *price* is therefore not the problem; the *number* of polls
+is, and that is set by how quickly the emulated DSP produces the next word.
+The fork runs the DSP in a burst after each 68030 instruction rather than
+against the global clock, and charges no BCR wait states for its external P/X/Y
+accesses (F030Arcade `docs/falcon-timing-probe.md`, WP2 and WP3), both of which
+make it answer sooner than a DSP56001 with external memory. A real DSP that is
+slower makes the real CPU spin longer, and the packet stage grows on hardware.
+That is precisely the signature `TREXPROF`'s `RENDER_S.RES` would show, and it
+is now a quantitative prediction rather than a hypothesis.
+
+The two terms are complementary, not alternatives. With the DSP wait at 19.7 %
+of the frame under-modelled by k and everything else slower on hardware by s,
+0.197k + 0.803s = 1.63: s = 1.3 (dspmark's +54 % on a taken branch) needs
+k = 3.0, s = 1.5 needs k = 2.2. Neither term alone closes it.
+
+**One term runs the other way.** The emulator charges 25.2 cycles for the
+longword RX read where dspmark measured 16.22 on hardware -- 55 % too dear.
+Correcting the fork's per-size host-port table makes the emulator *faster* and
+widens the gap by about 2 % of the frame. The same is true of the rasterizer's
+`move.b (0,a5,d1.l),d0` at 11.01 cycles and the clear's `move.l d0,(a0)+` at
+8.79, both of which sit below hardware's 11.44 / 10.28 for a cache-missing
+ST-RAM access.
+
+**Still needed to close it**: `RENDER_S.RES` from a hardware `TREXPROF` run, to
+divide the measured 952 ms between the packet stage and the rasterizer. The
+prediction above says the packet stage carries the larger share of the growth.
+
 ## 3. Rasterizer cost model
 
 **This model describes the retired bounding-box edge-function rasterizer.**
