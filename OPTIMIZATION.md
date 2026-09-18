@@ -5360,10 +5360,115 @@ physical-machine measurement.
 
 The choreography is exact through frame 273: matrices, translation, morph
 weights, gait pose, active mask, audio-volume state and the automatic-to-
-interactive flag are preserved. The current Falcon player deliberately loops
-273 back to 0; it does not yet implement the original interactive controller
-entered after autoplay. Audio volume is retained as state but no sample/audio
-backend consumes it yet.
+interactive flag are preserved. The Falcon player does not implement the
+original interactive controller entered after autoplay; it holds on frame 273
+instead -- the source's own control-handoff point, already at rest after the
+scripted 253-273 deceleration -- rather than cutting back to frame 0's distant
+opening shot (section 4.3a). Audio volume is retained as state but no
+sample/audio backend consumes it yet.
+
+#### 4.3a The held state: four deliberate extensions
+
+Frames past 273 have no source to be faithful to, so four frontend additions
+keep the held frame from looking frozen or badly framed. Each replays real
+extracted data or a value computed from the mesh; none invents motion:
+
+- `gait_hold_index` continues the 32-pose gait loop (poses 14-45) that frames
+  46-273 already replay seven times over, so the legs and tail keep walking.
+- `y_spin_index` steps a 120-entry offline table of `Ry(-n*3 degrees) . M273`
+  matrices, so the object keeps turning slowly about its vertical axis.
+- `head_turn_hold_frame` replays frames 145-229 -- targets 6 and 8, the head's
+  left-then-right turn -- on an 85-frame loop: both weights are back at 0 by
+  frame 229 and the source plays the gesture once, during the approach. 145
+  is the last frame both still read 0, so the loop seam has no pop. Target
+  5's head tilt stays at its frame-273 value: it ramps up in the same window
+  but never returns to 0, so looping it would pop.
+- Framing: `HOLD_EXTRA_DISTANCE` (15,000 units) pushes the camera back and
+  `HOLD_PIVOT_Z` (1,400) moves the turntable's effective rotation centre from
+  the model origin to the head/neck region, both eased in over
+  `HOLD_DISTANCE_RAMP_FRAMES` (30) held frames so that reaching frame 273
+  does not pop. The distance is needed because the turntable turns the
+  animal broadside: the base mesh is 4,716 units wide against 25,314 long
+  (read from `trex.tmd`), so a quarter turn shows a silhouette over five
+  times wider than the frontal close-up `PS1_VIEWPOINT_Z` was framed for.
+  The pivot is data-derived: the brow vertices 78-89 have their centroid at
+  Z=1,389. 15,000 is a compromise chosen on request: holding even the thin
+  tail tip on screen at every angle would take roughly 64,000 (computed, not
+  captured) and shrink the animal far more than asked for.
+
+The pivot lock is a per-step translation correction in `dsp_set_frame`. The
+DSP forms `camera = T + M.v` with rows 0 and 1 as sent, row 2 negated and
+`T.z = PS1_VIEWPOINT_Z - tz`, so the X word gains
+`(M273_R02 - R02) * 1400 / 4096` and the Z word **loses**
+`(M273_R22 - R22) * 1400 / 4096`; both are exactly zero at step 0, whose
+matrix is M273's own. That replaces the X-only recentring the turntable used
+before, which followed the source's frames 253-273 (X translation tracking the
+row0-col2 entry almost one-for-one) and so held whatever point that implied
+rather than the head. Computed from frame 273's record (`T = (-1556, 0,
+-17655)`) and the 120-step table with the 68030's truncating arithmetic, the
+pivot's camera Z stays within 40,361-40,363 units and its screen X at 81.3 px
+for the whole turn -- an exact-arithmetic check, not a capture. The pivot sits
+left of centre because that is where frame 273 leaves the head, and the body
+swings around it.
+
+**Provenance.** The head-turn loop and the framing were written on 2026-08-07
+in f030dsp3d after this repository had been extracted, and never merged
+there; they survive on its `local/master` branch (`5d77071`, `aea98f0`). The
+port corrects one sign: that version added the Z correction, which let the
+pivot's depth swing by 5,593 units over a turn (same computation) instead of
+holding it. Its screen-coverage figures were also taken at the old 300x224
+render target, so the captures below supersede them.
+
+**Captures.** Hatari Falcon harness with the `measure` target's flags (TOS
+4.02, 4 MB ST-RAM, DSP emulation), `fb.res` of the 240x224 render window at
+each frame -- emulator output, not physical-Falcon captures. "Before" is the
+build without the head-turn loop and the framing (`612b50c`); lit is the
+share of non-black pixels, and the edge counts are lit pixels in the first
+column, the last column and the bottom row. Frame F shows turntable step
+F-273, and the ramp is complete from frame 303:
+
+| Frame | Step | Before: lit | left/right/bottom | After: lit | left/right/bottom |
+|---:|---:|---:|---|---:|---|
+| 274 | 1 | 51.39% | 0/0/75 | 49.75% | 0/0/74 |
+| 288 | 15 | 64.43% | 96/161/137 | 41.98% | 0/157/22 |
+| 303 | 30 (broadside) | 68.39% | 92/188/181 | 32.37% | 0/157/3 |
+| 318 | 45 | 67.22% | 0/224/197 | 44.55% | 0/73/65 |
+| 333 | 60 | 67.08% | 224/0/194 | 20.10% | 151/0/44 |
+| 363 | 90 | 62.15% | 162/94/73 | 14.04% | 94/0/0 |
+
+Before, every held frame past the first is a close-up of the flank that
+fills 62-68% of the screen and is cut on two or three edges. After, the
+animal is pulled back and the head/neck point holds its screen position
+throughout. Up to the three-quarter view (frame 318) only the tail and, at
+some angles, the feet leave the frame. On the far side of the turn the body
+itself does: the pivot sits left of centre, so the body swings past the left
+edge (frames 333 and 363), and at frame 333 the pinned point shows the back of
+the skull. The 2026-08-07 sign measured 29.88% lit at frame 303 and 36.35%
+at 318, where its receding pivot makes the animal smaller.
+
+**Gates.** Frames 0-273 are untouched: the `TREX_FRAME_HASH` sweep matches
+the previous build frame for frame through 273 and differs from 274 on, and
+the frame-100 checkpoint stays `d89958b3…3d16`. The armed-prepass pair
+(`-DTREX_PREPASS` on the hash build) hashes identically to the ordinary one
+over all 512 recorded frames -- 274 authored and 238 held, the new poses
+included -- and reports arm 1 and zero prepass protocol failures.
+
+**Layout.** Text grew by exactly 256 bytes (9,680 to 9,936), so everything after
+`dsp_set_frame` -- the packet build and the whole rasterizer -- and every
+data object moved by one full size of the 68030's 256-byte instruction and
+data caches and kept its cache index; the data section's end padding shrank
+by the same 256 bytes, so BSS starts where it did. The new BSS longs moved
+the unpinned frontend state behind them (`dsp_animation_tx_ptr` through
+`gpu_texture_meta_buffer`) by 12 bytes; every `cnop`-pinned block -- CLUT
+pages, OT nodes, raster state, render targets, packet buffer -- kept its
+address. The `measure` target's standard run (6370 VBLs, 249 frames) gives
+461.6 ms/frame against 461.7 ms for the previous build in the same session,
+rasterizer 264.3 ms in both and DSP set_frame +0.3 ms from the added hold
+tests, so the section 2 baseline stands. The exact 256-byte growth is a
+coincidence of this change and plausibly why nothing moved; by section 2.1
+it is no evidence that other edits of this size are layout-neutral. The held
+frames' own cost was not timed: hash builds cannot be, and the standard
+prefix ends before frame 273.
 
 ### 4.4 Shading: the source light model, per corner — implemented (Gouraud default)
 

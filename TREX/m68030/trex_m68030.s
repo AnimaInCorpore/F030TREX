@@ -346,6 +346,34 @@ PS1_PROJECTION_Y	= 933
 ; would target.  Chosen by direct comparison in Hatari against 2000, 5000
 ; and 7000.
 PS1_VIEWPOINT_Z		= 9000
+; Deliberate additions for the held state, not source values: the source
+; hands off to interactive control at frame 273, this port holds there (see
+; trex_dummy_frame).  OPTIMIZATION.md 4.3a has the reasoning and the Hatari
+; captures behind all four.
+;
+; HOLD_EXTRA_DISTANCE: extra camera distance once held.  PS1_VIEWPOINT_Z
+; frames the frontal close-up, but the y_spin turntable turns the animal
+; broadside, and the base mesh is 4,716 units wide (X) against 25,314 long
+; (Z, snout to tail), so a quarter turn shows a silhouette over five times
+; wider.  15,000 is the compromise chosen on request: the head side clears
+; at the broadside angle while the thin tail tip may still touch the edge --
+; keeping even that on screen at every angle would take roughly 64,000
+; (computed, not captured) and shrink the animal far more than asked for.
+HOLD_EXTRA_DISTANCE	= 15000
+; Held frames over which HOLD_EXTRA_DISTANCE and the pivot correction below
+; ease in linearly instead of stepping in at once.  30 is also the step at
+; which y_spin_index first reaches the broadside quarter turn.
+HOLD_DISTANCE_RAMP_FRAMES	= 30
+; The turntable's effective rotation centre, local (0,0,HOLD_PIVOT_Z): the
+; head/neck region, so the head stays framed instead of sweeping the tail's
+; wide arc.  Data-derived: the brow vertices (78-89, target 7's range) have
+; their centroid at Z=1389 in trex.tmd.  dsp_set_frame corrects the X and Z
+; translation per step so that point's camera-space position never moves.
+HOLD_PIVOT_Z		= 1400
+; y_spin_matrices step 0 -- frame 273's own matrix -- row0-col2 and row2-col2,
+; the reference the pivot correction is measured against (zero at step 0).
+M273_R02		= -1567
+M273_R22		= 3782
 TANM_FRAME_COUNT	= 274
 TANM_CHOREOGRAPHY_OFFSET	= 47104
 TANM_CHOREOGRAPHY_BYTES	= 64
@@ -916,13 +944,13 @@ trex_dummy_frame
 	bcs	.animation_advance_ready
 	move.l	#TANM_FRAME_COUNT-1,animation_frame
 
-	; Deliberate addition beyond the source: camera, rotation and the
-	; targets-5..8 weights hold at frame 273 (above), but frames 46..273
-	; already replay gait poses 14..45 on a 32-pose loop -- seven full
-	; repeats plus a partial eighth ending at pose 17, read straight from
-	; trex_animation.bin, not invented -- so continuing that exact loop here
-	; keeps the walk going instead of freezing mid-stride.  The source has
-	; no frame past 273 to compare this against.
+	; Deliberate addition beyond the source: the choreography record holds
+	; at frame 273 (above) and the counters below replace parts of it.
+	; Frames 46..273 already replay gait poses 14..45 on a 32-pose loop --
+	; seven full repeats plus a partial eighth ending at pose 17, read
+	; straight from trex_animation.bin, not invented -- so continuing that
+	; exact loop here keeps the walk going instead of freezing mid-stride.
+	; The source has no frame past 273 to compare this against.
 	move.l	gait_hold_index,d0
 	bne	.gait_hold_advance
 	move.l	#17,d0			; frame 273's own gait index, continued from
@@ -941,6 +969,38 @@ trex_dummy_frame
 	moveq	#0,d0
 .z_spin_ready
 	move.l	d0,y_spin_index
+
+	; Deliberate addition, same spirit as the gait loop above: targets 6
+	; and 8 are the head's left-then-right turn (557 vertices each),
+	; recorded at frames 146..228 and back at weight 0 by frame 229, so the
+	; source plays the gesture only once, during the approach.  Replaying
+	; frames 145..229 verbatim keeps it going instead of leaving the head
+	; centred forever; 145 is the last frame both weights still read 0, so
+	; the loop seam has no pop.  Target 5 ramps up in the same window but
+	; never returns to 0 (it is the settled head tilt frame 273 holds) and
+	; target 7's brow pulses are unrelated, so neither joins the loop.
+	; dsp_set_frame reads the target 6/8 weights from this frame's record.
+	move.l	head_turn_hold_frame,d0
+	bne	.head_turn_hold_advance
+	move.l	#144,d0			; one before the loop start, falls into +1 below
+.head_turn_hold_advance
+	addq.l	#1,d0
+	cmpi.l	#230,d0
+	bcs	.head_turn_hold_ready
+	move.l	#145,d0
+.head_turn_hold_ready
+	move.l	d0,head_turn_hold_frame
+
+	; One-shot ease-in for HOLD_EXTRA_DISTANCE and the pivot correction:
+	; dsp_set_frame scales both by hold_distance_ramp/HOLD_DISTANCE_RAMP_FRAMES,
+	; so reaching frame 273 does not pop the object backwards.  Unlike the
+	; loops above this is a one-time transition, so it saturates and stays.
+	move.l	hold_distance_ramp,d0
+	cmpi.l	#HOLD_DISTANCE_RAMP_FRAMES,d0
+	bge	.hold_distance_ramp_done
+	addq.l	#1,d0
+	move.l	d0,hold_distance_ramp
+.hold_distance_ramp_done
 	; When enabled, the prepass stays armed through the synthetic hold.  The
 	; one-shot disarm that used to fire here guarded against the former DSP
 	; sweep, whose full-grid cell cursor visited all 3,360 mask cells per
@@ -1902,17 +1962,19 @@ dsp_set_frame
 	mulu.w	#18,d1			; 9 words * 2 bytes per matrix entry
 	lea	y_spin_matrices,a3
 	adda.l	d1,a3
-	; Frames 253-273 show the source doing the same thing: as this same
-	; matrix's own row0-col2 entry (sin of the yaw, Q12) grows, X translation
-	; tracks it almost exactly one-for-one (tx/entry ratio climbs from ~3400
-	; to ~4067 as the angle grows, converging on the entry's own Q12 unit,
-	; 4096) -- the source is recentring the screen position as the object
-	; turns, not holding X still.  Continuing the spin without continuing
-	; that recentring is what drifted the head off-centre; stashed here from
-	; the SAME table entry so it stays in lockstep with the matrix below.
+	; Stash this step's row0-col2 (sin of the yaw) and row2-col2 (cos) Q12
+	; entries before the copy loops below consume them: the translation
+	; send further down corrects X and Z from both so the HOLD_PIVOT_Z point
+	; stays still while the object turns.  That replaces the X-only
+	; recentring the turntable used before, which followed the source's own
+	; frames 253-273 (X translation tracking this entry almost one-for-one)
+	; and so held whatever point that implied rather than the head.
 	move.w	4(a3),d1
 	ext.l	d1
-	move.l	d1,y_spin_tx
+	move.l	d1,y_spin_r02_raw
+	move.w	16(a3),d1
+	ext.l	d1
+	move.l	d1,y_spin_r22_raw
 	bra	.matrix_source_ready
 .matrix_source_choreo
 	move.l	a4,a3
@@ -1944,16 +2006,50 @@ dsp_set_frame
 	move.l	d1,(a0)+
 	dbra	d7,.copy_ps1_matrix_z
 
+	; Held, a4 is still frame 273's record (animation_frame clamps there),
+	; so X starts from that frame's real translation and only the pivot
+	; correction below changes it.
+	move.l	TANM_CHOREO_TRANSLATION(a4),d1
 	tst.l	gait_hold_index
-	beq	.translation_x_choreo
-	move.l	y_spin_tx,(a0)+
-	bra	.translation_x_done
-.translation_x_choreo
-	move.l	TANM_CHOREO_TRANSLATION(a4),(a0)+
+	beq	.translation_x_done
+	; Pivot lock, X half.  The DSP forms camera = T + M.v with rows 0 and 1
+	; as sent, so the pivot's camera X stays put when X gains
+	; (M273_R02 - R02) * HOLD_PIVOT_Z / 4096 -- exactly zero at step 0.
+	; Eased in with HOLD_EXTRA_DISTANCE.
+	move.l	#M273_R02,d2
+	sub.l	y_spin_r02_raw,d2
+	muls.l	#HOLD_PIVOT_Z,d2
+	divs.l	#4096,d2
+	move.l	hold_distance_ramp,d3
+	muls.l	d3,d2
+	divs.l	#HOLD_DISTANCE_RAMP_FRAMES,d2
+	add.l	d2,d1
 .translation_x_done
+	move.l	d1,(a0)+
 	move.l	TANM_CHOREO_TRANSLATION+4(a4),(a0)+
 	move.l	#PS1_VIEWPOINT_Z,d1
 	sub.l	TANM_CHOREO_TRANSLATION+8(a4),d1
+	tst.l	gait_hold_index
+	beq	.translation_z_done
+	; Held: push the object back by HOLD_EXTRA_DISTANCE, eased in.
+	move.l	hold_distance_ramp,d2
+	muls.l	#HOLD_EXTRA_DISTANCE,d2
+	divs.l	#HOLD_DISTANCE_RAMP_FRAMES,d2
+	add.l	d2,d1
+	; Pivot lock, Z half.  Row 2 goes out negated and this word is
+	; PS1_VIEWPOINT_Z - tz, so the pivot's camera Z stays put when the word
+	; LOSES (M273_R22 - R22) * HOLD_PIVOT_Z / 4096 -- the opposite sign of
+	; the X half.  (The unmerged 2026-08-07 original added it, which let
+	; the pivot's depth swing by about 5,600 units over a turn.)
+	move.l	#M273_R22,d2
+	sub.l	y_spin_r22_raw,d2
+	muls.l	#HOLD_PIVOT_Z,d2
+	divs.l	#4096,d2
+	move.l	hold_distance_ramp,d3
+	muls.l	d3,d2
+	divs.l	#HOLD_DISTANCE_RAMP_FRAMES,d2
+	sub.l	d2,d1
+.translation_z_done
 	move.l	d1,(a0)+
 
 	move.l	#PS1_PROJECTION_X,(a0)+
@@ -2050,7 +2146,19 @@ dsp_set_frame
 	tst.l	d0
 	bne	.dsp_set_frame_shadow
 
+	; Held, target 6 replays the head-turn frame window (see the hold branch
+	; in trex_dummy_frame) instead of the frozen record, which reads a
+	; permanent 0 here.
+	tst.l	gait_hold_index
+	beq	.target_6_choreo
+	move.l	head_turn_hold_frame,d0
+	lsl.l	#6,d0			; TANM_CHOREOGRAPHY_BYTES
+	lea	trex_animation_data+TANM_CHOREOGRAPHY_OFFSET,a4
+	adda.l	d0,a4
+	bra	.target_6_ready
+.target_6_choreo
 	move.l	animation_choreo_record,a4
+.target_6_ready
 	move.w	TANM_CHOREO_WEIGHTS+12(a4),d0
 	ext.l	d0
 	moveq	#0,d1
@@ -2070,7 +2178,18 @@ dsp_set_frame
 	tst.l	d0
 	bne	.dsp_set_frame_shadow
 
+	; Same held-state substitution as target 6: both read the same
+	; head-turn frame, so the left and right halves stay in lockstep.
+	tst.l	gait_hold_index
+	beq	.target_8_choreo
+	move.l	head_turn_hold_frame,d0
+	lsl.l	#6,d0			; TANM_CHOREOGRAPHY_BYTES
+	lea	trex_animation_data+TANM_CHOREOGRAPHY_OFFSET,a4
+	adda.l	d0,a4
+	bra	.target_8_ready
+.target_8_choreo
 	move.l	animation_choreo_record,a4
+.target_8_ready
 	move.w	TANM_CHOREO_WEIGHTS+16(a4),d0
 	ext.l	d0
 	moveq	#0,d1
@@ -8038,9 +8157,21 @@ gait_hold_index
 ; gait_hold_index in the same hold branch.
 y_spin_index
 	ds.l	1
-; This step's X-translation recentring, stashed by the matrix source setup
-; in dsp_set_frame for the translation send further down to pick up.
-y_spin_tx
+; This step's row0-col2 and row2-col2 raw Q12 entries (sin/cos of the yaw),
+; stashed by the matrix source setup in dsp_set_frame for the pivot lock in
+; its translation send (HOLD_PIVOT_Z).
+y_spin_r02_raw
+	ds.l	1
+y_spin_r22_raw
+	ds.l	1
+; Zero until the hold state starts, then the frame (145..229) whose target
+; 6/8 weights dsp_set_frame sends -- the replayed head turn.
+head_turn_hold_frame
+	ds.l	1
+; 0..HOLD_DISTANCE_RAMP_FRAMES, then stays there: the eased-in fraction of
+; HOLD_EXTRA_DISTANCE and of the pivot correction.  Unlike the counters
+; above it never cycles -- the move into the held state happens once.
+hold_distance_ramp
 	ds.l	1
 dsp_animation_tx_ptr
 	ds.l	1
