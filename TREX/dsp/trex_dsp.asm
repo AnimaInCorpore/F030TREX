@@ -80,6 +80,9 @@
 	include	'ioequ.inc'
 	include	'dspconf.inc'
 
+; SSIPROBE=2 selects live packet DMA; 1 is the ramp probe.
+SSIRECORD	equ	SSIPROBE/2
+
 TREX_VERTICES	= 1376
 TREX_PRIMITIVES	= 2724
 ; Render target size.  Must match SCREEN_WIDTH/SCREEN_HEIGHT on the host: the
@@ -460,6 +463,9 @@ dispatch_control_even
 	; them.  Other even control values alias one of the two, all undefined.
 	; With SSIPROBE=0 the stream arm is not assembled and $40 aliases the
 	; burst, which is undefined in exactly the same way.
+	IF	SSIRECORD
+	jmp	<command_ssi_records
+	ELSE
 	IF	SSIPROBE
 	jclr	#1,x0,command_ssi_stream
 	nop
@@ -468,6 +474,7 @@ dispatch_control_even
 	jmp	<command_pio_burst
 	ELSE
 	jmp	<command_reset
+	ENDIF
 	ENDIF
 
 dispatch_command_low
@@ -862,7 +869,9 @@ command_finish_animated_frame
 	move	y:prepass_armed,a
 	tst	a
 	jeq	<finish_no_prepass
+	IF	!SSIRECORD
 	jsr	<prepass_run
+	ENDIF
 finish_no_prepass
 	; The lighting loop consumes this phase-local X copy while BUILD chunks
 	; stream their normal components from Y.  It must follow prepass_run:
@@ -2498,13 +2507,16 @@ span_mid_stored
 	move	b1,y:span_mid
 
 	; Long-edge X slope: (dx<<12)/dy_long.  span_div expects the dividend
-	; doubled to match the MPY convention, hence the thirteenth shift.
+	; doubled to match the MPY convention.  Signed 16-bit coordinates make
+	; dx fit X0 exactly; MPY by 4096 produces dx<<13 without eleven ASRs.
+	; Y1 keeps this constant through all three slopes: span_div preserves it.
+	; Each MPY also loads the divisor in parallel; it reads neither X1 nor B.
+	move	#>4096,y1
 	move	y:span_sx2,a
 	move	y:span_sx0,x0
 	sub	x0,a
-	rep	#11
-	asr	a
-	move	y:span_k1,x1
+	move	a1,x0
+	mpy	x0,y1,a	y:span_k1,x1
 	jsr	<span_div
 	move	a1,y:span_sl_long
 
@@ -2516,9 +2528,8 @@ span_mid_stored
 	move	y:span_sx1,a
 	move	y:span_sx0,x0
 	sub	x0,a
-	rep	#11
-	asr	a
-	move	b1,x1
+	move	a1,x0
+	mpy	x0,y1,a	b1,x1
 	jsr	<span_div
 span_sl_up_store
 	move	a1,y:span_sl_up
@@ -2529,9 +2540,8 @@ span_sl_up_store
 	move	y:span_sx2,a
 	move	y:span_sx1,x0
 	sub	x0,a
-	rep	#11
-	asr	a
-	move	b1,x1
+	move	a1,x0
+	mpy	x0,y1,a	b1,x1
 	jsr	<span_div
 span_sl_low_store
 	move	a1,y:span_sl_low
@@ -2635,6 +2645,10 @@ span_sl_low_store
 	; chain is the long edge and both half slots carry the same step.
 	; Middle vertex on the left: one step pair per short segment, zero for
 	; an empty half -- the exact uniform semantics the host consumes.
+	; UV/level deltas fit signed 24 bits.  MPY by 256 is their exact doubled
+	; Q8.8 numerator (delta<<9), replacing fifteen ASRs.  span_uv_fetch used
+	; Y1 above; from here only span_div is called and it preserves Y1.
+	move	#>256,y1
 	move	y:span_mid,a
 	tst	a
 	jne	<span_chain_left
@@ -2642,27 +2656,24 @@ span_sl_low_store
 	move	y:span_su2,a
 	move	y:span_su0,x0
 	sub	x0,a
-	rep	#15
-	asr	a
-	move	y:span_k1,x1
+	move	a1,x0
+	mpy	x0,y1,a	y:span_k1,x1
 	jsr	<span_div
 	move	a1,y:span_dul_up
 	move	a1,y:span_dul_low
 	move	y:span_sv2,a
 	move	y:span_sv0,x0
 	sub	x0,a
-	rep	#15
-	asr	a
-	move	y:span_k1,x1
+	move	a1,x0
+	mpy	x0,y1,a	y:span_k1,x1
 	jsr	<span_div
 	move	a1,y:span_dvl_up
 	move	a1,y:span_dvl_low
 	move	y:span_sl2,a
 	move	y:span_sl0,x0
 	sub	x0,a
-	rep	#15
-	asr	a
-	move	y:span_k1,x1
+	move	a1,x0
+	mpy	x0,y1,a	y:span_k1,x1
 	jsr	<span_div
 	move	a1,y:span_dll_up
 	move	a1,y:span_dll_low
@@ -2681,27 +2692,24 @@ span_chain_left_up
 	move	y:span_su1,a
 	move	y:span_su0,x0
 	sub	x0,a
-	rep	#15
-	asr	a
-	move	b1,x1
+	move	a1,x0
+	mpy	x0,y1,a	b1,x1
 	jsr	<span_div
 	move	a1,y:span_dul_up
 	move	y:span_rows_up,b
 	move	y:span_sv1,a
 	move	y:span_sv0,x0
 	sub	x0,a
-	rep	#15
-	asr	a
-	move	b1,x1
+	move	a1,x0
+	mpy	x0,y1,a	b1,x1
 	jsr	<span_div
 	move	a1,y:span_dvl_up
 	move	y:span_rows_up,b
 	move	y:span_sl1,a
 	move	y:span_sl0,x0
 	sub	x0,a
-	rep	#15
-	asr	a
-	move	b1,x1
+	move	a1,x0
+	mpy	x0,y1,a	b1,x1
 	jsr	<span_div
 	move	a1,y:span_dll_up
 span_chain_left_low
@@ -2717,27 +2725,24 @@ span_chain_left_low_go
 	move	y:span_su2,a
 	move	y:span_su1,x0
 	sub	x0,a
-	rep	#15
-	asr	a
-	move	b1,x1
+	move	a1,x0
+	mpy	x0,y1,a	b1,x1
 	jsr	<span_div
 	move	a1,y:span_dul_low
 	move	y:span_rows_low,b
 	move	y:span_sv2,a
 	move	y:span_sv1,x0
 	sub	x0,a
-	rep	#15
-	asr	a
-	move	b1,x1
+	move	a1,x0
+	mpy	x0,y1,a	b1,x1
 	jsr	<span_div
 	move	a1,y:span_dvl_low
 	move	y:span_rows_low,b
 	move	y:span_sl2,a
 	move	y:span_sl1,x0
 	sub	x0,a
-	rep	#15
-	asr	a
-	move	b1,x1
+	move	a1,x0
+	mpy	x0,y1,a	b1,x1
 	jsr	<span_div
 	move	a1,y:span_dll_low
 	rts
@@ -2872,6 +2877,16 @@ lookup_projected_z
 ; fields of two neighbouring entries, so no extra table is needed.
 ; -----------------------------------------------------------------------------
 
+	IF	SSIRECORD
+command_prepass
+	jsr	<receive_word
+	move	#ACK_PREPASS,x0
+	jsr	<send_word
+	clr	a
+	move	a1,x0
+	jsr	<send_word
+	jmp	<main_loop
+	ELSE
 command_prepass
 	jsr	<receive_word
 
@@ -3436,6 +3451,8 @@ prepass_occlusion_done
 ; extension would index far outside either table.  Word A stays in X1 for
 ; the callers that read the occluder qualification bit.  N2 is no longer
 ; used here; the classify's cache-hit path still skips a triangle with it.
+	ENDIF
+
 prepass_unpack_indices
 	move	y:(r2)+,x1
 	move	y:(r2)+,y1
@@ -3512,6 +3529,7 @@ prepass_load_done
 ; and start bit.  Y0 is deliberately untouched -- that caller keeps its row
 ; coordinate there across the call -- while Y1 is clobbered now; neither
 ; caller holds a live value in Y1.
+	IF	!SSIRECORD
 prepass_kill_address
 	move	#>prepass_kill,b
 prepass_bit_address
@@ -3758,7 +3776,10 @@ prepass_merge_done
 prepass_merge_clean
 	rts
 
+	ENDIF
+
 	IF	SSIPROBE
+
 ; -----------------------------------------------------------------------------
 ; SSI transport probe -- CMD_SSI_STREAM
 ;
@@ -3795,6 +3816,7 @@ prepass_merge_clean
 ; what tells the Crossbar a word is ready.  CRB is written before PCD because
 ; enabling TE re-arms the transmitter's frame wait, and raising PC5 is what
 ; clears it.
+	IF	!SSIRECORD
 command_ssi_stream
 	jsr	<receive_word
 	move	x0,y:ssi_payload_count
@@ -3877,6 +3899,10 @@ ssi_footer_end
 	move	y:ssi_status,x0
 	jsr	<send_word
 	jmp	<main_loop
+	ENDIF
+	IF	SSIRECORD
+	include "ssi_pkt.asm"
+	ENDIF
 
 ; x0 = one word already aligned into bits 23..8.
 ssi_send_word
@@ -3992,7 +4018,12 @@ corner_normals_x
 ; for anything that grows the two tables past the chunk buffers.
 prelight_table
 	ds	TREX_PRIMITIVES
+	IF SSIRECORD
+	include "ssi_crc.i"
+	ds	CHUNK_UVS_BASE-prelight_table-TREX_PRIMITIVES-512
+	ELSE
 	ds	CHUNK_UVS_BASE-prelight_table-TREX_PRIMITIVES
+	ENDIF
 
 ; One BUILD chunk's UV pairs, received with the command in chunk order and
 ; read chunk-locally by the span-setup pass.  Two packed words per triangle:
@@ -4439,6 +4470,10 @@ ssi_spin
 	ds	1
 ssi_status
 	ds	1
+	IF	SSIRECORD
+ssi_crc	dc	0
+ssi_word	dc	0
+	ENDIF
 	ENDIF
 
 ; Displaced by the ladder mask, which needs this flag's short-addressable
@@ -4492,23 +4527,27 @@ triangles_loaded
 ; one full round of contradictory measurements once.
 ;
 ; Seven switches select what is assembled, all of them in the generated
-; dspconf.inc (see the Makefile).  Three configurations matter, and all fit:
+; dspconf.inc (see the Makefile).  The following configurations fit:
 ;
 ;   default   SSIPROBE=0 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=1 PRELIGHT=1 PHASEPROBE=0
-;             ends P:$09A6, 25 words free.  Ships, and every whole-frame
+;             ends P:$099E, 33 words free.  Ships, and every whole-frame
 ;             timing run uses it.
 ;   ladder    the default plus PHASEPROBE=1
-;             ends P:$09BB, 4 words free.  The per-phase BUILD timing ladder
+;             ends P:$09B3, 12 words free.  The per-phase BUILD timing ladder
 ;             of 2.4l.  It fits BESIDE the shipping configuration, which is
 ;             what makes its measurement one of the shipping BUILD body and
 ;             not of a substitute: OBJLIGHTS and PRELIGHT keep their shipping
 ;             values, so every phase the ladder times is the phase that runs
 ;             in TREX.TOS.
 ;   SSI       SSIPROBE=1 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=0 PRELIGHT=0 PHASEPROBE=0
-;             ends P:$09B8, 7 words free.  Transport bring-up only.
+;             ends P:$09B0, 15 words free.  Transport bring-up only.
+;
+;   live SSI  SSIPROBE=2, other switches as default; the unarmed occlusion
+;             sweep is omitted, and X:$366A-$3869 holds two CRC tables.
+;             See OPTIMIZATION.md 7.4d for the measured program extent.
 ;
 ; The camera-lights A/B reference (OBJLIGHTS=0 alone, make trex_dsp_camlights)
-; ends P:$0993; the BUILD-side shading reference (PRELIGHT=0 alone) P:$0964.
+; ends P:$098B; the BUILD-side shading reference (PRELIGHT=0 alone) P:$095C.
 ;
 ; What each switch is worth in program words: SSIPROBE (the CMD_SSI_STREAM
 ; transport probe) 103, PRELIGHT (the window-phase lighting pass and BUILD's
@@ -4520,7 +4559,7 @@ triangles_loaded
 ; default build's headroom, which is why that configuration turns five things
 ; off to carry it.  PRELIGHT displaced the two instruments from the default
 ; build; either fits again beside OBJLIGHTS=0 (WINPROBE=1 OBJLIGHTS=0 ends
-; exactly at P:$09BF, PREPASSDIAG=1 OBJLIGHTS=0 at P:$09B1) or beside
+; at P:$09B7, PREPASSDIAG=1 OBJLIGHTS=0 at P:$09A9) or beside
 ; PRELIGHT=0.  PHASEPROBE is the only instrument small enough to fit beside
 ; the shipping configuration unchanged.
 ;

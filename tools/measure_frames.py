@@ -29,6 +29,14 @@ def main():
     parser.add_argument("output", type=Path, help="new directory for this run")
     parser.add_argument("--frames", type=int, default=265)
     parser.add_argument("--timeout", type=float, default=300)
+    parser.add_argument("--dsp-name", choices=("trex_dsp.lod", "TREX.LOD",
+                                              "TREXSSI.LOD", "TREXPHAS.LOD",
+                                              "TREXDMA.LOD", "TREXPIPE.LOD"),
+                        default="trex_dsp.lod", help="binary-specific DSP loader name")
+    parser.add_argument("--cpu-core", choices=("mmu", "cycle-exact"),
+                        default="mmu", help="MMU ledger or cycle-exact CPU model")
+    parser.add_argument("--videl-contention", choices=("off", "on"),
+                        default="off", help="explicit bus model; ledger default is off")
     parser.add_argument("--hatari", type=Path, default=ROOT.parent /
                         "F030Arcade/third_party/hatari/build/src/hatari")
     parser.add_argument("--tos", type=Path, default=ROOT.parent /
@@ -46,11 +54,16 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     (output / "RUN.TOS").write_bytes(blobs["binary"])
     # Diagnostic and release binaries deliberately load different names.
-    for name in ("trex_dsp.lod", "TREX.LOD"):
+    for name in {"trex_dsp.lod", "TREX.LOD", args.dsp_name}:
         (output / name).write_bytes(blobs["dsp"])
 
     command = [str(paths["hatari"]), "--machine", "falcon", "--cpulevel", "3",
-               "--cpuclock", "16", "--mmu", "true", "--patch-tos", "true",
+               "--cpuclock", "16", "--mmu",
+               "true" if args.cpu_core == "mmu" else "false",
+               "--cpu-exact", "true", "--compatible", "true",
+               "--data-cache", "true", "--videl-contention",
+               "true" if args.videl_contention == "on" else "false",
+               "--patch-tos", "true",
                "--fast-boot", "true", "--tos", str(paths["tos"]),
                "--dsp", "emu", "--memsize", "4", "--ttram", "0",
                "--monitor", "rgb", "--frameskips", "4", "--sound", "off",
@@ -58,7 +71,7 @@ def main():
                "--alert-level", "fatal", "--harddrive", ".",
                "--auto", "C:\\RUN.TOS", "--run-vbls", "60000"]
     manifest = {
-        "frames": args.frames, "command": command,
+        "frames": args.frames, "dsp_name": args.dsp_name, "command": command,
         "environment": {"SDL_VIDEODRIVER": "dummy"},
         "inputs": {name: {"path": str(paths[name]),
                           "sha256": hashlib.sha256(blob).hexdigest()}

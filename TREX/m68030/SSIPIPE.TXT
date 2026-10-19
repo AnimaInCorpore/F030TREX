@@ -1,0 +1,16 @@
+F030TREX: live SSI/DMA packet pipeline
+
+Run TREXPIPE.TOS with TREXPIPE.LOD in the same directory.
+Requires a stock Falcon030, TOS 4.02, 4 MiB ST RAM and an idle sound/DSP client.
+The CPU draws frame N while the DSP builds frame N+1. Records travel through
+DSP SSI -> Falcon Crossbar -> sound record DMA. The CPU still rasterizes the
+textured pixels. Keyboard exits and restores the sound/Crossbar state.
+
+This is the release/FPS build: no diagnostic disk writes, no checksum-fault
+injection, no occlusion prepass. DMA or framing failure falls back to the
+ordinary host-port path. It does not steal an active sound client.
+The displayed FPS is the hardware result; emulator timings are separate.
+Physical Falcon performance/cache validation remains outstanding.
+
+Rebuild: make DOSBOX=/path/to/DOSBox ssi_pipeline_package
+Design, validation and measured emulator results: OPTIMIZATION.md, section 7.4d.

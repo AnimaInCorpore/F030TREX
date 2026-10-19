@@ -65,3 +65,8 @@ TREX/dsp/build/
 /hatari.out.txt
 /hatari.err.txt
 /*-dbg.txt
+
+# Rebuildable live SSI/DMA renderer and hardware package.
+TREX/m68030/TREXPIPE.LOD
+TREX/m68030/TREXPIPE.TOS
+TREX/m68030/ssi_pipe_package/

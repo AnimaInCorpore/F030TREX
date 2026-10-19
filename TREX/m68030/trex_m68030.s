@@ -405,10 +405,10 @@ DSP_STATE_OPEN		= 1
 ; overlays the BUILD-dead tail and owns masks/kill/status through X:$3FFF.
 DSP_X_RESERVE		= 15872
 ; Two resident arrays share external Y: the three-word packed full triangle
-; index list (8,172 words) at $09C0..$29AB and the first 1,905 corner normals
-; (5,715 words) at $29AC..$3FFE.  Neither can start lower: the Falcon maps
+; index list (8,172 words) at $09C0..$29AB and the first 2,857 corner normals
+; (5,714 packed words) at $29AC..$3FFD.  Neither can start lower: the Falcon maps
 ; Y:$0200 upwards onto the same physical words as external P memory, so any
-; array below the program end (P:$091E now; limit P:$09BF) overwrites code.
+; array below the program end (P:$099E now; limit P:$09BF) overwrites code.
 ; See the Y-memory notes in TREX/dsp/trex_dsp.asm.  The Falcon reports 16,127
 ; free Y words before this reservation.
 DSP_Y_RESERVE		= 16120
@@ -428,8 +428,8 @@ DSP_CMD_SET_ANIMATED_FRAME	= 12
 DSP_CMD_LOAD_ANIMATION_GAIT	= 13
 DSP_CMD_APPLY_ANIMATION_TARGET	= 14
 DSP_CMD_FINISH_ANIMATED_FRAME	= 15
-; The DSP's control range: bit 6 set, bit 0 clear.  Only the live SSI
-; transport probe uses it; every other build never issues it.
+; The DSP's control range: bit 6 set, bit 0 clear. SSI mode 1 uses $40
+; for its ramp probe; the live packet mode 2 uses $44.
 CMD_SSI_STREAM		= $40
 
 DSP_ACK_LOAD		= $00700002
@@ -804,7 +804,7 @@ trex_init
 	endc
 
 	ifd	TREX_SSI_DMA
-	; The one build that actually moves bytes over the Falcon SSI.  It runs
+	; The ramp bring-up build moves a diagnostic burst over Falcon SSI. It runs
 	; once, here, with the DSP loaded and idle and no frame in flight, and
 	; hands the channel back before the renderer starts.  Everything the
 	; renderer does afterwards is the unchanged host-port path.
@@ -818,6 +818,10 @@ trex_init
 	; returned to main_loop before the renderer starts.
 	bsr	pio_cal_run
 	bsr	pio_cal_write_results
+	endc
+
+	ifd TREX_SSI_PIPELINE
+	bsr	ssi_packets_init
 	endc
 
 	; These are the state objects a real implementation would pass to the
@@ -882,6 +886,10 @@ trex_dummy_frame
 	; collecting a FINISH ack.  The first collect simply waits the full
 	; transform out; every later one finds it long since done.
 	bsr	dsp_set_frame
+	ifd TREX_SSI_PIPELINE
+	moveq	#0,d0
+	bsr	ssi_packets_queue
+	endc
 
 	; Play the 274 extracted automatic-demo records until a key is pressed,
 	; then hold on frame 273.  The original hands off to PS1 interactive
@@ -1011,6 +1019,11 @@ trex_dummy_frame
 	TimeMark	stat_mark_setframe
 	bsr	dsp_set_frame
 	TimeAdd	stat_mark_setframe,stat_t_setframe
+	ifd TREX_SSI_PIPELINE
+	move.l	frame_number,d0
+	addq.l	#1,d0
+	bsr	ssi_packets_queue
+	endc
 	bsr	gpu_submit_ot
 
 	; Occlusion dump, before anything else touches the frame's state: the
@@ -1053,6 +1066,9 @@ trex_dummy_frame
 	tst.l	stats_flush_enabled
 	beq	.no_stats_flush
 	bsr	trex_write_render_stats
+	ifd TREX_SSI_PIPELINE
+	bsr	ssi_packets_write_status
+	endc
 .no_stats_flush
 
 	; Cconis returns non-zero once a key is waiting.  A headless run never
@@ -1064,6 +1080,10 @@ trex_dummy_frame
 
 	; Swallow the key so it does not land on the desktop after Pterm0.
 	Cconin
+
+	ifd TREX_SSI_PIPELINE
+	bsr	ssi_packets_shutdown
+	endc
 
 	; One animation is still in flight for the frame that will never
 	; render; collect its ack so the DSP is idle and in protocol sync
@@ -2672,6 +2692,12 @@ dsp_upload_uvs
 ; computes chunk N+1 while the host expands chunk N.  The DSP program is
 ; untouched: only the order of host transactions changed.
 dsp_packets_begin
+	ifd TREX_SSI_PIPELINE
+	tst.l	ssi_packets_enabled
+	beq	.begin_pio
+	rts
+.begin_pio
+	endc
 	addq.l	#1,dsp_call_count
 	clr.l	dsp_pipeline_active
 	tst.l	dsp_triangle_stream_ready
@@ -2679,9 +2705,19 @@ dsp_packets_begin
 	; Cross-frame pipelining: the animation for THIS slot's geometry was
 	; sent before the previous frame rasterized; collect its FINISH ack
 	; first.  Without a validly transformed pose there is nothing to build.
+	ifd TREX_SSI_PIPELINE
+	tst.l	ssi_projection_ready
+	beq	.begin_need_finish
+	clr.l	ssi_projection_ready
+	bra	.begin_projected
+.begin_need_finish
+	endc
 	bsr	dsp_finish_frame_wait
 	tst.l	d0
 	beq	.begin_done
+	ifd TREX_SSI_PIPELINE
+.begin_projected
+	endc
 	; The projected vertex copy is only needed by the validator's reference
 	; arithmetic and by the host fallback stream.  If this prefetch fails,
 	; the pipeline stays inactive and the finish pass repeats the fetch for
@@ -2759,7 +2795,12 @@ dsp_packets_begin
 	tst.l	span_validate_enabled
 	bne	.begin_copy_path
 	move.l	#1,dsp_direct_frame
+	ifd	TREX_SSI_PIPELINE
+	move.l	ssi_render_packets,a1
+	lea	16(a1),a1
+	else
 	lea	gpu_packet_buffer+16,a1		; first packet's span slot w4
+	endc
 	move.l	a1,dsp_triangle_output_ptr
 	bra	.begin_path_done
 .begin_copy_path
@@ -2929,7 +2970,11 @@ ssi_row_shadow_write_frame
 .ssi_hatari_map_clear_done
 	endc
 
+	ifd	TREX_SSI_PIPELINE
+	move.l	ssi_render_packets,a5
+	else
 	lea	gpu_packet_buffer,a5
+	endc
 	lea	dsp_triangle_rx_buffer+8,a4
 	move.l	dsp_packet_count_shadow,d7
 	beq	.ssi_rows_finish
@@ -3416,7 +3461,11 @@ ssi_row_shadow_write_packets
 	move.l	dsp_packet_count_shadow,d6
 	beq	.ssi_rows_packets_close
 	subq.l	#1,d6
+	ifd	TREX_SSI_PIPELINE
+	move.l	ssi_render_packets,a5
+	else
 	lea	gpu_packet_buffer,a5
+	endc
 	lea	dsp_triangle_rx_buffer+8,a4
 .ssi_rows_packet_dump_loop
 	lea	ssi_row_shadow_packet_record,a0
@@ -3438,6 +3487,17 @@ ssi_row_shadow_write_packets
 	endc
 
 dsp_packets_finish
+	ifd TREX_SSI_PIPELINE
+	tst.l	ssi_packets_enabled
+	beq	.finish_pio
+	bsr	ssi_packets_wait_frame
+	tst.l	d0
+	bne	.finish_build
+	; A failed DMA transaction has been stopped and its reply drained.
+	; Rebuild this projection through the unchanged host-port commands.
+	bsr	dsp_packets_begin
+.finish_pio
+	endc
 	addq.l	#1,dsp_call_count
 	tst.l	dsp_triangle_stream_ready
 	beq	.finish_shadow
@@ -3467,7 +3527,11 @@ dsp_packets_finish
 	ifd	TREX_SSI_SHADOW
 	bsr	ssi_shadow_finish_frame
 	endc
+	ifd	TREX_SSI_PIPELINE
+	move.l	ssi_render_packets,a1
+	else
 	lea	gpu_packet_buffer,a1
+	endc
 	move.l	a1,gpu_packet_ptr
 	tst.l	dsp_direct_frame
 	beq	.finish_copy_builder
@@ -3580,61 +3644,10 @@ build_host_triangle_stream
 ; fallback never collides with a pending reply.
 ;
 ; Returns D0 = 1 when every chunk completed, or D0 = 0 for the host fallback.
-dsp_drain_chunk_pipeline
-.dsp_cull_chunk
-	; Ack of the chunk in flight; zero words go out.
-	Dsp_BlkUnpacked	dsp_control_tx,#0,dsp_rx_buffer,#2
-	move.l	dsp_rx_buffer,d0
-	cmpi.l	#DSP_ACK_TRIANGLES,d0
-	bne	.dsp_cull_failed
-	; The ack carries the chunk's SURVIVOR count.  It has to: the records
-	; are survivors-only now, and Dsp_BlkUnpacked transfers a word count
-	; fixed before the call, so the reply size must be known first.
-	move.l	dsp_rx_buffer+4,d0
-	cmp.l	dsp_triangle_chunk_count,d0
-	bhi	.dsp_cull_failed		; more survivors than inputs: protocol error
-	move.l	d0,dsp_triangle_chunk_survivors
-	tst.l	d0
-	beq	.dsp_cull_launch_next		; fully culled chunk: nothing to fetch
-
-	move.l	#DSP_CMD_GET_TRIANGLES,dsp_control_tx
-	move.l	d0,d3
-	lsl.l	#4,d3
-	add.l	d0,d3
-	add.l	d0,d3				; eighteen words per survivor record --
-						; BOTH sides of this count are shift-and-
-						; add (the DSP's is at its send loop);
-						; disagreeing sizes deadlock the port
-	addq.l	#2,d3
-	Dsp_BlkUnpacked	dsp_control_tx,#1,dsp_triangle_chunk_rx,d3
-	move.l	dsp_triangle_chunk_survivors,d5
-	move.l	dsp_triangle_chunk_rx,d0
-	cmpi.l	#DSP_ACK_GET_TRIANGLES,d0
-	bne	.dsp_cull_failed
-	move.l	dsp_triangle_chunk_rx+4,d0
-	cmp.l	d5,d0
-	bne	.dsp_cull_failed
-
-.dsp_cull_launch_next
-	; This chunk's records are in the host buffer (or it had none), so the
-	; DSP's output buffer is free: advance the base bookkeeping and launch
-	; the next chunk NOW.  The unpack below then overlaps its compute.
-	move.l	dsp_triangle_input_count,d0
-	move.l	d0,dsp_triangle_unpack_base
-	add.l	dsp_triangle_chunk_count,d0
-	move.l	d0,dsp_triangle_input_count
-	ifd	TREX_SSI_SHADOW
-	bsr	ssi_shadow_append_chunk
-	endc
-	clr.l	dsp_chunk_inflight
-	tst.l	dsp_triangles_remaining
-	beq	.dsp_cull_unpack
-	bsr	dsp_send_build_chunk
-	move.l	#1,dsp_chunk_inflight
-.dsp_cull_unpack
+	macro	DspUnpackChunk
 	move.l	dsp_triangle_chunk_survivors,d5
 	tst.l	d5
-	beq	.dsp_cull_chunk_next
+	beq	\1
 	move.l	dsp_triangle_unpack_base,d6
 	move.l	dsp_triangle_output_ptr,a1
 	lea	dsp_triangle_chunk_rx+8,a2
@@ -3932,6 +3945,62 @@ dsp_drain_chunk_pipeline
 	move.l	dsp_triangle_chunk_survivors,d0
 	add.l	d0,dsp_triangle_output_count
 
+	endm
+
+dsp_drain_chunk_pipeline
+.dsp_cull_chunk
+	; Ack of the chunk in flight; zero words go out.
+	Dsp_BlkUnpacked	dsp_control_tx,#0,dsp_rx_buffer,#2
+	move.l	dsp_rx_buffer,d0
+	cmpi.l	#DSP_ACK_TRIANGLES,d0
+	bne	.dsp_cull_failed
+	; The ack carries the chunk's SURVIVOR count.  It has to: the records
+	; are survivors-only now, and Dsp_BlkUnpacked transfers a word count
+	; fixed before the call, so the reply size must be known first.
+	move.l	dsp_rx_buffer+4,d0
+	cmp.l	dsp_triangle_chunk_count,d0
+	bhi	.dsp_cull_failed		; more survivors than inputs: protocol error
+	move.l	d0,dsp_triangle_chunk_survivors
+	tst.l	d0
+	beq	.dsp_cull_launch_next		; fully culled chunk: nothing to fetch
+
+	move.l	#DSP_CMD_GET_TRIANGLES,dsp_control_tx
+	move.l	d0,d3
+	lsl.l	#4,d3
+	add.l	d0,d3
+	add.l	d0,d3				; eighteen words per survivor record --
+						; BOTH sides of this count are shift-and-
+						; add (the DSP's is at its send loop);
+						; disagreeing sizes deadlock the port
+	addq.l	#2,d3
+	Dsp_BlkUnpacked	dsp_control_tx,#1,dsp_triangle_chunk_rx,d3
+	move.l	dsp_triangle_chunk_survivors,d5
+	move.l	dsp_triangle_chunk_rx,d0
+	cmpi.l	#DSP_ACK_GET_TRIANGLES,d0
+	bne	.dsp_cull_failed
+	move.l	dsp_triangle_chunk_rx+4,d0
+	cmp.l	d5,d0
+	bne	.dsp_cull_failed
+
+.dsp_cull_launch_next
+	; This chunk's records are in the host buffer (or it had none), so the
+	; DSP's output buffer is free: advance the base bookkeeping and launch
+	; the next chunk NOW.  The unpack below then overlaps its compute.
+	move.l	dsp_triangle_input_count,d0
+	move.l	d0,dsp_triangle_unpack_base
+	add.l	dsp_triangle_chunk_count,d0
+	move.l	d0,dsp_triangle_input_count
+	ifd	TREX_SSI_SHADOW
+	bsr	ssi_shadow_append_chunk
+	endc
+	clr.l	dsp_chunk_inflight
+	tst.l	dsp_triangles_remaining
+	beq	.dsp_cull_unpack
+	bsr	dsp_send_build_chunk
+	move.l	#1,dsp_chunk_inflight
+.dsp_cull_unpack
+	DspUnpackChunk .dsp_cull_chunk_next
+
 .dsp_cull_chunk_next
 	; The pool bookkeeping advanced at launch time; loop while a chunk is
 	; still computing on the DSP.
@@ -3944,6 +4013,10 @@ dsp_drain_chunk_pipeline
 	moveq	#0,d0
 	rts
 
+	ifd TREX_SSI_PIPELINE
+	include "TREX/m68030/ssi_packets.s"
+	endc
+
 ; Head-only builder for direct frames (8.2b): the unpack already put the 22
 ; span/level fields into each packet's own slots and parked (index, zkey,
 ; shade) in resolve slots w26..w28.  This pass derives exactly the four head
@@ -3951,7 +4024,11 @@ dsp_drain_chunk_pipeline
 ; nothing else.  The parked slots die when the 3.9c resolve sweep overwrites
 ; them, which is after gpu_submit_ot consumed w2.
 build_gpu_packet_heads
+	ifd	TREX_SSI_PIPELINE
+	move.l	ssi_render_packets,a1
+	else
 	lea	gpu_packet_buffer,a1
+	endc
 	move.l	dsp_triangle_output_count,d7
 	move.l	d7,dsp_packet_count_shadow
 	beq	.build_heads_count
@@ -4459,7 +4536,11 @@ dsp_write_host_shadow
 gpu_open
 	addq.l	#1,gpu_call_count
 	move.l	#1,gpu_state
+	ifd	TREX_SSI_PIPELINE
+	move.l	ssi_render_packets,a0
+	else
 	lea	gpu_packet_buffer,a0
+	endc
 	move.l	a0,gpu_packet_ptr
 
 	; A colour-capable monitor is the only prerequisite left: the mode itself
@@ -4993,7 +5074,11 @@ gpu_submit_ot
 	move.l	#OT_LENGTH,ot_length_shadow
 	lea	ordering_table,a0
 	move.l	a0,gpu_submit_ptr_shadow
+	ifd	TREX_SSI_PIPELINE
+	move.l	ssi_render_packets,a1
+	else
 	lea	gpu_packet_buffer,a1
+	endc
 	lea	gpu_ot_node_buffer,a2
 	move.l	dsp_packet_count_shadow,d7
 	beq	.gpu_submit_ot_done
@@ -5151,7 +5236,11 @@ gpu_rasterize_ot
 	; parks the results in the packet's six resolve slots; the rasterizer
 	; then loads them with one MOVEM.  Minority classes sit below the
 	; DBRA, off the resident straight line.
+	ifd	TREX_SSI_PIPELINE
+	move.l	ssi_render_packets,a1
+	else
 	lea	gpu_packet_buffer,a1
+	endc
 	move.l	dsp_packet_count_shadow,d7
 	subq.l	#1,d7
 	ifd TREX_SSI_HATARI
@@ -5270,6 +5359,26 @@ gpu_rasterize_ot
 	bsr	occl_begin_packet
 	endc
 	bsr	rasterize_packet
+	ifd TREX_SSI_PIPELINE
+	; Keep pending polls outside the large service body. Tail collection still
+	; checks the deadline even if a failed channel never raises completion.
+	tst.l	ssi_packets_enabled
+	beq	.ssi_packet_pending
+	move.l	ssi_packet_phase,d0
+	cmpi.l	#3,d0
+	beq	.ssi_packet_dma_poll
+	cmpi.l	#2,d0
+	bhi	.ssi_packet_pending
+	btst.b	#DSP_HOST_ISR_RXDF,DSP_HOST_ISR
+	beq	.ssi_packet_pending
+	bra	.ssi_packet_service
+.ssi_packet_dma_poll
+	btst.b	#4,$ffff8901.w
+	bne	.ssi_packet_pending
+.ssi_packet_service
+	bsr	ssi_packets_service
+.ssi_packet_pending
+	endc
 	ifd	TREX_OCCL
 	bsr	occl_end_packet
 	endc
@@ -5404,6 +5513,7 @@ ssi_hatari_rasterize_row
 	; discarded texels.  The normal span walker performs this before its
 	; indirect body jump; reproduce that contract for a direct SSI row call.
 	move.l	ssi_dma_hatari_feed_count,d7
+	swap	d7				; pixel bodies subtract from the high-word count
 	 move.l	#1,raster_feed_row
 	 move.l	raster_span_entry,a3
 	 jsr	(a3)
@@ -5704,10 +5814,14 @@ delta_mark_packet
 ; a3 walks the left chain X and a2
 ; the framebuffer row, both loaded from and stored back to the raster_*
 ; state so the second trapezoid half still continues seamlessly.
-; d7 accumulates this half's written
-; pixels and lands on raster_pixel_count once at the end: one add per span
-; plus one subtract per transparent texel replaces the absolute-address
-; read-modify-write the pixel loops used to pay per written pixel.
+; D7 holds this half's pixel count in its high word and the row countdown
+; in its low word.  Clipping bounds the half to 224*240 = 53760 pixels,
+; so word-sized pixel updates cannot carry into the row count.  Swaps expose
+; the pixel word only while pre-counting a span or subtracting a transparent
+; texel.  DBRA advances the low row word without a per-row memory RMW.
+; TREX_ROWCOUNT_REFERENCE keeps the old memory countdown at identical layout
+; to isolate that change.  SSI callbacks enter just the pixel bodies with
+; their high-word pre-count and bypass the DDA/countdown tail.
 ; rasterize_packet reloads its row count after every call and restores the OT
 ; walker's d7 from the stack when the packet is done, so the clobber is safe.
 span_walk_half
@@ -5724,7 +5838,7 @@ span_walk_half
 .span_y_ready
 	; Row-persistent DDA state: the left chain X and the framebuffer row
 	; live in a3/a2 for the whole half instead of taking a memory
-	; read-modify-write per row each.  xr, the UV chain and the row count
+	; read-modify-write per row each.  xr stays in D3; the UV/level chains
 	; stay in memory for want of spare registers.  y_current is never read
 	; inside the loop, so the walked row count advances it once at the end.
 	; Keep both X chains biased by 4095 while they live in registers.  Their
@@ -5752,7 +5866,12 @@ span_walk_half
 	move.l	d0,raster_lvl
 	clr.l	raster_dlvl
 .span_level_live
-	move.l	raster_rows,-(sp)
+	ifgt	SCREEN_WIDTH*SCREEN_HEIGHT-65535
+	fail	"Packed row/pixel counter requires a half below 65536 pixels"
+	endc
+	move.l	raster_rows,d7
+	move.l	d7,-(sp)
+	subq.w	#1,d7
 
 .span_row_loop
 	; Integer span from the 12.12 chain positions: left is ceil(xl) and
@@ -5839,8 +5958,10 @@ span_walk_half
 	else
 	bmi	.span_row_advance		; empty row
 	endc
-	add.l	d4,d7				; pre-count the span as written;
-	addq.l	#1,d7				; transparent texels subtract below
+	swap	d7
+	add.w	d4,d7				; pixel pre-count in the exposed low word
+	addq.w	#1,d7
+	swap	d7				; DBRA owns the low word again
 	; This is the only point the row walker reaches for a non-empty row, so
 	; folding d0/d1 and the row address in here yields exactly the packet's
 	; clipped span box.
@@ -5898,8 +6019,15 @@ span_walk_half
 	move.l	raster_dlvl,d0
 	add.l	d0,raster_lvl
 	adda.w	#FRAMEBUFFER_STRIDE,a2
+	ifd	TREX_ROWCOUNT_REFERENCE
 	subq.l	#1,raster_rows
 	bne	.span_row_loop
+	else
+	dbra	d7,.span_row_loop
+	nop					; same footprint as the reference's SUBQ/BNE
+	nop					; reached only after the half's final row
+	nop
+	endc
 	; Chain state back to memory for the second trapezoid half, and
 	; y_current advances by the complete walked row count in one step.
 	lea	-4095(a3),a3
@@ -5909,13 +6037,18 @@ span_walk_half
 	move.l	a2,raster_fb_row
 	move.l	(sp)+,d0
 	add.l	d0,raster_y_current
+	clr.l	raster_rows			; publish the same consumed state
 .span_walk_done
+	clr.w	d7
+	swap	d7				; return a plain 32-bit pixel count
 	add.l	d7,raster_pixel_count
 	rts
 .span_walk_empty
 	rts
 	ifd TREX_SSI_HATARI
 .span_feed_row_done
+	clr.w	d7
+	swap	d7
 	rts
 	endc
 
@@ -6026,7 +6159,9 @@ span_walk_half
 	dbra	d4,.span_tex_pixel
 	bra	.span_row_advance
 .span_tex_transparent
-	subq.l	#1,d7				; take the pre-count back
+	swap	d7
+	subq.w	#1,d7				; take the pixel pre-count back
+	swap	d7
 	ifd	TREX_OCCL
 	addq.l	#1,occl_drop_count		; only the CCR moves, and the bra ignores it
 	endc
@@ -6120,7 +6255,9 @@ span_walk_half
 	dbra	d4,.span_semi_pixel
 	bra	.span_row_advance
 .span_semi_transparent
-	subq.l	#1,d7				; take the pre-count back
+	swap	d7
+	subq.w	#1,d7				; take the pixel pre-count back
+	swap	d7
 	ifd	TREX_OCCL
 	addq.l	#1,occl_drop_count
 	endc
@@ -7017,6 +7154,9 @@ banner_text
 ; Dsp_LoadProg reads the LOD from the current GEMDOS directory.  The Makefile
 ; copies the runtime LOD next to this executable.
 trex_dsp_lod_path
+	ifd TREX_SSI_PIPELINE
+	dc.b	'TREXPIPE.LOD',0
+	else
 	ifd TREX_SSI_LOOPBACK
 	dc.b	'TREXSSI.LOD',0
 	else
@@ -7049,6 +7189,7 @@ trex_dsp_lod_path
 	dc.b	'TREXDMA.LOD',0
 	else
 	dc.b	'trex_dsp.lod',0
+	endc
 	endc
 	endc
 	endc

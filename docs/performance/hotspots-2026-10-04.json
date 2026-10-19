@@ -1,0 +1,1666 @@
+{
+  "date": "2026-10-04",
+  "scope": "Emulator diagnostic 265-frame prefix; no physical Falcon measurements",
+  "hatari_source": "639fadf6f828cd78133cb9abc640a0ca587b8ace",
+  "runs": {
+    "before-mmu": {
+      "manifest": {
+        "frames": 265,
+        "command": [
+          "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+          "--machine",
+          "falcon",
+          "--cpulevel",
+          "3",
+          "--cpuclock",
+          "16",
+          "--mmu",
+          "true",
+          "--cpu-exact",
+          "true",
+          "--compatible",
+          "true",
+          "--data-cache",
+          "true",
+          "--videl-contention",
+          "false",
+          "--patch-tos",
+          "true",
+          "--fast-boot",
+          "true",
+          "--tos",
+          "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+          "--dsp",
+          "emu",
+          "--memsize",
+          "4",
+          "--ttram",
+          "0",
+          "--monitor",
+          "rgb",
+          "--frameskips",
+          "4",
+          "--sound",
+          "off",
+          "--benchmark",
+          "--confirm-quit",
+          "off",
+          "--log-level",
+          "fatal",
+          "--alert-level",
+          "fatal",
+          "--harddrive",
+          ".",
+          "--auto",
+          "C:\\RUN.TOS",
+          "--run-vbls",
+          "60000"
+        ],
+        "environment": {
+          "SDL_VIDEODRIVER": "dummy"
+        },
+        "inputs": {
+          "binary": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/before.tos",
+            "sha256": "963398264d554721ddd0f0a05f84571d9db72d5744b12e3db0bf683fdcffc67e"
+          },
+          "dsp": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/trex_dsp.lod",
+            "sha256": "bb8b62fd901ed8e65ac65ce0c86889530becf215629fdb1d92b3601aef0edc77"
+          },
+          "hatari": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+            "sha256": "b3279c6de6893a666e8e3c87b65eb4cf69f10f296a098b39272f7757731f1f7d"
+          },
+          "tos": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+            "sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb"
+          }
+        },
+        "host_elapsed_seconds": 157.238,
+        "completed": true
+      },
+      "stats": {
+        "frames": 265,
+        "vbl_start": 582,
+        "vbl_end": 6332,
+        "hz200_start": 18318,
+        "hz200_end": 41296,
+        "t_setframe": 684,
+        "t_packets": 8505,
+        "t_clear": 778,
+        "t_otinsert": 144,
+        "t_raster": 12840,
+        "t_present": 2,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149,
+        "stream_ready": 1,
+        "dsp_state": 1,
+        "video_mode": 1,
+        "monitor": 65536,
+        "dsp_x_avail": 16040,
+        "dsp_y_avail": 16127,
+        "normals": 1,
+        "dc_clear_longs": 0
+      },
+      "frame_ms": 433.54716981132077,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16"
+    },
+    "before-ce": {
+      "manifest": {
+        "frames": 265,
+        "command": [
+          "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+          "--machine",
+          "falcon",
+          "--cpulevel",
+          "3",
+          "--cpuclock",
+          "16",
+          "--mmu",
+          "false",
+          "--cpu-exact",
+          "true",
+          "--compatible",
+          "true",
+          "--data-cache",
+          "true",
+          "--videl-contention",
+          "true",
+          "--patch-tos",
+          "true",
+          "--fast-boot",
+          "true",
+          "--tos",
+          "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+          "--dsp",
+          "emu",
+          "--memsize",
+          "4",
+          "--ttram",
+          "0",
+          "--monitor",
+          "rgb",
+          "--frameskips",
+          "4",
+          "--sound",
+          "off",
+          "--benchmark",
+          "--confirm-quit",
+          "off",
+          "--log-level",
+          "fatal",
+          "--alert-level",
+          "fatal",
+          "--harddrive",
+          ".",
+          "--auto",
+          "C:\\RUN.TOS",
+          "--run-vbls",
+          "60000"
+        ],
+        "environment": {
+          "SDL_VIDEODRIVER": "dummy"
+        },
+        "inputs": {
+          "binary": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/before.tos",
+            "sha256": "963398264d554721ddd0f0a05f84571d9db72d5744b12e3db0bf683fdcffc67e"
+          },
+          "dsp": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/trex_dsp.lod",
+            "sha256": "bb8b62fd901ed8e65ac65ce0c86889530becf215629fdb1d92b3601aef0edc77"
+          },
+          "hatari": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+            "sha256": "b3279c6de6893a666e8e3c87b65eb4cf69f10f296a098b39272f7757731f1f7d"
+          },
+          "tos": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+            "sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb"
+          }
+        },
+        "host_elapsed_seconds": 166.174,
+        "completed": true
+      },
+      "stats": {
+        "frames": 265,
+        "vbl_start": 649,
+        "vbl_end": 8728,
+        "hz200_start": 18587,
+        "hz200_end": 50871,
+        "t_setframe": 874,
+        "t_packets": 8912,
+        "t_clear": 861,
+        "t_otinsert": 241,
+        "t_raster": 21377,
+        "t_present": 1,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149,
+        "stream_ready": 1,
+        "dsp_state": 1,
+        "video_mode": 1,
+        "monitor": 65536,
+        "dsp_x_avail": 16040,
+        "dsp_y_avail": 16127,
+        "normals": 1,
+        "dc_clear_longs": 0
+      },
+      "frame_ms": 609.1320754716982,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16"
+    },
+    "packed-ce": {
+      "manifest": {
+        "frames": 265,
+        "command": [
+          "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+          "--machine",
+          "falcon",
+          "--cpulevel",
+          "3",
+          "--cpuclock",
+          "16",
+          "--mmu",
+          "false",
+          "--cpu-exact",
+          "true",
+          "--compatible",
+          "true",
+          "--data-cache",
+          "true",
+          "--videl-contention",
+          "true",
+          "--patch-tos",
+          "true",
+          "--fast-boot",
+          "true",
+          "--tos",
+          "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+          "--dsp",
+          "emu",
+          "--memsize",
+          "4",
+          "--ttram",
+          "0",
+          "--monitor",
+          "rgb",
+          "--frameskips",
+          "4",
+          "--sound",
+          "off",
+          "--benchmark",
+          "--confirm-quit",
+          "off",
+          "--log-level",
+          "fatal",
+          "--alert-level",
+          "fatal",
+          "--harddrive",
+          ".",
+          "--auto",
+          "C:\\RUN.TOS",
+          "--run-vbls",
+          "60000"
+        ],
+        "environment": {
+          "SDL_VIDEODRIVER": "dummy"
+        },
+        "inputs": {
+          "binary": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/packed.tos",
+            "sha256": "9cc25402f89dd76d09c459c82cef358eb360cdc0d32c7a2d355f471515e75a58"
+          },
+          "dsp": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/trex_dsp.lod",
+            "sha256": "bb8b62fd901ed8e65ac65ce0c86889530becf215629fdb1d92b3601aef0edc77"
+          },
+          "hatari": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+            "sha256": "b3279c6de6893a666e8e3c87b65eb4cf69f10f296a098b39272f7757731f1f7d"
+          },
+          "tos": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+            "sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb"
+          }
+        },
+        "host_elapsed_seconds": 209.344,
+        "completed": true
+      },
+      "stats": {
+        "frames": 265,
+        "vbl_start": 649,
+        "vbl_end": 8767,
+        "hz200_start": 18587,
+        "hz200_end": 51023,
+        "t_setframe": 885,
+        "t_packets": 8909,
+        "t_clear": 848,
+        "t_otinsert": 240,
+        "t_raster": 21533,
+        "t_present": 1,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149,
+        "stream_ready": 1,
+        "dsp_state": 1,
+        "video_mode": 1,
+        "monitor": 65536,
+        "dsp_x_avail": 16040,
+        "dsp_y_avail": 16127,
+        "normals": 1,
+        "dc_clear_longs": 0
+      },
+      "frame_ms": 612.0,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16"
+    },
+    "packed-mmu": {
+      "manifest": {
+        "frames": 265,
+        "command": [
+          "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+          "--machine",
+          "falcon",
+          "--cpulevel",
+          "3",
+          "--cpuclock",
+          "16",
+          "--mmu",
+          "true",
+          "--cpu-exact",
+          "true",
+          "--compatible",
+          "true",
+          "--data-cache",
+          "true",
+          "--videl-contention",
+          "false",
+          "--patch-tos",
+          "true",
+          "--fast-boot",
+          "true",
+          "--tos",
+          "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+          "--dsp",
+          "emu",
+          "--memsize",
+          "4",
+          "--ttram",
+          "0",
+          "--monitor",
+          "rgb",
+          "--frameskips",
+          "4",
+          "--sound",
+          "off",
+          "--benchmark",
+          "--confirm-quit",
+          "off",
+          "--log-level",
+          "fatal",
+          "--alert-level",
+          "fatal",
+          "--harddrive",
+          ".",
+          "--auto",
+          "C:\\RUN.TOS",
+          "--run-vbls",
+          "60000"
+        ],
+        "environment": {
+          "SDL_VIDEODRIVER": "dummy"
+        },
+        "inputs": {
+          "binary": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/packed.tos",
+            "sha256": "9cc25402f89dd76d09c459c82cef358eb360cdc0d32c7a2d355f471515e75a58"
+          },
+          "dsp": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/trex_dsp.lod",
+            "sha256": "bb8b62fd901ed8e65ac65ce0c86889530becf215629fdb1d92b3601aef0edc77"
+          },
+          "hatari": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+            "sha256": "b3279c6de6893a666e8e3c87b65eb4cf69f10f296a098b39272f7757731f1f7d"
+          },
+          "tos": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+            "sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb"
+          }
+        },
+        "host_elapsed_seconds": 191.823,
+        "completed": true
+      },
+      "stats": {
+        "frames": 265,
+        "vbl_start": 582,
+        "vbl_end": 6317,
+        "hz200_start": 18319,
+        "hz200_end": 41234,
+        "t_setframe": 682,
+        "t_packets": 8507,
+        "t_clear": 769,
+        "t_otinsert": 146,
+        "t_raster": 12786,
+        "t_present": 3,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149,
+        "stream_ready": 1,
+        "dsp_state": 1,
+        "video_mode": 1,
+        "monitor": 65536,
+        "dsp_x_avail": 16040,
+        "dsp_y_avail": 16127,
+        "normals": 1,
+        "dc_clear_longs": 0
+      },
+      "frame_ms": 432.35849056603774,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16"
+    },
+    "reference-ce": {
+      "manifest": {
+        "frames": 265,
+        "command": [
+          "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+          "--machine",
+          "falcon",
+          "--cpulevel",
+          "3",
+          "--cpuclock",
+          "16",
+          "--mmu",
+          "false",
+          "--cpu-exact",
+          "true",
+          "--compatible",
+          "true",
+          "--data-cache",
+          "true",
+          "--videl-contention",
+          "true",
+          "--patch-tos",
+          "true",
+          "--fast-boot",
+          "true",
+          "--tos",
+          "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+          "--dsp",
+          "emu",
+          "--memsize",
+          "4",
+          "--ttram",
+          "0",
+          "--monitor",
+          "rgb",
+          "--frameskips",
+          "4",
+          "--sound",
+          "off",
+          "--benchmark",
+          "--confirm-quit",
+          "off",
+          "--log-level",
+          "fatal",
+          "--alert-level",
+          "fatal",
+          "--harddrive",
+          ".",
+          "--auto",
+          "C:\\RUN.TOS",
+          "--run-vbls",
+          "60000"
+        ],
+        "environment": {
+          "SDL_VIDEODRIVER": "dummy"
+        },
+        "inputs": {
+          "binary": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/reference.tos",
+            "sha256": "13fdc9df8a5dc68442bfcbcd25dc22a1511430243d4b9a7306f87a80e3bc5edc"
+          },
+          "dsp": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/trex_dsp.lod",
+            "sha256": "bb8b62fd901ed8e65ac65ce0c86889530becf215629fdb1d92b3601aef0edc77"
+          },
+          "hatari": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+            "sha256": "b3279c6de6893a666e8e3c87b65eb4cf69f10f296a098b39272f7757731f1f7d"
+          },
+          "tos": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+            "sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb"
+          }
+        },
+        "host_elapsed_seconds": 207.409,
+        "completed": true
+      },
+      "stats": {
+        "frames": 265,
+        "vbl_start": 649,
+        "vbl_end": 8801,
+        "hz200_start": 18587,
+        "hz200_end": 51161,
+        "t_setframe": 888,
+        "t_packets": 8909,
+        "t_clear": 853,
+        "t_otinsert": 238,
+        "t_raster": 21675,
+        "t_present": 0,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149,
+        "stream_ready": 1,
+        "dsp_state": 1,
+        "video_mode": 1,
+        "monitor": 65536,
+        "dsp_x_avail": 16040,
+        "dsp_y_avail": 16127,
+        "normals": 1,
+        "dc_clear_longs": 0
+      },
+      "frame_ms": 614.6037735849056,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16"
+    },
+    "pinned-ce": {
+      "manifest": {
+        "frames": 265,
+        "command": [
+          "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+          "--machine",
+          "falcon",
+          "--cpulevel",
+          "3",
+          "--cpuclock",
+          "16",
+          "--mmu",
+          "false",
+          "--cpu-exact",
+          "true",
+          "--compatible",
+          "true",
+          "--data-cache",
+          "true",
+          "--videl-contention",
+          "true",
+          "--patch-tos",
+          "true",
+          "--fast-boot",
+          "true",
+          "--tos",
+          "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+          "--dsp",
+          "emu",
+          "--memsize",
+          "4",
+          "--ttram",
+          "0",
+          "--monitor",
+          "rgb",
+          "--frameskips",
+          "4",
+          "--sound",
+          "off",
+          "--benchmark",
+          "--confirm-quit",
+          "off",
+          "--log-level",
+          "fatal",
+          "--alert-level",
+          "fatal",
+          "--harddrive",
+          ".",
+          "--auto",
+          "C:\\RUN.TOS",
+          "--run-vbls",
+          "60000"
+        ],
+        "environment": {
+          "SDL_VIDEODRIVER": "dummy"
+        },
+        "inputs": {
+          "binary": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/pinned.tos",
+            "sha256": "9445df434a5df483da07dd900b3cb02fbfe4a0503e094b80a0a0a224b1375f6d"
+          },
+          "dsp": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/trex_dsp.lod",
+            "sha256": "bb8b62fd901ed8e65ac65ce0c86889530becf215629fdb1d92b3601aef0edc77"
+          },
+          "hatari": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+            "sha256": "b3279c6de6893a666e8e3c87b65eb4cf69f10f296a098b39272f7757731f1f7d"
+          },
+          "tos": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+            "sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb"
+          }
+        },
+        "host_elapsed_seconds": 225.972,
+        "completed": true
+      },
+      "stats": {
+        "frames": 265,
+        "vbl_start": 649,
+        "vbl_end": 8804,
+        "hz200_start": 18587,
+        "hz200_end": 51173,
+        "t_setframe": 883,
+        "t_packets": 8919,
+        "t_clear": 845,
+        "t_otinsert": 241,
+        "t_raster": 21669,
+        "t_present": 1,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149,
+        "stream_ready": 1,
+        "dsp_state": 1,
+        "video_mode": 1,
+        "monitor": 65536,
+        "dsp_x_avail": 16040,
+        "dsp_y_avail": 16127,
+        "normals": 1,
+        "dc_clear_longs": 0
+      },
+      "frame_ms": 614.8301886792453,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16"
+    },
+    "pinned-mmu": {
+      "manifest": {
+        "frames": 265,
+        "command": [
+          "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+          "--machine",
+          "falcon",
+          "--cpulevel",
+          "3",
+          "--cpuclock",
+          "16",
+          "--mmu",
+          "true",
+          "--cpu-exact",
+          "true",
+          "--compatible",
+          "true",
+          "--data-cache",
+          "true",
+          "--videl-contention",
+          "false",
+          "--patch-tos",
+          "true",
+          "--fast-boot",
+          "true",
+          "--tos",
+          "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+          "--dsp",
+          "emu",
+          "--memsize",
+          "4",
+          "--ttram",
+          "0",
+          "--monitor",
+          "rgb",
+          "--frameskips",
+          "4",
+          "--sound",
+          "off",
+          "--benchmark",
+          "--confirm-quit",
+          "off",
+          "--log-level",
+          "fatal",
+          "--alert-level",
+          "fatal",
+          "--harddrive",
+          ".",
+          "--auto",
+          "C:\\RUN.TOS",
+          "--run-vbls",
+          "60000"
+        ],
+        "environment": {
+          "SDL_VIDEODRIVER": "dummy"
+        },
+        "inputs": {
+          "binary": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/pinned.tos",
+            "sha256": "9445df434a5df483da07dd900b3cb02fbfe4a0503e094b80a0a0a224b1375f6d"
+          },
+          "dsp": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/trex_dsp.lod",
+            "sha256": "bb8b62fd901ed8e65ac65ce0c86889530becf215629fdb1d92b3601aef0edc77"
+          },
+          "hatari": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+            "sha256": "b3279c6de6893a666e8e3c87b65eb4cf69f10f296a098b39272f7757731f1f7d"
+          },
+          "tos": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+            "sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb"
+          }
+        },
+        "host_elapsed_seconds": 209.288,
+        "completed": true
+      },
+      "stats": {
+        "frames": 265,
+        "vbl_start": 582,
+        "vbl_end": 6348,
+        "hz200_start": 18319,
+        "hz200_end": 41361,
+        "t_setframe": 690,
+        "t_packets": 8519,
+        "t_clear": 763,
+        "t_otinsert": 143,
+        "t_raster": 12901,
+        "t_present": 1,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149,
+        "stream_ready": 1,
+        "dsp_state": 1,
+        "video_mode": 1,
+        "monitor": 65536,
+        "dsp_x_avail": 16040,
+        "dsp_y_avail": 16127,
+        "normals": 1,
+        "dc_clear_longs": 0
+      },
+      "frame_ms": 434.75471698113205,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16"
+    },
+    "word-ce": {
+      "manifest": {
+        "frames": 265,
+        "command": [
+          "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+          "--machine",
+          "falcon",
+          "--cpulevel",
+          "3",
+          "--cpuclock",
+          "16",
+          "--mmu",
+          "false",
+          "--cpu-exact",
+          "true",
+          "--compatible",
+          "true",
+          "--data-cache",
+          "true",
+          "--videl-contention",
+          "true",
+          "--patch-tos",
+          "true",
+          "--fast-boot",
+          "true",
+          "--tos",
+          "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+          "--dsp",
+          "emu",
+          "--memsize",
+          "4",
+          "--ttram",
+          "0",
+          "--monitor",
+          "rgb",
+          "--frameskips",
+          "4",
+          "--sound",
+          "off",
+          "--benchmark",
+          "--confirm-quit",
+          "off",
+          "--log-level",
+          "fatal",
+          "--alert-level",
+          "fatal",
+          "--harddrive",
+          ".",
+          "--auto",
+          "C:\\RUN.TOS",
+          "--run-vbls",
+          "60000"
+        ],
+        "environment": {
+          "SDL_VIDEODRIVER": "dummy"
+        },
+        "inputs": {
+          "binary": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/word.tos",
+            "sha256": "cc072f39c48f742a3adb5fd51d6d006025d6531b5959fc448554082a2dd47f82"
+          },
+          "dsp": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/trex_dsp.lod",
+            "sha256": "bb8b62fd901ed8e65ac65ce0c86889530becf215629fdb1d92b3601aef0edc77"
+          },
+          "hatari": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+            "sha256": "b3279c6de6893a666e8e3c87b65eb4cf69f10f296a098b39272f7757731f1f7d"
+          },
+          "tos": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+            "sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb"
+          }
+        },
+        "host_elapsed_seconds": 204.944,
+        "completed": true
+      },
+      "stats": {
+        "frames": 265,
+        "vbl_start": 649,
+        "vbl_end": 9243,
+        "hz200_start": 18587,
+        "hz200_end": 52926,
+        "t_setframe": 893,
+        "t_packets": 8902,
+        "t_clear": 857,
+        "t_otinsert": 233,
+        "t_raster": 23428,
+        "t_present": 1,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149,
+        "stream_ready": 1,
+        "dsp_state": 1,
+        "video_mode": 1,
+        "monitor": 65536,
+        "dsp_x_avail": 16040,
+        "dsp_y_avail": 16127,
+        "normals": 1,
+        "dc_clear_longs": 0
+      },
+      "frame_ms": 647.9056603773585,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16"
+    },
+    "wordref-ce": {
+      "manifest": {
+        "frames": 265,
+        "command": [
+          "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+          "--machine",
+          "falcon",
+          "--cpulevel",
+          "3",
+          "--cpuclock",
+          "16",
+          "--mmu",
+          "false",
+          "--cpu-exact",
+          "true",
+          "--compatible",
+          "true",
+          "--data-cache",
+          "true",
+          "--videl-contention",
+          "true",
+          "--patch-tos",
+          "true",
+          "--fast-boot",
+          "true",
+          "--tos",
+          "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+          "--dsp",
+          "emu",
+          "--memsize",
+          "4",
+          "--ttram",
+          "0",
+          "--monitor",
+          "rgb",
+          "--frameskips",
+          "4",
+          "--sound",
+          "off",
+          "--benchmark",
+          "--confirm-quit",
+          "off",
+          "--log-level",
+          "fatal",
+          "--alert-level",
+          "fatal",
+          "--harddrive",
+          ".",
+          "--auto",
+          "C:\\RUN.TOS",
+          "--run-vbls",
+          "60000"
+        ],
+        "environment": {
+          "SDL_VIDEODRIVER": "dummy"
+        },
+        "inputs": {
+          "binary": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/wordref.tos",
+            "sha256": "f1bef62112a833bfcbfdec54e60f5f5f62b9f228393d152b2cefaed24d728e5e"
+          },
+          "dsp": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/trex_dsp.lod",
+            "sha256": "bb8b62fd901ed8e65ac65ce0c86889530becf215629fdb1d92b3601aef0edc77"
+          },
+          "hatari": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+            "sha256": "b3279c6de6893a666e8e3c87b65eb4cf69f10f296a098b39272f7757731f1f7d"
+          },
+          "tos": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+            "sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb"
+          }
+        },
+        "host_elapsed_seconds": 202.687,
+        "completed": true
+      },
+      "stats": {
+        "frames": 265,
+        "vbl_start": 649,
+        "vbl_end": 8921,
+        "hz200_start": 18587,
+        "hz200_end": 51641,
+        "t_setframe": 892,
+        "t_packets": 8903,
+        "t_clear": 852,
+        "t_otinsert": 236,
+        "t_raster": 22156,
+        "t_present": 0,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149,
+        "stream_ready": 1,
+        "dsp_state": 1,
+        "video_mode": 1,
+        "monitor": 65536,
+        "dsp_x_avail": 16040,
+        "dsp_y_avail": 16127,
+        "normals": 1,
+        "dc_clear_longs": 0
+      },
+      "frame_ms": 623.6603773584906,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16"
+    },
+    "dbra-ce": {
+      "manifest": {
+        "frames": 265,
+        "command": [
+          "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+          "--machine",
+          "falcon",
+          "--cpulevel",
+          "3",
+          "--cpuclock",
+          "16",
+          "--mmu",
+          "false",
+          "--cpu-exact",
+          "true",
+          "--compatible",
+          "true",
+          "--data-cache",
+          "true",
+          "--videl-contention",
+          "true",
+          "--patch-tos",
+          "true",
+          "--fast-boot",
+          "true",
+          "--tos",
+          "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+          "--dsp",
+          "emu",
+          "--memsize",
+          "4",
+          "--ttram",
+          "0",
+          "--monitor",
+          "rgb",
+          "--frameskips",
+          "4",
+          "--sound",
+          "off",
+          "--benchmark",
+          "--confirm-quit",
+          "off",
+          "--log-level",
+          "fatal",
+          "--alert-level",
+          "fatal",
+          "--harddrive",
+          ".",
+          "--auto",
+          "C:\\RUN.TOS",
+          "--run-vbls",
+          "60000"
+        ],
+        "environment": {
+          "SDL_VIDEODRIVER": "dummy"
+        },
+        "inputs": {
+          "binary": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/dbra.tos",
+            "sha256": "d002e5c6e055e27c3cc460c074c573278014b04d95147978b4fa56d4b22b9b40"
+          },
+          "dsp": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/trex_dsp.lod",
+            "sha256": "bb8b62fd901ed8e65ac65ce0c86889530becf215629fdb1d92b3601aef0edc77"
+          },
+          "hatari": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+            "sha256": "b3279c6de6893a666e8e3c87b65eb4cf69f10f296a098b39272f7757731f1f7d"
+          },
+          "tos": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+            "sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb"
+          }
+        },
+        "host_elapsed_seconds": 262.577,
+        "completed": true
+      },
+      "stats": {
+        "frames": 265,
+        "vbl_start": 649,
+        "vbl_end": 8717,
+        "hz200_start": 18587,
+        "hz200_end": 50824,
+        "t_setframe": 885,
+        "t_packets": 8900,
+        "t_clear": 859,
+        "t_otinsert": 236,
+        "t_raster": 21337,
+        "t_present": 0,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149,
+        "stream_ready": 1,
+        "dsp_state": 1,
+        "video_mode": 1,
+        "monitor": 65536,
+        "dsp_x_avail": 16040,
+        "dsp_y_avail": 16127,
+        "normals": 1,
+        "dc_clear_longs": 0
+      },
+      "frame_ms": 608.2452830188679,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16"
+    },
+    "dbraref-ce": {
+      "manifest": {
+        "frames": 265,
+        "command": [
+          "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+          "--machine",
+          "falcon",
+          "--cpulevel",
+          "3",
+          "--cpuclock",
+          "16",
+          "--mmu",
+          "false",
+          "--cpu-exact",
+          "true",
+          "--compatible",
+          "true",
+          "--data-cache",
+          "true",
+          "--videl-contention",
+          "true",
+          "--patch-tos",
+          "true",
+          "--fast-boot",
+          "true",
+          "--tos",
+          "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+          "--dsp",
+          "emu",
+          "--memsize",
+          "4",
+          "--ttram",
+          "0",
+          "--monitor",
+          "rgb",
+          "--frameskips",
+          "4",
+          "--sound",
+          "off",
+          "--benchmark",
+          "--confirm-quit",
+          "off",
+          "--log-level",
+          "fatal",
+          "--alert-level",
+          "fatal",
+          "--harddrive",
+          ".",
+          "--auto",
+          "C:\\RUN.TOS",
+          "--run-vbls",
+          "60000"
+        ],
+        "environment": {
+          "SDL_VIDEODRIVER": "dummy"
+        },
+        "inputs": {
+          "binary": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/dbraref.tos",
+            "sha256": "c54d72c7909abcaf3cb325dce15c5a2e10b1ba4e5e0b9a933e3872810cd24f65"
+          },
+          "dsp": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/trex_dsp.lod",
+            "sha256": "bb8b62fd901ed8e65ac65ce0c86889530becf215629fdb1d92b3601aef0edc77"
+          },
+          "hatari": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+            "sha256": "b3279c6de6893a666e8e3c87b65eb4cf69f10f296a098b39272f7757731f1f7d"
+          },
+          "tos": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+            "sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb"
+          }
+        },
+        "host_elapsed_seconds": 262.694,
+        "completed": true
+      },
+      "stats": {
+        "frames": 265,
+        "vbl_start": 649,
+        "vbl_end": 8817,
+        "hz200_start": 18587,
+        "hz200_end": 51224,
+        "t_setframe": 887,
+        "t_packets": 8910,
+        "t_clear": 852,
+        "t_otinsert": 237,
+        "t_raster": 21730,
+        "t_present": 1,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149,
+        "stream_ready": 1,
+        "dsp_state": 1,
+        "video_mode": 1,
+        "monitor": 65536,
+        "dsp_x_avail": 16040,
+        "dsp_y_avail": 16127,
+        "normals": 1,
+        "dc_clear_longs": 0
+      },
+      "frame_ms": 615.7924528301887,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16"
+    },
+    "dbra-mmu": {
+      "manifest": {
+        "frames": 265,
+        "command": [
+          "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+          "--machine",
+          "falcon",
+          "--cpulevel",
+          "3",
+          "--cpuclock",
+          "16",
+          "--mmu",
+          "true",
+          "--cpu-exact",
+          "true",
+          "--compatible",
+          "true",
+          "--data-cache",
+          "true",
+          "--videl-contention",
+          "false",
+          "--patch-tos",
+          "true",
+          "--fast-boot",
+          "true",
+          "--tos",
+          "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+          "--dsp",
+          "emu",
+          "--memsize",
+          "4",
+          "--ttram",
+          "0",
+          "--monitor",
+          "rgb",
+          "--frameskips",
+          "4",
+          "--sound",
+          "off",
+          "--benchmark",
+          "--confirm-quit",
+          "off",
+          "--log-level",
+          "fatal",
+          "--alert-level",
+          "fatal",
+          "--harddrive",
+          ".",
+          "--auto",
+          "C:\\RUN.TOS",
+          "--run-vbls",
+          "60000"
+        ],
+        "environment": {
+          "SDL_VIDEODRIVER": "dummy"
+        },
+        "inputs": {
+          "binary": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/dbra.tos",
+            "sha256": "d002e5c6e055e27c3cc460c074c573278014b04d95147978b4fa56d4b22b9b40"
+          },
+          "dsp": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/trex_dsp.lod",
+            "sha256": "bb8b62fd901ed8e65ac65ce0c86889530becf215629fdb1d92b3601aef0edc77"
+          },
+          "hatari": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+            "sha256": "b3279c6de6893a666e8e3c87b65eb4cf69f10f296a098b39272f7757731f1f7d"
+          },
+          "tos": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+            "sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb"
+          }
+        },
+        "host_elapsed_seconds": 266.943,
+        "completed": true
+      },
+      "stats": {
+        "frames": 265,
+        "vbl_start": 582,
+        "vbl_end": 6305,
+        "hz200_start": 18320,
+        "hz200_end": 41186,
+        "t_setframe": 692,
+        "t_packets": 8502,
+        "t_clear": 775,
+        "t_otinsert": 123,
+        "t_raster": 12745,
+        "t_present": 1,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149,
+        "stream_ready": 1,
+        "dsp_state": 1,
+        "video_mode": 1,
+        "monitor": 65536,
+        "dsp_x_avail": 16040,
+        "dsp_y_avail": 16127,
+        "normals": 1,
+        "dc_clear_longs": 0
+      },
+      "frame_ms": 431.4339622641509,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16"
+    },
+    "final-ce": {
+      "manifest": {
+        "frames": 265,
+        "command": [
+          "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+          "--machine",
+          "falcon",
+          "--cpulevel",
+          "3",
+          "--cpuclock",
+          "16",
+          "--mmu",
+          "false",
+          "--cpu-exact",
+          "true",
+          "--compatible",
+          "true",
+          "--data-cache",
+          "true",
+          "--videl-contention",
+          "true",
+          "--patch-tos",
+          "true",
+          "--fast-boot",
+          "true",
+          "--tos",
+          "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+          "--dsp",
+          "emu",
+          "--memsize",
+          "4",
+          "--ttram",
+          "0",
+          "--monitor",
+          "rgb",
+          "--frameskips",
+          "4",
+          "--sound",
+          "off",
+          "--benchmark",
+          "--confirm-quit",
+          "off",
+          "--log-level",
+          "fatal",
+          "--alert-level",
+          "fatal",
+          "--harddrive",
+          ".",
+          "--auto",
+          "C:\\RUN.TOS",
+          "--run-vbls",
+          "60000"
+        ],
+        "environment": {
+          "SDL_VIDEODRIVER": "dummy"
+        },
+        "inputs": {
+          "binary": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/dbra.tos",
+            "sha256": "d002e5c6e055e27c3cc460c074c573278014b04d95147978b4fa56d4b22b9b40"
+          },
+          "dsp": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/shift-fold.lod",
+            "sha256": "14789e0af6654096816ae1d0c1dfdf7acc08da7f6edcc53a5fabe3772aff5859"
+          },
+          "hatari": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+            "sha256": "b3279c6de6893a666e8e3c87b65eb4cf69f10f296a098b39272f7757731f1f7d"
+          },
+          "tos": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+            "sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb"
+          }
+        },
+        "host_elapsed_seconds": 283.789,
+        "completed": true
+      },
+      "stats": {
+        "frames": 265,
+        "vbl_start": 649,
+        "vbl_end": 8646,
+        "hz200_start": 18587,
+        "hz200_end": 50541,
+        "t_setframe": 883,
+        "t_packets": 8598,
+        "t_clear": 853,
+        "t_otinsert": 239,
+        "t_raster": 21356,
+        "t_present": 2,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149,
+        "stream_ready": 1,
+        "dsp_state": 1,
+        "video_mode": 1,
+        "monitor": 65536,
+        "dsp_x_avail": 16040,
+        "dsp_y_avail": 16127,
+        "normals": 1,
+        "dc_clear_longs": 0
+      },
+      "frame_ms": 602.9056603773585,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16"
+    },
+    "final-mmu": {
+      "manifest": {
+        "frames": 265,
+        "command": [
+          "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+          "--machine",
+          "falcon",
+          "--cpulevel",
+          "3",
+          "--cpuclock",
+          "16",
+          "--mmu",
+          "true",
+          "--cpu-exact",
+          "true",
+          "--compatible",
+          "true",
+          "--data-cache",
+          "true",
+          "--videl-contention",
+          "false",
+          "--patch-tos",
+          "true",
+          "--fast-boot",
+          "true",
+          "--tos",
+          "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+          "--dsp",
+          "emu",
+          "--memsize",
+          "4",
+          "--ttram",
+          "0",
+          "--monitor",
+          "rgb",
+          "--frameskips",
+          "4",
+          "--sound",
+          "off",
+          "--benchmark",
+          "--confirm-quit",
+          "off",
+          "--log-level",
+          "fatal",
+          "--alert-level",
+          "fatal",
+          "--harddrive",
+          ".",
+          "--auto",
+          "C:\\RUN.TOS",
+          "--run-vbls",
+          "60000"
+        ],
+        "environment": {
+          "SDL_VIDEODRIVER": "dummy"
+        },
+        "inputs": {
+          "binary": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/dbra.tos",
+            "sha256": "d002e5c6e055e27c3cc460c074c573278014b04d95147978b4fa56d4b22b9b40"
+          },
+          "dsp": {
+            "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/shift-fold.lod",
+            "sha256": "14789e0af6654096816ae1d0c1dfdf7acc08da7f6edcc53a5fabe3772aff5859"
+          },
+          "hatari": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+            "sha256": "b3279c6de6893a666e8e3c87b65eb4cf69f10f296a098b39272f7757731f1f7d"
+          },
+          "tos": {
+            "path": "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+            "sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb"
+          }
+        },
+        "host_elapsed_seconds": 262.774,
+        "completed": true
+      },
+      "stats": {
+        "frames": 265,
+        "vbl_start": 582,
+        "vbl_end": 6228,
+        "hz200_start": 18320,
+        "hz200_end": 40881,
+        "t_setframe": 692,
+        "t_packets": 8198,
+        "t_clear": 773,
+        "t_otinsert": 127,
+        "t_raster": 12749,
+        "t_present": 1,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149,
+        "stream_ready": 1,
+        "dsp_state": 1,
+        "video_mode": 1,
+        "monitor": 65536,
+        "dsp_x_avail": 16040,
+        "dsp_y_avail": 16127,
+        "normals": 1,
+        "dc_clear_longs": 0
+      },
+      "frame_ms": 425.6792452830189,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16"
+    }
+  },
+  "dsp_configurations": {
+    "0000100": {
+      "p_last": "095C",
+      "free_words": 99
+    },
+    "0001010": {
+      "p_last": "09A9",
+      "free_words": 22
+    },
+    "0000111": {
+      "p_last": "09B3",
+      "free_words": 12
+    },
+    "1000000": {
+      "p_last": "09B0",
+      "free_words": 15
+    },
+    "0000010": {
+      "p_last": "098B",
+      "free_words": 52
+    },
+    "0000110": {
+      "p_last": "099E",
+      "free_words": 33
+    },
+    "0100010": {
+      "p_last": "09B7",
+      "free_words": 8
+    }
+  },
+  "validation": {
+    "row_fixtures": 26,
+    "frame_hash_count": 512,
+    "frame_hash_equal": true,
+    "frame_hash_sha256": "0a3f2fa18026a943846a6320718fd9dfbb21e7414113ee405dc473d51c4b8ab8",
+    "before_manifest": {
+      "frames": 512,
+      "command": [
+        "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+        "--machine",
+        "falcon",
+        "--cpulevel",
+        "3",
+        "--cpuclock",
+        "16",
+        "--mmu",
+        "false",
+        "--cpu-exact",
+        "true",
+        "--compatible",
+        "true",
+        "--data-cache",
+        "true",
+        "--videl-contention",
+        "true",
+        "--patch-tos",
+        "true",
+        "--fast-boot",
+        "true",
+        "--tos",
+        "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+        "--dsp",
+        "emu",
+        "--memsize",
+        "4",
+        "--ttram",
+        "0",
+        "--monitor",
+        "rgb",
+        "--frameskips",
+        "4",
+        "--sound",
+        "off",
+        "--benchmark",
+        "--confirm-quit",
+        "off",
+        "--log-level",
+        "fatal",
+        "--alert-level",
+        "fatal",
+        "--harddrive",
+        ".",
+        "--auto",
+        "C:\\RUN.TOS",
+        "--run-vbls",
+        "60000"
+      ],
+      "environment": {
+        "SDL_VIDEODRIVER": "dummy"
+      },
+      "inputs": {
+        "binary": {
+          "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/before-hash.tos",
+          "sha256": "3c808cfbeff1efcb48e68865eb211c113177a77630afe64d5fda846abe0bd400"
+        },
+        "dsp": {
+          "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/trex_dsp.lod",
+          "sha256": "bb8b62fd901ed8e65ac65ce0c86889530becf215629fdb1d92b3601aef0edc77"
+        },
+        "hatari": {
+          "path": "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+          "sha256": "b3279c6de6893a666e8e3c87b65eb4cf69f10f296a098b39272f7757731f1f7d"
+        },
+        "tos": {
+          "path": "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+          "sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb"
+        }
+      },
+      "host_elapsed_seconds": 380.332,
+      "completed": true
+    },
+    "after_manifest": {
+      "frames": 512,
+      "command": [
+        "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+        "--machine",
+        "falcon",
+        "--cpulevel",
+        "3",
+        "--cpuclock",
+        "16",
+        "--mmu",
+        "false",
+        "--cpu-exact",
+        "true",
+        "--compatible",
+        "true",
+        "--data-cache",
+        "true",
+        "--videl-contention",
+        "true",
+        "--patch-tos",
+        "true",
+        "--fast-boot",
+        "true",
+        "--tos",
+        "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+        "--dsp",
+        "emu",
+        "--memsize",
+        "4",
+        "--ttram",
+        "0",
+        "--monitor",
+        "rgb",
+        "--frameskips",
+        "4",
+        "--sound",
+        "off",
+        "--benchmark",
+        "--confirm-quit",
+        "off",
+        "--log-level",
+        "fatal",
+        "--alert-level",
+        "fatal",
+        "--harddrive",
+        ".",
+        "--auto",
+        "C:\\RUN.TOS",
+        "--run-vbls",
+        "60000"
+      ],
+      "environment": {
+        "SDL_VIDEODRIVER": "dummy"
+      },
+      "inputs": {
+        "binary": {
+          "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/dbra-hash.tos",
+          "sha256": "e49fb52769564d367bc89b43409331b0a194a80a7d0ea6a03829302a996277f5"
+        },
+        "dsp": {
+          "path": "/Users/saschaspringer/Work/F030TREX/hatari_runs/rowcounter-2026-10-04/bins/shift-fold.lod",
+          "sha256": "14789e0af6654096816ae1d0c1dfdf7acc08da7f6edcc53a5fabe3772aff5859"
+        },
+        "hatari": {
+          "path": "/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari",
+          "sha256": "b3279c6de6893a666e8e3c87b65eb4cf69f10f296a098b39272f7757731f1f7d"
+        },
+        "tos": {
+          "path": "/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos402.img",
+          "sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb"
+        }
+      },
+      "host_elapsed_seconds": 425.933,
+      "completed": true
+    },
+    "ssi_callback_fixtures": 4
+  }
+}

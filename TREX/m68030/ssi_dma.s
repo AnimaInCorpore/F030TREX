@@ -72,6 +72,7 @@
         global  ssi_dma_validate_route
         global  ssi_dma_arm_record
         global  ssi_dma_wait_record
+        global  ssi_dma_poll_record
         global  ssi_dma_invalidate_dcache
         global  ssi_dma_completed_bytes
         global  ssi_dma_wait_ticks
@@ -1224,11 +1225,10 @@ ssi_dma_force_route_super:
 ; Point the owned record channel at an exact byte window and arm it.
 ;
 ; in:  a0 = first byte of the record window, a1 = byte after its last
-; out: d0 = 0 on arm, -1 if unowned/already running/Setbuffer or Buffoper
-;      failed.
+; out: d0 = 0 on arm, -1 if unowned/already running/Setbuffer failed.
 ;
 ; The window is re-declared on every transaction because the transfer is
-; one-shot: Setbuffer latches start/end, Buffoper starts the channel, and the
+; one-shot: Setbuffer latches start/end, one raw write starts the channel, and the
 ; hardware clears record enable itself when the end address is reached.  A
 ; caller that reuses the claim-time window still has to call this, because a
 ; completed one-shot leaves the pointer at the end.
@@ -1248,7 +1248,10 @@ ssi_dma_arm_record:
         bne     .arm_failed
         clr.l   ssi_dma_completed_bytes
         clr.l   ssi_dma_wait_ticks
-        Buffoper #SSI_DMA_RECORD_START
+        ; Select the record address bank while DMA is stopped. Never write
+        ; a saved RUN bit back during a live pointer poll: DMA can complete
+        ; between the read and the restore, which would restart the channel.
+        Supexec ssi_dma_start_record_super
         tst.l   d0
         bne     .arm_failed
         move.l  #1,ssi_dma_running
@@ -1259,6 +1262,20 @@ ssi_dma_arm_record:
 .arm_failed:
         moveq   #-1,d0
         movem.l (sp)+,d1-d7/a0-a6
+        rts
+
+; Nonblocking completion poll for the cooperative packet pipeline.
+; out d0 = 0 complete, -1 pending/not owned. No buffer is read here.
+ssi_dma_poll_record:
+        movem.l d1-d2,-(sp)
+        tst.l ssi_dma_owned
+        beq .poll_unowned
+        bsr ssi_dma_poll_record_super
+        movem.l (sp)+,d1-d2
+        rts
+.poll_unowned:
+        moveq #-1,d0
+        movem.l (sp)+,d1-d2
         rts
 
 ; Wait for the one-shot record window to fill, then stop the channel.
@@ -1297,6 +1314,9 @@ ssi_dma_wait_record:
         ; keep writing behind the validator, and report the distance.
         Buffoper #SSI_DMA_STOP
         clr.l   ssi_dma_running
+        ; Buffoper cleared bit 7. Select the stopped record bank again before
+        ; measuring the rejected window; do not re-enable the channel.
+        Supexec ssi_dma_select_stopped_record_super
         Supexec ssi_dma_poll_record_super
         moveq   #-1,d0
         movem.l (sp)+,d1-d7/a0-a6
@@ -1339,6 +1359,23 @@ ssi_dma_invalidate_dcache_super:
         moveq   #0,d0
         rts
 
+; Re-select the record address bank after Buffoper stopped a timed-out DMA.
+ssi_dma_select_stopped_record_super:
+        move.b SSI_DMA_CONTROL,d1
+        ori.b #SSI_DMA_RECORD_SELECT,d1
+        move.b d1,SSI_DMA_CONTROL
+        moveq #0,d0
+        rts
+
+; Start and select while stopped, then keep all live polls read-only.
+; TOS Buffoper clears the bank selector, so start is one raw write here.
+ssi_dma_start_record_super:
+        move.b SSI_DMA_CONTROL,d1
+        ori.b #SSI_DMA_RECORD_SELECT|SSI_DMA_RECORD_ENABLE,d1
+        move.b d1,SSI_DMA_CONTROL
+        moveq #0,d0
+        rts
+
 ; Supervisor-only record-position poll.  d0 = 0 once the hardware has both
 ; cleared record enable and moved the pointer to the declared end.
 ssi_dma_poll_record_super:
@@ -1346,8 +1383,6 @@ ssi_dma_poll_record_super:
         move.b  SSI_DMA_CONTROL,d1
         andi.w  #$00ff,d1
         move.w  d1,ssi_dma_run_control
-        ori.b   #SSI_DMA_RECORD_SELECT,d1
-        move.b  d1,SSI_DMA_CONTROL
         ; The three count bytes are read separately, so a live channel can
         ; hand back a torn address.  That is why record enable, not the
         ; pointer, is the authoritative half of the completion test: the
@@ -1360,7 +1395,6 @@ ssi_dma_poll_record_super:
         lsl.l   #8,d2
         move.b  SSI_DMA_COUNT_LO,d2
         andi.l  #$00fffffe,d2
-        move.b  ssi_dma_run_control+1,SSI_DMA_CONTROL
         sub.l   ssi_dma_buffer_start,d2
         bcc     .poll_have_bytes
         moveq   #0,d2

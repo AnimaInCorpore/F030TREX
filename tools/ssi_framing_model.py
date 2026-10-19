@@ -7,6 +7,10 @@ is not imported by any build.  Run it directly:
 
     python tools/ssi_stream_model.py
 
+The live SSIPROBE=2 kernel now uses version 1 flags=2: two full 24-bit
+words in three units. This file preserves the original flags=1 padded model
+for older fixtures; tools/verify_ssi_packets.py decodes the live transport.
+
 WHAT IS AND IS NOT PROVEN HERE
 ------------------------------
 The 18-word *packed record* is not invented by this file.  It is the existing

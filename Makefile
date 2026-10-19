@@ -4,10 +4,11 @@ DOSBOX=dosbox
 # leave it out; the SSI bring-up targets set it to 1.  See trex_dsp.asm's
 # "SSI transport probe" block and the P:$09BF ceiling note beside it.
 SSIPROBE=0
+# SSIPROBE=2 is the asynchronous record transport (see OPTIMIZATION.md 7.4c).
 # Assemble the cross-frame window capacity probe (2.4f).  Default OFF since
 # the prelight pass (2.4k) took the program words it used to occupy.  To
 # re-take a window-capacity sweep build WINPROBE=1 OBJLIGHTS=0, which ends
-# exactly at the P:$09BF ceiling (tools/probe_units.py then patches that
+# at P:$09B7, eight words below the ceiling (tools/probe_units.py patches that
 # variant image, not the tracked one); WINPROBE=1 alone no longer fits.
 WINPROBE=0
 # Assemble the host-port per-word calibration burst (CMD_PIO_BURST, 8.2a).
@@ -17,7 +18,7 @@ PIOBURST=0
 # Assemble the 2.3j occlusion-prepass diagnostic counters.  Default OFF since
 # the prelight pass (2.4k) needed their program words; the mode-4 readout
 # keeps its seven-word reply shape and reports zeros.  Rebuild with
-# PREPASSDIAG=1 OBJLIGHTS=0 (P:$09B1) to re-take a 2.3j counter measurement;
+# PREPASSDIAG=1 OBJLIGHTS=0 (P:$09A9) to re-take a 2.3j counter measurement;
 # PREPASSDIAG=1 alone no longer fits.  They are write-only --
 # nothing but mode 4 reads prepass_status+2..+7 -- so dropping them cannot
 # change rendered output, which the frame-100 checkpoint verifies.
@@ -60,7 +61,7 @@ DSPCONF_STAMP=./TREX/dsp/build/dspconf-$(DSPCONF_ID).stamp
 # input.  Hashing the DSP source into the name means an edit also names a file
 # that does not exist yet, so `touch`-then-build inside one second -- which the
 # whole-second comparison reads as up to date -- cannot skip the assembly.
-DSPSRC_ID=$(shell cat ./TREX/dsp/trex_dsp.asm ./src/ioequ.inc 2>/dev/null | shasum -a 256 | cut -c1-8)
+DSPSRC_ID=$(shell cat ./TREX/dsp/trex_dsp.asm ./TREX/dsp/ssi_pkt.asm ./TREX/dsp/ssi_crc.i ./src/ioequ.inc 2>/dev/null | shasum -a 256 | cut -c1-8)
 DSPVARIANT=./TREX/dsp/build/trex_dsp-$(DSPCONF_ID)-$(DSPSRC_ID).lod
 # The ladder image's own name, so measure_phase can never pick up the tracked
 # default by accident: it is the default configuration with PHASEPROBE=1.
@@ -178,7 +179,7 @@ dspconf: $(DSPCONF_STAMP)
 
 trex_dsp_camlights: create_dirs
 	@command -v $(DOSBOX) >/dev/null 2>&1 || { echo "DOSBOX ($(DOSBOX)) not found"; exit 1; }
-	cp ./TREX/dsp/trex_dsp.asm ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE ./TREX/dsp/build/
+	cp ./TREX/dsp/trex_dsp.asm ./TREX/dsp/ssi_pkt.asm ./TREX/dsp/ssi_crc.i ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE ./TREX/dsp/build/
 	$(MAKE) --no-print-directory OBJLIGHTS=0 dspconf
 	grep -q 'OBJLIGHTS	equ	0' ./TREX/dsp/build/dspconf.inc
 	SDL_VIDEODRIVER=dummy $(DOSBOX) $(DOSBOX_FLAGS) -exit ./TREX/dsp/build/BUILD.BAT
@@ -204,16 +205,16 @@ trex_dsp: create_dirs
 ssi_stream_model_test:
 	python3 ./tools/ssi_stream_model.py --self-test
 
-# Live Falcon SSI transport probe.  The ONLY target that claims the sound
-# channel, routes DSP-XMIT to DMA-RECORD and starts the record engine.  It
+# Falcon SSI transport bring-up probe. It claims the sound channel, routes
+# DSP-XMIT to DMA-RECORD and starts record DMA for one burst. It
 # runs one framed burst before the renderer starts and writes ssi_dma.res
 # plus the raw capture ssi_dcap.res.
 trex_m68030_ssi_dma: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_dma.tos ./TREX/m68030/trex_dsp.lod
 
 # Falcon-runnable SSI/DMA transport test package (OPTIMIZATION.md 7.4b).
 #
-# This is the one package that claims the sound channel and starts the record
-# engine on real hardware, so its DSP image is not a detail: CMD_SSI_STREAM
+# The probe package claims the sound channel and starts the record engine;
+# its DSP image is part of the protocol: CMD_SSI_STREAM
 # ($40) exists only with SSIPROBE=1, and an image without it decodes $40 as
 # command_reset.  The binary therefore loads TREXDMA.LOD and this target is
 # what puts the right image under that name -- the tracked trex_dsp.lod is
@@ -612,12 +613,12 @@ TREX_MESH_DEPS = ./TREX/model/trex.o3d ./TREX/model/trex_facenormals.bin \
 # also stops a plain checkout (which makes the .asm look newer) from breaking
 # `make trex_m68030`.  Rebuild the DSP explicitly with
 #   make DOSBOX=/path/to/DOSBox trex_dsp
-$(DSPVARIANT): ./TREX/dsp/trex_dsp.asm ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE $(DSPCONF_STAMP)
+$(DSPVARIANT): ./TREX/dsp/trex_dsp.asm ./TREX/dsp/ssi_pkt.asm ./TREX/dsp/ssi_crc.i ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE $(DSPCONF_STAMP)
 	@command -v $(DOSBOX) >/dev/null 2>&1 || { \
 		echo "DOSBOX ($(DOSBOX)) not found - cannot assemble configuration $(DSPCONF_ID)"; \
 		echo "  install DOSBox, or pass DOSBOX=/path/to/DOSBox"; exit 1; }
 	@rm -f ./TREX/dsp/build/trex_dsp-$(DSPCONF_ID)-*.lod
-	@cp ./TREX/dsp/trex_dsp.asm ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE ./TREX/dsp/build/
+	@cp ./TREX/dsp/trex_dsp.asm ./TREX/dsp/ssi_pkt.asm ./TREX/dsp/ssi_crc.i ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE ./TREX/dsp/build/
 	@SDL_VIDEODRIVER=dummy $(DOSBOX) $(DOSBOX_FLAGS) -exit ./TREX/dsp/build/BUILD.BAT
 	@[ -s ./TREX/dsp/build/trex_dsp.lod ] || { \
 		echo "ERROR: assembly of configuration $(DSPCONF_ID) produced no image"; exit 1; }
@@ -627,7 +628,7 @@ $(DSPVARIANT): ./TREX/dsp/trex_dsp.asm ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./to
 # rebuilds it on the way to a host target, and so a checkout without the DOS
 # toolchain keeps the committed file rather than failing -- that is why the
 # .lod is committed at all.
-./TREX/dsp/trex_dsp.lod: ./TREX/dsp/trex_dsp.asm ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE $(DSPCONF_STAMP)
+./TREX/dsp/trex_dsp.lod: ./TREX/dsp/trex_dsp.asm ./TREX/dsp/ssi_pkt.asm ./TREX/dsp/ssi_crc.i ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./tools/asm56k/ASM56000.EXE ./tools/asm56k/CLDLOD.EXE ./tools/asm56k/DOS4GW.EXE $(DSPCONF_STAMP)
 	@if ! command -v $(DOSBOX) >/dev/null 2>&1; then \
 		echo "DOSBOX ($(DOSBOX)) not found - keeping the checked-in $@"; \
 		echo "  rebuild with: make DOSBOX=/path/to/DOSBox trex_dsp"; \
@@ -662,6 +663,11 @@ $(DSPVARIANT): ./TREX/dsp/trex_dsp.asm ./TREX/dsp/BUILD.BAT ./src/ioequ.inc ./to
 # else below is cheaply regenerable with only node, or is copied
 # from that file by the build.
 clean:
+	rm -f ./TREX/m68030/trex_pipe.tos ./TREX/m68030/trex_pipe_hash.tos
+	rm -f ./TREX/m68030/build/trex_pipe.o ./TREX/m68030/build/trex_pipe.lst
+	rm -f ./TREX/m68030/build/trex_pipe_hash.o ./TREX/m68030/build/trex_pipe_hash.lst
+	rm -f ./TREX/m68030/build/TREXPIPE.o ./TREX/m68030/build/TREXPIPE.lst
+	rm -f ./TREX/m68030/TREXPIPE.TOS ./TREX/m68030/TREXPIPE.LOD
 	rm -f ./TREX/model/trex_facenormals.bin
 	rm -f ./TREX/model/trex_cornernormals.bin
 	rm -f ./TREX/model/trex_opaque.bin
@@ -718,3 +724,40 @@ clean:
 	rm -f ./TREX/m68030/trex_dsp.lod
 	rm -rf $(MEASURE_DIR)
 	rm -f ./TREX/dsp/build/*
+
+# Live packet DMA with cooperative DSP/CPU overlap; does not replace the
+# host-port default before physical-Falcon validation.
+SSI_PIPE_LOD=./TREX/dsp/build/trex_dsp-2000110-$(DSPSRC_ID).lod
+.PHONY: trex_ssi_pipeline
+trex_ssi_pipeline: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_pipe.tos
+	@$(MAKE) --no-print-directory SSIPROBE=2 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=1 PRELIGHT=1 PHASEPROBE=0 trex_dsp
+	cp $(SSI_PIPE_LOD) ./TREX/m68030/TREXPIPE.LOD
+
+./TREX/m68030/build/trex_pipe.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_packets.s ./TREX/m68030/ssi_crc_table.i ./TREX/m68030/ssi_crc_table.bin ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) $< -quiet -Felf -m68030 -DTREX_SSI_PIPELINE -o $@ -L ./TREX/m68030/build/trex_pipe.lst
+
+./TREX/m68030/trex_pipe.tos: ./TREX/m68030/build/trex_pipe.o ./TREX/m68030/build/ssi_dma.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
+# Hash gate uses the actual DMA path; its timings include hashing.
+.PHONY: trex_ssi_pipeline_hash ssi_pipeline_package
+trex_ssi_pipeline_hash: trex_ssi_pipeline ./TREX/m68030/trex_pipe_hash.tos
+
+./TREX/m68030/build/trex_pipe_hash.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_packets.s ./TREX/m68030/ssi_crc_table.i ./TREX/m68030/ssi_crc_table.bin ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) $< -quiet -Felf -m68030 -DTREX_SSI_PIPELINE -DTREX_FRAME_HASH -o $@ -L ./TREX/m68030/build/trex_pipe_hash.lst
+
+./TREX/m68030/trex_pipe_hash.tos: ./TREX/m68030/build/trex_pipe_hash.o ./TREX/m68030/build/ssi_dma.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
+./TREX/m68030/build/TREXPIPE.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_packets.s ./TREX/m68030/ssi_crc_table.i ./TREX/m68030/ssi_crc_table.bin ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) $< -quiet -Felf -m68030 -DTREX_SSI_PIPELINE -DTREX_RUN -DTREX_RELEASE -DTREX_FPS -o $@ -L ./TREX/m68030/build/TREXPIPE.lst
+
+./TREX/m68030/TREXPIPE.TOS: ./TREX/m68030/build/TREXPIPE.o ./TREX/m68030/build/ssi_dma.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
+SSI_PIPE_PKG=./TREX/m68030/ssi_pipe_package
+ssi_pipeline_package: trex_ssi_pipeline ./TREX/m68030/TREXPIPE.TOS
+	mkdir -p $(SSI_PIPE_PKG)
+	cp ./TREX/m68030/TREXPIPE.TOS ./TREX/m68030/TREXPIPE.LOD $(SSI_PIPE_PKG)/
+	cp ./TREX/m68030/SSIPIPE.TXT $(SSI_PIPE_PKG)/README.TXT
+	cd $(SSI_PIPE_PKG) && zip -q -X ../TREXPIPE.ZIP TREXPIPE.TOS TREXPIPE.LOD README.TXT
