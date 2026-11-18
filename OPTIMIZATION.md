@@ -5220,6 +5220,121 @@ python3 tools/measure_frames.py hatari_runs/validate.tos \
 od -A d -t u4 --endian=big hatari_runs/validate/val_stats.res
 ```
 
+### 3.16 Offset-stream consumer probe: 110 ms of rasterizer when spans and texel offsets are given (2026-11-18)
+
+**Question.** If a co-processor delivered, for every span, the first pixel,
+the length, the shade bank and one 16-bit texel offset per pixel, the 68030
+would keep only the texel fetch and the framebuffer write:
+
+```text
+.draw_pixel
+	move.w	(a1)+,d1		; texel offset, V << 8 | U
+	move.b	(0,a5,d1.l),d0		; texel -> palette index
+	move.w	(0,a6,d0.l*2),(a4)+	; shaded colour -> framebuffer
+	dbra	d4,.draw_pixel
+```
+
+What would the rasterizer cost then? This sizes the consumer side only,
+before anything is spent on producing or transporting such a stream.
+
+**Instrument.** `-DTREX_LEGACY_OT -DTREX_OFFSET_PROBE`
+(`make trex_m68030_offset_probe`, `trex_offset.tos` with `TREXLEGA.LOD`). It
+is built on the legacy pipeline because there rasterization is one contiguous
+stage with a known three-way split (3.13).
+
+- **Recording pass.** `offset_record_frame` walks the Ordering Table exactly
+  as the rasterizer is about to and calls `rasterize_packet` for every
+  qualified-opaque packet with the pixel body swapped for a recorder
+  (`.span_record` in `span_walk_half`). The production walker therefore
+  produces the stream itself: per span one word length-1, one long first-pixel
+  address and one word CLUT bank offset, then one word per pixel built by the
+  opaque body's own four instructions; a -1 word ends a packet. The stream
+  position rides the packet's sixth resolve slot.
+- **Consumer.** `offset_draw_packet` draws a recorded packet with the loop
+  above and nothing else per span but three stream reads and one `LEA`. Every
+  other packet -- flat, transparent, or recorded past the buffer guard -- goes
+  through `rasterize_packet` in its turn, so painter's order is unchanged.
+- **Timing.** The recording pass stands in for the co-processor and is booked
+  to the Ordering Table timer; the raster timer covers the resolve sweep and
+  the consuming walk only.
+- **Control.** `offset_probe_enabled` is a data longword;
+  `tools/patch_data_flag.py` sets it to 0 for the unchanged walker at the same
+  linked layout.
+
+The stream buffer is 512 KiB at the very end of BSS, with a 128-KiB guard, so
+no pinned buffer moves; the executable needs 3,600,656 bytes and runs in
+4 MiB. Builds without the define are byte-identical to before.
+
+**Gates.** With the probe on, all **512 frame hashes** match the reference and
+the frame-100 checkpoint is `d89958b3...3d16` on both profiles; every
+265-frame run writes 9,049,666 pixels and ends with 1,149 packets. The picture
+is identical because the walker itself wrote the stream.
+
+**Measured**, identical 265-frame diagnostic prefixes, Hatari `2.6.1-devel
+(Nov 18 2026)`, fork source `c5d5bf34`, one executable per profile pair with
+the flag patched. Raw counters are in
+[`docs/performance/offset-probe-2026-11-18.json`](docs/performance/offset-probe-2026-11-18.json).
+These are emulator measurements, not physical-Falcon timings.
+
+| Raster stage | Cycle-exact, contention on | MMU ledger |
+|---|---:|---:|
+| Walker (flag 0) | 409.74 ms | 246.23 ms |
+| Stream consumer (flag 1) | **110.02 ms** | **82.83 ms** |
+| Difference | **-299.72 ms (-73%)** | **-163.40 ms (-66%)** |
+
+The flag-0 arm is 7.0 and 5.7 ms above the plain legacy build's 402.72 and
+240.55 ms, which is the dispatcher hop, the record-mode test in
+`rasterize_packet` and layout. The recording pass costs the 68030 444 and
+322 ms and is not part of the question; with it the probe's frame is 750.8 and
+590.3 ms.
+
+**What it says.**
+
+- **Three quarters of the rasterizer is not pixels.** Edge stepping, the U/V
+  prestep, the bank select, clipping tests, per-half setup and the per-pixel
+  U/V arithmetic together are 300 ms of 410 on the cycle-exact profile. What
+  remains -- 110 ms -- still contains the resolve sweep, the Ordering Table
+  walk and the packets that are not qualified-opaque.
+- **The stream is large.** The last frame of the prefix needs 131,548 bytes;
+  the last frame of the 512-frame run 82,192. Eight bytes of that per span is
+  this probe's fat header; a real stream could halve the header, not the
+  per-pixel word.
+- **Arithmetic, not measurement:** subtracting the difference from the flag-0
+  frame gives 307 ms (3.3 FPS) cycle-exact and 268 ms (3.7 FPS) on the MMU
+  ledger for the legacy pipeline, *if the stream cost nothing to obtain*.
+
+**What it does not say.** Nothing here prices production or transport, and
+both decide whether this is reachable:
+
+- Stored in ST-RAM first, 80-130 KB per frame is 80-130 ms of wire at the
+  Falcon's 1 MB/s SSI ceiling and four times that at the emulated 250 KB/s
+  (7.4b), and every word crosses the bus twice.
+- Read straight from the host port instead, the per-pixel `(a1)+` becomes a
+  port read. That needs the DSP to stay ahead of the loop with no per-word
+  handshake, the block-gated mode of 7.3a; neither its rate nor its safety is
+  measured.
+- The DSP would have to walk rows and pixels: it has the idle time (4.1e) but
+  no room to buffer the result, so production has to be paced by consumption.
+
+**Disposition.** A probe, not a pipeline: the default is untouched. It moves
+the DSP row stream of 8.1 from "saves two multiplies per row" to "removes most
+of the rasterizer", and makes the transport the whole question.
+
+**Reproduction.**
+
+```sh
+make DOSBOX=/path/to/DOSBox trex_m68030_offset_probe
+python3 tools/measure_frames.py TREX/m68030/trex_offset.tos \
+  TREX/m68030/TREXLEGA.LOD hatari_runs/offset-on-ce --dsp-name TREXLEGA.LOD \
+  --cpu-core cycle-exact --videl-contention on --frames 265 --timeout 2400
+cp TREX/m68030/trex_offset.tos hatari_runs/offset_off.tos
+python3 tools/patch_data_flag.py hatari_runs/offset_off.tos \
+  TREX/m68030/build/trex_offset.lst offset_probe_enabled 0 1
+```
+
+The last stats field (`dc_clear_longs` in `tools/decode_render_stats.py`)
+carries the stream size of the last frame in this build.
+
 ## 4. Work already assigned to the DSP
 
 The current DSP program keeps the static vertex mesh, the packed triangle
@@ -9130,6 +9245,16 @@ The open roadmap, in recommended order (expected effects from the section
     cycle-exact and 363.1 ms / 2.75 FPS on the MMU ledger for the diagnostic
     build, with the previous pipeline kept as `TREX_LEGACY_OT`.  A
     physical-Falcon timing is open.
+
+26. DSP span-and-offset stream. **Consumer ceiling measured, nothing built --
+    see section 3.16.**  A probe that lets the production walker record, per
+    span, the first pixel, the length, the shade bank and one texel offset per
+    pixel, and then draws from that stream with a four-instruction pixel loop,
+    measures the raster stage at **409.7 -> 110.0 ms cycle-exact and
+    246.2 -> 82.8 ms on the MMU ledger**, picture identical over 512 frames.
+    The stream is 80-130 KB per frame.  Producing it on the DSP and getting it
+    to the 68030 -- SSI/DMA into ST-RAM, or block-gated reads straight from the
+    host port (7.3a) -- is unpriced and is the whole question.
 
 ## 11. References
 

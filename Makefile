@@ -560,6 +560,18 @@ trex_m68030_legacy: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_legacy.tos t
 ./TREX/m68030/trex_legacy.tos: ./TREX/m68030/build/trex_legacy.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
+# Offset-stream consumer TIMING PROBE (OPTIMIZATION.md 3.16): the walker
+# records spans and texel offsets, a minimal loop draws from them.  Built on
+# the legacy pipeline; never ships.
+.PHONY: trex_m68030_offset_probe
+trex_m68030_offset_probe: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_offset.tos trex_dsp_legacy
+
+./TREX/m68030/build/trex_offset.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_LEGACY_OT -DTREX_OFFSET_PROBE -o $@ -L ./TREX/m68030/build/trex_offset.lst
+
+./TREX/m68030/trex_offset.tos: ./TREX/m68030/build/trex_offset.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
 ./TREX/m68030/build/trex_framehash.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
 	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_FRAME_HASH -o $@ -L ./TREX/m68030/build/trex_framehash.lst
 
@@ -715,6 +727,7 @@ $(DSPVARIANT): ./TREX/dsp/trex_dsp.asm ./TREX/dsp/ssi_pkt.asm ./TREX/dsp/ssi_crc
 # from that file by the build.
 clean:
 	rm -f ./TREX/m68030/trex_pipe.tos ./TREX/m68030/trex_pipe_hash.tos
+	rm -f ./TREX/m68030/trex_offset.tos ./TREX/m68030/build/trex_offset.o ./TREX/m68030/build/trex_offset.lst
 	rm -f ./TREX/m68030/trex_legacy.tos ./TREX/m68030/TREXLEGA.LOD ./TREX/m68030/build/trex_legacy.o ./TREX/m68030/build/trex_legacy.lst
 	rm -f ./TREX/m68030/trex_stream.tos ./TREX/m68030/build/trex_stream.o ./TREX/m68030/build/trex_stream.lst
 	rm -f ./TREX/m68030/trex_prestep.tos ./TREX/m68030/build/trex_prestep.o ./TREX/m68030/build/trex_prestep.lst

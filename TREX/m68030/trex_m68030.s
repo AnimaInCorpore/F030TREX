@@ -5554,6 +5554,106 @@ gpu_present_frame
 .gpu_present_done
 	rts
 
+	ifd	TREX_OFFSET_PROBE
+	ifnd	TREX_LEGACY_OT
+	fail	"TREX_OFFSET_PROBE is built on the Ordering Table walk; add -DTREX_LEGACY_OT"
+	endc
+; Offset-stream consumer probe (OPTIMIZATION.md 3.16).  It answers what the
+; rasterizer would cost if a co-processor delivered, per span, the first
+; pixel, the length, the shade bank and one texel offset per pixel -- i.e. if
+; the 68030 kept only the texel fetch and the framebuffer write.
+;
+; offset_record_frame walks the Ordering Table exactly as the rasterizer is
+; about to and lets span_walk_half itself record every qualified-opaque
+; packet into offset_stream, so the stream carries the very spans and texel
+; offsets the walker would have drawn.  The picture is therefore identical.
+; offset_draw_packet then draws those packets from the stream; every other
+; packet still goes through rasterize_packet in its turn.
+;
+; offset_probe_enabled is a data longword: 0 runs the unchanged walker in the
+; same linked layout, for an equal-layout A/B through tools/patch_data_flag.py.
+; The recording pass stands in for the co-processor and is timed apart from
+; the raster stage; its cost on the 68030 is not part of the question.
+OFFSET_STREAM_BYTES = 512*1024
+OFFSET_STREAM_GUARD = 128*1024
+
+; Clobbers D0-D7/A0-A6 except what rasterize_packet preserves for the walk.
+offset_record_frame
+	lea	offset_stream,a0
+	move.l	a0,offset_stream_ptr
+	lea	ordering_table,a2
+	move.l	gpu_ot_bucket_max,d0
+	addq.l	#1,d0
+	lsl.l	#2,d0
+	adda.l	d0,a2
+	move.l	gpu_ot_bucket_max,d7
+	sub.l	gpu_ot_bucket_min,d7
+.record_bucket
+	move.l	-(a2),a1
+.record_node
+	move.l	a1,d0
+	beq	.record_next_bucket
+	move.l	4(a1),a3
+	move.l	(a1),a0
+	bsr	offset_record_packet
+	move.l	a3,a1
+	bra	.record_node
+.record_next_bucket
+	dbra	d7,.record_bucket
+	; This frame's stream size rides the otherwise unused delta-clear stat.
+	move.l	offset_stream_ptr,d0
+	sub.l	#offset_stream,d0
+	move.l	d0,dc_clear_longwords
+	rts
+
+; A0 = packet.  Records it when it is qualified-opaque and the stream has
+; room, and leaves the stream position in the packet's sixth resolve slot;
+; a zero slot means "draw through the walker".  Preserves D7/A2/A3.
+offset_record_packet
+	clr.l	GPU_PACKET_RESOLVE+20(a0)
+	move.l	GPU_PACKET_RESOLVE(a0),d0
+	cmpi.l	#span_walk_half\.span_tex_opaque_loop,d0
+	bne	.record_skip
+	move.l	offset_stream_ptr,d0
+	cmpi.l	#offset_stream_end-OFFSET_STREAM_GUARD,d0
+	bhi	.record_skip
+	move.l	d0,GPU_PACKET_RESOLVE+20(a0)
+	move.l	#1,offset_record_mode
+	bsr	rasterize_packet
+	clr.l	offset_record_mode
+	move.l	offset_stream_ptr,a0
+	move.w	#-1,(a0)+		; end of this packet's spans
+	move.l	a0,offset_stream_ptr
+.record_skip
+	rts
+
+; A0 = packet.  Draws it from the stream when one was recorded, otherwise
+; through rasterize_packet.  Preserves D7/A2/A3 like rasterize_packet.
+offset_draw_packet
+	tst.l	offset_probe_enabled
+	beq	rasterize_packet
+	move.l	GPU_PACKET_RESOLVE+20(a0),d0
+	beq	rasterize_packet
+	move.l	d0,a1
+	move.l	GPU_PACKET_RESOLVE+4(a0),a5		; texture page
+	move.l	GPU_PACKET_RESOLVE+8(a0),a0		; tint's bank-zero CLUT base
+	moveq	#0,d0
+	moveq	#0,d1
+.draw_span
+	move.w	(a1)+,d4
+	bmi	.draw_done
+	move.l	(a1)+,a4
+	move.w	(a1)+,d2
+	lea	(0,a0,d2.w),a6
+.draw_pixel
+	move.w	(a1)+,d1		; texel offset, V << 8 | U
+	move.b	(0,a5,d1.l),d0		; texel -> palette index
+	move.w	(0,a6,d0.l*2),(a4)+		; shaded colour -> framebuffer
+	dbra	d4,.draw_pixel
+	bra	.draw_span
+.draw_done
+	rts
+	endc
 ; Walk the OT from far to near and invoke the software triangle backend for
 ; every linked packet.  The packet/node format is deliberately independent of
 ; the eventual Videl presentation mode, so this can later be replaced by a
@@ -5721,6 +5821,19 @@ gpu_rasterize_ot
 .gpu_raster_ot_continue
 	endc
 
+	ifd	TREX_OFFSET_PROBE
+	tst.l	offset_probe_enabled
+	beq	.offset_probe_off
+	; The resolve sweep so far stays in the raster stage.  The recording
+	; pass is what a DSP would do, so it is booked to OT insertion and the
+	; raster timer restarts for the walk that consumes the stream.
+	TimeAdd	stat_mark_raster,stat_t_raster
+	TimeMark	stat_mark_otinsert
+	bsr	offset_record_frame
+	TimeAdd	stat_mark_otinsert,stat_t_otinsert
+	TimeMark	stat_mark_raster
+.offset_probe_off
+	endc
 	lea	ordering_table,a2
 	move.l	gpu_ot_bucket_max,d0
 	addq.l	#1,d0
@@ -5740,7 +5853,11 @@ gpu_rasterize_ot
 	ifd	TREX_OCCL
 	bsr	occl_begin_packet
 	endc
+	ifd	TREX_OFFSET_PROBE
+	bsr	offset_draw_packet
+	else
 	bsr	rasterize_packet
+	endc
 	ifd TREX_SSI_PIPELINE
 	; Keep pending polls outside the large service body. Tail collection still
 	; checks the deadline even if a failed channel never raises completion.
@@ -5939,6 +6056,12 @@ rasterize_packet
 	; here once per packet.
 	movem.l	GPU_PACKET_RESOLVE(a0),d1-d5
 	move.l	d1,raster_span_entry
+	ifd	TREX_OFFSET_PROBE
+	tst.l	offset_record_mode
+	beq	.offset_no_record
+	move.l	#span_walk_half\.span_record,raster_span_entry
+.offset_no_record
+	endc
 	move.l	d2,a5
 	move.l	d3,raster_clut_tint_base
 	move.w	d3,raster_flat_color
@@ -6682,6 +6805,36 @@ span_walk_half
 	dbra	d4,.span_flat_loop
 	bra	.span_row_advance
 
+	ifd	TREX_OFFSET_PROBE
+	; ---- offset-stream recorder (OPTIMIZATION.md 3.16) ----
+	; Entered like any pixel body: D4 = span length - 1, A4 = first pixel,
+	; A6 = this row's CLUT bank, D5/D6 = prestepped U/V, A0/A1 = du/dx and
+	; dv/dx.  Instead of drawing it appends one span to the stream:
+	;   word  length - 1
+	;   long  address of the first pixel
+	;   word  CLUT bank offset from the tint's bank zero
+	;   then one word per pixel, V integer << 8 | U integer
+	; with the index built by the opaque body's own four instructions.
+.span_record
+	move.l	a4,d0
+	move.l	offset_stream_ptr,a4
+	move.w	d4,(a4)+
+	move.l	d0,(a4)+
+	move.l	a6,d0
+	sub.l	raster_clut_tint_base,d0
+	move.w	d0,(a4)+
+.span_record_pixel
+	move.w	d6,d1
+	move.w	d5,d0
+	lsr.w	#8,d0
+	move.b	d0,d1
+	move.w	d1,(a4)+
+	add.l	a0,d5
+	add.l	a1,d6
+	dbra	d4,.span_record_pixel
+	move.l	a4,offset_stream_ptr
+	bra	.span_row_advance
+	endc
 	; ---- semitransparent textured span ----
 	; Back-to-front painter's order makes the destination read correct.
 	; STP-flagged texels blend 50/50; others write opaquely.  D4 is the
@@ -7766,6 +7919,12 @@ val_stats_path
 ; GET_VERTICES again, which the record pipeline otherwise never needs.
 span_validate_enabled
 	dc.l	0
+	ifd	TREX_OFFSET_PROBE
+; 1 = record and draw from the offset stream; 0 = the unchanged walker at the
+; same linked layout.
+offset_probe_enabled
+	dc.l	1
+	endc
 	ifd	TREX_STREAM_DRAW
 ; 1 = fetch ahead and draw while the DSP computes; 0 = draw each chunk
 ; completely before fetching the next.  A data longword so
@@ -9658,6 +9817,18 @@ fps_last_tick
 fps_text
 	ds.b	FPS_TEXT_CHARS
 	even
+	endc
+
+	ifd	TREX_OFFSET_PROBE
+; Offset-stream probe state, appended after every other allocation so no
+; pinned buffer moves.
+offset_record_mode
+	ds.l	1
+offset_stream_ptr
+	ds.l	1
+offset_stream
+	ds.b	OFFSET_STREAM_BYTES
+offset_stream_end
 	endc
 
 	end
