@@ -610,6 +610,20 @@ trex_m68030_hires: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires.tos tre
 ./TREX/m68030/trex_hires.tos: ./TREX/m68030/build/trex_hires.o ./TREX/m68030/build/ssi_dma4.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
+# Viewing build of the 640x400 pair: -DTREX_RUN zeroes the two capture
+# longwords and drops the final stats flush, so nothing is written to disk
+# (the measured trex_hires.tos rewrites render_stats.res every frame).  The
+# dropped BSR shifts the code after it, as in trex_run.tos, so no timing is
+# taken from it.
+.PHONY: trex_m68030_hires_run
+trex_m68030_hires_run: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires_run.tos trex_dsp_hires
+
+./TREX/m68030/build/trex_hires_run.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_DELTA_DSP -DTREX_RUN -o $@ -L ./TREX/m68030/build/trex_hires_run.lst
+
+./TREX/m68030/trex_hires_run.tos: ./TREX/m68030/build/trex_hires_run.o ./TREX/m68030/build/ssi_dma4.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
 # The clear-overlap probe (OPTIMIZATION.md 2.5a) on the 640x400 build.
 # Diagnostic only, never timed; fbseq.res is 512,000 bytes a frame.
 .PHONY: trex_m68030_hires_fbseq

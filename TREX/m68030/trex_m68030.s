@@ -343,6 +343,23 @@ CLUT_BANK_COUNT		= SHADE_LEVELS*SHADE_TINTS
 ; table now carries a separate factor per colour channel, and its dark end sits
 ; at 21/64 and 13/64, which four bits cannot resolve.
 SHADE_RAMP_SHIFT	= 6
+; channel * ramp factor -> shaded 5-bit channel, leaving Z clear exactly when
+; the result is zero (the callers' black-floor test follows).  The 640x400
+; build lifts every level by half, clamped at full, on request: it read too
+; dark there (OPTIMIZATION.md 6.6a).  Runs once per CLUT entry, never per pixel.
+	macro	SHADE_GAIN
+	ifd	TREX_HIRES
+	mulu.w	#3,\1
+	lsr.l	#SHADE_RAMP_SHIFT+1,\1
+	cmpi.l	#31,\1
+	bls	.\@ok
+	moveq	#31,\1
+.\@ok
+	tst.l	\1
+	else
+	lsr.l	#SHADE_RAMP_SHIFT,\1
+	endc
+	endm
 ; All SHADE_LEVELS banks of one texture page, indexed by page.
 TIM_FALCON_CLUT_BANK_BYTES	= TIM_FALCON_CLUT_PAGE_BYTES*CLUT_BANK_COUNT
 TIM_FALCON_OPAQUE_CLUT_BANK_BYTES = TIM_FALCON_OPAQUE_CLUT_PAGE_BYTES*CLUT_BANK_COUNT
@@ -480,11 +497,15 @@ ANIMATION_MATRICES	= 32
 ; cannot be carried over directly -- its 640x240 pixels are half as wide as
 ; tall, and that squeeze is undone by the display, not by the projection.
 	ifd	TREX_HIRES
-; The default's projection at this mode's pixel pitch: 640 pixels span the
-; 256-pixel width (746 * 2.5) and 400 interlaced lines are half as tall as
-; the default's (933 * 2).  The framing is the default build's, except that
-; 400 half-height lines show 200 of its 224 lines' height.
-PS1_PROJECTION_X	= 1865
+; Vertical: 400 interlaced lines are half as tall as the default's 224, so
+; 933 * 2.  Horizontal: on request, the real-TV pixel aspect of this mode
+; rather than the default build's "320 square pixels" convention (which
+; gives 1865).  From TOS's timing, 640 pixels at 16 MHz fill 40 us of a
+; ~52 us visible line on a 4:3 set showing ~576 interlaced lines, so a pixel
+; is ~0.92 as wide as it is tall and 1866 / 0.92 ~ 2020.  An estimate from
+; the timing, not measured on a TV; Hatari draws square pixels, so the model
+; looks ~8% too wide there.  OPTIMIZATION.md 6.6a.
+PS1_PROJECTION_X	= 2020
 PS1_PROJECTION_Y	= 1866
 	else
 PS1_PROJECTION_X	= 746
@@ -496,7 +517,13 @@ PS1_PROJECTION_Y	= 933
 ; shot and ending included, not only the closest stretch a per-frame floor
 ; would target.  Chosen by direct comparison in Hatari against 2000, 5000
 ; and 7000.
+	ifd	TREX_HIRES
+; The 640x400 build sits further back still, chosen on request after a
+; Hatari viewing of 9000 at this resolution (OPTIMIZATION.md 6.6a).
+PS1_VIEWPOINT_Z		= 12000
+	else
 PS1_VIEWPOINT_Z		= 9000
+	endc
 ; Deliberate additions for the held state, not source values: the source
 ; hands off to interactive control at frame 273, this port holds there (see
 ; trex_dummy_frame).  OPTIMIZATION.md 4.3a has the reasoning and the Hatari
@@ -5837,7 +5864,7 @@ shade_falcon_color
 	andi.l	#$1f,d2
 	beq	.shade_red_ready		; black channel stays black
 	mulu.w	(a4),d2
-	lsr.l	#SHADE_RAMP_SHIFT,d2
+	SHADE_GAIN	d2
 	bne	.shade_red_ready
 	moveq	#1,d2				; darkest visible instead of black
 .shade_red_ready
@@ -5850,7 +5877,7 @@ shade_falcon_color
 	andi.l	#$1f,d3
 	beq	.shade_green_ready
 	mulu.w	2(a4),d3
-	lsr.l	#SHADE_RAMP_SHIFT,d3
+	SHADE_GAIN	d3
 	bne	.shade_green_ready
 	moveq	#1,d3
 .shade_green_ready
@@ -5862,7 +5889,7 @@ shade_falcon_color
 	andi.l	#$1f,d3
 	beq	.shade_blue_ready
 	mulu.w	4(a4),d3
-	lsr.l	#SHADE_RAMP_SHIFT,d3
+	SHADE_GAIN	d3
 	bne	.shade_blue_ready
 	moveq	#1,d3
 .shade_blue_ready
@@ -9176,12 +9203,26 @@ shade_ramp_table
 ; face's own light colour: its luminance picks the brightness level, its R/G
 ; ratio picks the tint class.
 dsp_light_direction
+	ifd	TREX_HIRES
+	; On request, each light 15 degrees higher than the source's (azimuth
+	; and length kept): key 44.4 -> 59.4, back 26.1 -> 41.1, fill -11.1 ->
+	; +3.9 degrees of elevation.  The brightest reachable sum of clamped
+	; dots is unchanged (red 1.515, green 1.041), so the normalisation
+	; above still holds.  OPTIMIZATION.md 6.6a.
+	dc.l	$000df6e1,$00876a7e,$00ba2d9b	; red   key
+	dc.l	$00084235,$00db3da0,$00d6b4f9	; red   back
+	dc.l	$00f5fe22,$00fc847e,$00320954	; red   fill
+	dc.l	$0007e2c1,$00bbe7ce,$00d89239	; green key
+	dc.l	$00084235,$00db3da0,$00d6b4f9	; green back
+	dc.l	$00f5fe22,$00fc847e,$00320954	; green fill
+	else
 	dc.l	$00139bf6,$009df432,$009df432	; red   key
 	dc.l	$0009d7d3,$00e76471,$00cec8e2	; red   back
 	dc.l	$00f6282d,$0009d7d3,$0031371e	; red   fill
 	dc.l	$000b12cd,$00c8a1fe,$00c8a1fe	; green key
 	dc.l	$0009d7d3,$00e76471,$00cec8e2	; green back
 	dc.l	$00f6282d,$0009d7d3,$0031371e	; green fill
+	endc
 	dc.l	$002aa800,$00199800		; PS1 ambient, red and green
 
 present_enabled

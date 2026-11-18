@@ -99,9 +99,10 @@ prefix, with all 512 frame hashes identical to the reference. The plain
 draw-order pipeline (`TREX_PLAIN_ORDER`, section 4.1g) measured 540.9 ms and
 363.1 ms on the same two profiles. An opt-in 640x400 interlaced pair (TOS's
 own true-colour RGB mode, rendered in full, 14 MiB of ST-RAM; section 6.6a)
-measured **681.7 ms / 1.47 FPS** and **613.1 ms / 1.63 FPS**, and with the
-band delta clear marked by the DSP (sections 2.5b and 2.5c) **648.3 ms /
-1.54 FPS** and **583.5 ms / 1.71 FPS**; it is not the default. Everything below this paragraph in
+measured **681.7 ms / 1.47 FPS** and **613.1 ms / 1.63 FPS**, with the band
+delta clear marked by the DSP (sections 2.5b and 2.5c) 648.3 and 583.5 ms,
+and after its viewing-distance, brightness, light and aspect tuning (6.6a)
+**616.4 ms / 1.62 FPS** and **561.7 ms / 1.78 FPS**; it is not the default. Everything below this paragraph in
 section 2, and every section outside 4.1e-4.1g and 7.4g-7.4h, was measured on
 the previous index-order pipeline, which `TREX_LEGACY_OT` still builds and
 which measures 599.7 ms and 425.7 ms. No physical Falcon has run either
@@ -620,10 +621,14 @@ readback stage.
 `TREX_RUN.TOS`, assembled from the same source with `-DTREX_RUN`: both
 capture flags are zero, so the frame loop performs no GEMDOS traffic and only
 a keypress exit writes one final `render_stats.res` through `trex_shutdown`.
-The conditional keeps the same `dc.l` sizes on both branches, so the binary
-is layout-identical to the measured `TREX_M68.TOS` except for those two data
-longwords — `cmp -l` reports exactly two differing bytes — and every timing
-in this document carries over to the viewing build.  Measurement and
+The conditional keeps the same `dc.l` sizes on both branches. **Corrected
+2026-11-18:** the binary is no longer layout-identical to the measured one.
+`-DTREX_RUN` now also drops `trex_shutdown`'s final `bsr
+trex_write_render_stats`, and those four bytes shift everything after them:
+`cmp -l` reports 4,097 differing bytes between `trex_m68030.tos` and
+`trex_run.tos` (4,186 for the 640x400 pair). Timings in this document
+therefore do not carry over to a viewing build byte for byte; take none
+from it.  Measurement and
 regression runs keep using `TREX_M68.TOS`, whose per-frame stats flush is
 what makes interrupted runs comparable in the first place.
 
@@ -7271,10 +7276,12 @@ both squeezed by 0.8 against a real Falcon.
 
 ### 6.6a 640x400 interlaced: opt-in, 681.7 ms (2026-11-18)
 
-**Update (2.5b, 2.5c):** this build now arms the band delta clear with the
-DSP marking the bands and measures **648.3 ms / 1.54 FPS** cycle-exact and
-**583.5 ms / 1.71 FPS** on the MMU ledger. The figures below are the
-unarmed state in which it was first measured.
+**Update (2.5b, 2.5c, tuning below):** this build now arms the band delta
+clear with the DSP marking the bands and has its own viewing distance,
+brightness, light elevation and horizontal focal length; it measures
+**616.4 ms / 1.62 FPS** cycle-exact and **561.7 ms / 1.78 FPS** on the MMU
+ledger. The figures below are the untuned, unarmed state in which it was
+first measured, and its geometry paragraph describes focal 1865.
 
 `make DOSBOX=/path/to/DOSBox trex_m68030_hires` builds an opt-in pair that
 renders the whole of a **640x400 interlaced true-colour** RGB/TV mode:
@@ -7414,6 +7421,56 @@ python3 tools/measure_frames.py TREX/m68030/trex_hires.tos \
   --memsize 14 --cpu-core cycle-exact --videl-contention on --frames 265 \
   --timeout 6000
 ```
+
+#### 6.6a.1 Tuning for this build, on request (2026-11-18)
+
+Four picture settings were changed for `TREX_HIRES` only, each after a
+viewing in Hatari; the default and release builds are byte-identical to
+before.
+
+- **Viewing distance**: `PS1_VIEWPOINT_Z` 12,000 instead of 9,000, so the
+  model is about a quarter smaller on screen.
+- **Brightness**: `SHADE_GAIN` scales every channel of every preshaded
+  level by 1.5, clamped at 31, inside `shade_falcon_color` -- once per CLUT
+  entry, never per pixel. Highlights saturate earlier than at 240x224.
+- **Lights**: each of the three PS1 lights 15 degrees higher (azimuth and
+  length kept): key 44.4 -> 59.4, back 26.1 -> 41.1, fill -11.1 -> +3.9
+  degrees of elevation. A rigid tilt of the whole rig was rejected because
+  it would have moved the fill light, which sits behind the model, further
+  down. The brightest reachable sum of clamped dots is unchanged (red 1.515,
+  green 1.041), so the normalisation holds; the tint-class thresholds and
+  the shade ramp were fitted to the source light directions and were not
+  refitted.
+- **Horizontal focal length 2020** instead of 1865. 1865 carried the
+  default build's convention that 320 pixels at 8 MHz are square. From
+  TOS's own timing, 640 pixels at 16 MHz fill 40 us of a ~52 us visible line
+  on a 4:3 set showing ~576 interlaced lines, so this mode's pixel is ~0.92
+  as wide as it is tall and 1866 / 0.92 ~ 2020. **Estimate from the timing,
+  not measured on a TV.** Hatari draws square pixels, so there the model now
+  looks ~8% too wide; it is meant to be right on a real set.
+
+**Measured** after all four, identical 265-frame prefixes, 14 MiB, the same
+emulator binary as above (emulator only):
+
+| 640x400 build | Cycle-exact, contention on | MMU ledger |
+|---|---:|---:|
+| Before tuning (2.5c, DSP-marked bands) | 648.3 ms / 1.54 FPS | 583.5 ms / 1.71 FPS |
+| **Tuned** | **616.4 ms / 1.62 FPS** | **561.7 ms / 1.78 FPS** |
+
+Cycle-exact stages: set frame 13.3, packet 443.5, clear 23.4, raster
+136.0 ms. 141,213 pixels a frame (160,686 before; the smaller model draws
+fewer), 540 survivors in the last frame, 233.7 KB of stream a frame (largest
+420,604 bytes). The frame-sequence probe with the full clear and with the
+DSP-marked bands wrote byte-identical dumps for all 265 frames; frame 100 is
+`f8781fbf...630e`. Most of the gain is the smaller model; the brightness and
+lights cost nothing per pixel, and the wider projection draws a few more.
+Raw counters in
+[`docs/performance/hires-tuning-2026-11-18.json`](docs/performance/hires-tuning-2026-11-18.json).
+
+**Viewing build.** `make trex_m68030_hires_run` builds `trex_hires_run.tos`
+(`-DTREX_RUN`): no per-frame `render_stats.res`, no frame-100 dumps and no
+final flush, so the emulated hard disk stays idle while watching. No timing
+is taken from it (see 2.1 on why it is not layout-identical).
 
 ### 6.7 Texture and CLUT reads
 
