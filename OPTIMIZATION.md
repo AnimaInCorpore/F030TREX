@@ -5335,6 +5335,20 @@ python3 tools/patch_data_flag.py hatari_runs/offset_off.tos \
 The last stats field (`dc_clear_longs` in `tools/decode_render_stats.py`)
 carries the stream size of the last frame in this build.
 
+**Since 7.4g the probe records the wire format.** A span is now two
+sixteen-bit units and one per pixel -- `(tint << 4 | level) << 8 | length - 1`,
+`y << 8 | x`, texel offsets -- instead of the eight-byte header measured
+above, and the draw loop is `span_stream_draw`, shared with the stream
+build. In that format the 265-frame prefix records 99.4 KB per frame
+(largest frame 170.2 KB, 911 triangles and 8,168 spans per frame); the
+eight-byte header had measured 132.1 KB. `offstat.res` holds six
+longwords -- frames, bytes summed, bytes of the largest frame, spans
+summed, spans of the largest frame, recorded packets summed -- and
+`spanstrm.res` the checkpoint frame's stream, which is the reference
+`tools/compare_span_stream.py` holds the DSP's stream against. The
+picture is unchanged (frame 100 `d89958b3...3d16`, 9,049,666 pixels); the
+timings above were taken with the eight-byte header and were not re-taken.
+
 ## 4. Work already assigned to the DSP
 
 The current DSP program keeps the static vertex mesh, the packed triangle
@@ -8000,7 +8014,7 @@ nine CPU clocks, per unit** on that profile. The CRC is therefore 12% of the
 - **This is the first MMU-ledger measurement of the live pipeline**:
   539.4 against 426.6 ms. 7.4d measured the cycle-exact profile only.
 
-**Inference, not measurement.** 57.5 KB per frame at the emulated 250 KB/s
+**Inference, not measurement -- confirmed by measurement in 7.4f.** 57.5 KB per frame at the emulated 250 KB/s
 structural rate of 7.4b is about 230 ms of wire per frame, and the transmit
 of each chunk is serial with its BUILD and with the host launching the next
 one. That makes the emulated wire the largest single term of the chunk cycle,
@@ -8027,6 +8041,290 @@ python3 tools/measure_frames.py TREX/m68030/trex_pipe_nocrc.tos \
 
 Repeat the last command for `trex_pipe.tos` and `pio.tos`, and without the
 two profile options for the MMU ledger.
+
+### 7.4f Four record tracks: the route at 0.8 MB/s, and the packet pipeline was wire-bound (2026-11-18)
+
+7.4b measured the route at 245 KB/s and 7.4e inferred that the live packet
+pipeline of 7.4d is bound by that rate. Both are settled here by changing one
+number.
+
+**The lever.** The route was brought up with `Settracks(0, 0)`, one track. The
+Crossbar clocks handshaked DSP-XMIT at `sample rate x tracks x 2` words a
+second, so one track at the 32 MHz clock and prescale 1 is 62,500 x 2 =
+125,000 words/s = 250 KB/s, and four tracks are 500,000 words/s = 1 MB/s,
+the Falcon's specified ceiling. `-DTREX_SSI_TRACKS4` assembles
+`ssi_dma.s` with `Settracks(3, 3)`; nothing else changes -- not the DSP image,
+not the framing, not the window sizes. Without the define `ssi_dma.o` is
+byte-identical to before. Four tracks at 25.175 MHz is the configuration
+F030CT and the ScummVM DSP chunky-to-planar route use; four tracks at 32 MHz
+is this file's own combination.
+
+**Transport probe** (`trex_ssi_dma.tos`, the 7.4b ramp frame, Hatari
+`2.6.1-devel (Nov 18 2026)`, fork source `c5d5bf34`):
+
+| Tracks | armed `$FF8920/21` | 32,608 bytes in | rate | capture |
+|---|---|---:|---:|---|
+| 1 | `$0043` | 130 ms | 245 KB/s | identical, CRC `$0809` |
+| 4 | `$0343` | **40 ms** | **796 KB/s** | identical, CRC `$0809` |
+
+The elapsed time is read on the 200 Hz tick, so 40 ms is eight ticks and the
+true figure lies between 35 and 40 ms; the structural rate is 1 MB/s.
+`tools/verify_ssi_dma.py` rebuilds the frame independently and accepts both.
+
+**Live packet pipeline** (7.4d's `trex_pipe.tos` and `TREXPIPE.LOD`, relinked
+against the four-track `ssi_dma.o`), identical 265-frame prefixes:
+
+| Build | Cycle-exact, contention on | MMU ledger |
+|---|---:|---:|
+| Live SSI/DMA, one track | 631.26 ms / 1.584 FPS | 539.34 ms / 1.854 FPS |
+| Live SSI/DMA, **four tracks** | **596.66 ms / 1.676 FPS** | **427.74 ms / 2.338 FPS** |
+| Legacy host-port pipeline (4.1g) | 599.70 ms / 1.668 FPS | 425.68 ms / 2.349 FPS |
+| Default draw-order pipeline (4.1g) | 540.89 ms / 1.849 FPS | 363.06 ms / 2.754 FPS |
+
+Four tracks take **34.6 ms** off the cycle-exact frame and **111.6 ms** off
+the MMU-ledger frame; the exposed packet stage falls 65.1 -> 11.4 ms and
+200.0 -> 47.8 ms. Every run reports the route enabled with zero failures, all
+512 frame hashes of the four-track hash build match the reference, and the
+frame-100 checkpoint is `d89958b3...3d16`.
+
+**What it settles.**
+
+- 7.4e's inference was right: the one-track pipeline was bound by the emulated
+  wire, most visibly on the MMU ledger where the rasterization window is
+  short. At four tracks it is level with the host-port pipeline it was built
+  to beat -- and still 56 and 65 ms behind the draw-order default, which hides
+  the same wait without any transport.
+- The route can carry a much larger stream than the records: 100 KB per frame
+  is about 125 ms at the measured rate. That is the number section 3.16's
+  span-and-offset stream needed.
+
+**Not established.** No physical Falcon has run the route at any track count.
+Whether a real record engine accepts four tracks at the 32 MHz clock in
+handshake mode, and at what rate, is a hardware question; 25.175 MHz would cap
+the same configuration near 786 KB/s. The default route stays at one track
+until that is known.
+
+Raw counters are in
+[`docs/performance/ssi-tracks-2026-11-18.json`](docs/performance/ssi-tracks-2026-11-18.json).
+
+**Reproduction.**
+
+```sh
+make DOSBOX=/path/to/DOSBox trex_ssi_pipeline
+tools/vasm/vasmm68k_mot TREX/m68030/ssi_dma.s -quiet -Felf -m68030 \
+  -DTREX_SSI_TRACKS4 -o TREX/m68030/build/ssi_dma4.o
+tools/vlink/vlink TREX/m68030/build/trex_pipe.o TREX/m68030/build/ssi_dma4.o \
+  -tos-fastload -b ataritos -s -e start -o TREX/m68030/trex_pipe4.tos
+python3 tools/measure_frames.py TREX/m68030/trex_pipe4.tos \
+  TREX/m68030/TREXPIPE.LOD hatari_runs/pipe4-ce --dsp-name TREXPIPE.LOD \
+  --cpu-core cycle-exact --videl-contention on --frames 265 --timeout 2400
+```
+
+### 7.4g Span-and-offset stream: the DSP walks rows and pixels, 365.2 ms cycle-exact (2026-11-18)
+
+3.16 measured what the 68030 would cost if spans and texel offsets were handed
+to it, and 7.4f showed the route can carry them. This section builds the
+producer and the transport and measures the whole frame. It is an opt-in pair,
+`make trex_m68030_span`: `trex_span.tos` (`-DTREX_SPAN_STREAM`, linked against
+the four-track `ssi_dma.s` of 7.4f) and the `SPANSTREAM=1` DSP image, which
+the host loads as `TREXSPAN.LOD` and as nothing else. The default pair is
+byte-identical to before.
+
+**Division of work.** The pipeline is 4.1f's: the DSP sends one depth key per
+survivor, the host sorts them and lists the survivors, far to near, in BUILD
+chunks. New is a mark, bit 12 of a listed triangle number. A marked triangle
+is not returned as a span-setup record. BUILD runs `make_triangle_span` for it
+as before and then `span_stream_walk`, which rasterizes it row for row and
+pixel for pixel and transmits the result over SSI into one DMA record window.
+The 68030 draws it with the four-instruction loop of 3.16. An unmarked
+triangle travels and is drawn exactly as in the default pipeline. Only
+qualified-opaque triangles (3.8) can be marked -- 911 triangles of an average
+frame of the 265-frame prefix, carrying about 95% of its pixels -- and
+`span_stream_share` says how many of every 256 of them are.
+
+**Wire format.** Sixteen-bit units, per marked triangle, in draw order:
+
+```text
+per span   (tint << 4 | level) << 8 | length - 1
+           y << 8 | x of the first pixel
+           one unit per pixel: V integer << 8 | U integer
+then       $FFFF
+```
+
+Twice the position unit is the byte offset of the first pixel in the
+512-byte-stride render window; twice the header's upper byte is the span's
+bank in the page's opaque word CLUT (sixteen 512-byte banks per tint, 3.8).
+The stream carries no triangle number: the host walks its own draw list and
+knows from `order_marks` whether a position is the next stretch of the stream
+or the next packet. A triangle with no visible row is its terminator alone.
+
+**The walker** (`span_stream_walk`, `ss_half`, `ss_header` in
+`trex_dsp.asm`) reproduces `span_walk_half` to the bit:
+
+- Chain X positions are 12.12 and live biased by 4095, as on the host. One
+  `MPY` by 2^11 puts `ceil(x)` in A1 and the biased fraction, shifted, in A0;
+  its twelve-bit complement is the prestep distance `f`.
+- The U and V starts are `chain + floor(gradient * f / 4096)`: `MAC` with
+  `f << 11` adds exactly that to an accumulator holding the chain value. Only
+  the low sixteen bits are ever sampled, so the left chain's U lives in R5
+  with its row step in N5, and the pixel's U in R4/N4: the address ALU's
+  sixteen-bit add is the whole per-pixel U step. V is carried as `V << 8` in
+  B so its integer part is the top byte of the transmitted word; the U
+  fraction rides in the low byte, which a sixteen-bit SSI word never sends.
+- The level is the left chain's Q4.8 level clamped to 0..15, per row.
+- Left-edge and top clipping advance the chains by the clipped pixels or rows
+  with the same products the host forms. Neither runs for the shipped camera,
+  so those two paths are assembled and reviewed but **not exercised** by any
+  run here.
+- A unit is written when the transmitter is empty, and the wait has no bound.
+  That is safe only because the host arms its window before the first chunk
+  goes out; a full window would stall the DSP for good.
+
+Registers: R4/N4, R5/N5 as above, R7/N7 the row's `y << 8`, R0 a span's pixel
+count, R6 its position unit; R1-R3 and N2 stay BUILD's. The twelve cells the
+row loop touches alias on-chip Y scalars below `Y:$40` (the lighting pass's
+per-triangle temporaries, two projection temporaries and the three corner
+levels, all dead while a triangle is walked), so every reference is the
+one-word short form; two clip scratch cells sit in the class-counter bank an
+`ORDERED` image never uses. The image ends at P:`$0975`, 74 words below the
+`$09BF` ceiling (default `$07EF`). A first revision with long absolute cells
+ended at `$09BA` and measured 395.6 ms cycle-exact with everything streamed,
+against 389.7 ms now; the host gained the share knob between the two, so
+that is not a same-layout pair.
+
+**The host** (`TREX_SPAN_STREAM` in `trex_m68030.s`):
+
+- `span_stream_init` claims the DSP-transmit -> DMA-record route once.
+  Without it, or with `span_stream_wanted` or `gouraud_enabled` patched to 0,
+  no entry is ever marked and the build is the plain draw-order pipeline.
+- `span_stream_begin_frame` arms one 512 KiB record window per frame, before
+  the first chunk. A handshaked word is recorded only when the DSP sends one,
+  and the DSP sends only while it walks, so the window holds exactly the
+  stream. The largest frame of the choreography is 170.2 KB.
+- `span_tri_table` holds, per triangle, its texture page and that page's
+  opaque word CLUT, or zero for a triangle that is not qualified-opaque;
+  the conditions are the packet resolve's own and all static.
+- The BUILD acknowledgement is sent only after the last unit has left the
+  transmitter, so it also means "this chunk's spans are in the window". DMA
+  wrote them behind the 68030's back; the host clears its data cache
+  (`CACR` CD) at every acknowledgement, before the first read of that chunk.
+- `stream_draw_packet` draws by list position: a marked position consumes the
+  stream up to its terminator (`span_stream_draw`), any other the next packet.
+- `span_stream_end_frame` compares the record address with the position the
+  consumer stopped at and stops the channel. `spanstat.res` (eight longwords:
+  claim result, streamed frames, bytes summed, bytes of the largest frame,
+  streamed triangles, frames whose two ends disagree, arm failures, share)
+  reports it.
+
+**Validation.**
+
+- `TREX_OFFSET_PROBE` now records and draws this wire format and shares
+  `span_stream_draw`, so the stream the 68030's own walker records is the
+  reference. Both builds write the checkpoint frame's stream to
+  `spanstrm.res`; `tools/compare_span_stream.py` decodes and compares them.
+  Frame 100 is **byte-identical**: 67,872 bytes, 1,052 triangles, 6,779 spans,
+  19,326 pixels.
+- All **512 frame hashes** match the reference at share 160 and at share 256;
+  frame 100 is `d89958b3...3d16` in every run.
+- Every run writes 9,049,666 pixels over the 265-frame prefix, the default
+  pipeline's count, with the streamed pixels counted by the consumer.
+- The record address and the read position agree in every streamed frame of
+  every run, and the stream totals equal the probe's: 26,353,460 bytes and
+  241,467 triangles over 265 frames at share 256.
+- `SPANSTREAM=0` assembles the tracked default image (`8388cf9f...`); the
+  default and offset-probe executables are byte-identical to before the
+  stream code was added.
+
+**Measured**, identical 265-frame prefixes, one linked executable with
+`span_stream_share` patched (`tools/patch_data_flag.py`), Hatari `2.6.1-devel
+(Nov 18 2026)`, fork source `c5d5bf34`, TOS 4.02, 16 MHz 68030, corrected
+32 MHz DSP, 4 MiB ST RAM. Emulator measurements, not physical-Falcon timings;
+the two profiles must not be mixed.
+
+| Share of 256 | Cycle-exact, contention on | MMU ledger | Stream per frame |
+|---:|---:|---:|---:|
+| 0 | 557.79 ms / 1.793 FPS | 378.47 ms / 2.642 FPS | 0.0 KB |
+| 64 | 469.32 ms / 2.131 FPS | 330.45 ms / 3.026 FPS | 24.8 KB |
+| 112 | 404.53 ms / 2.472 FPS | 336.21 ms / 2.974 FPS | 43.7 KB |
+| 128 | 387.93 ms / 2.578 FPS | -- | 49.7 KB |
+| 144 | 373.79 ms / 2.675 FPS | -- | 55.9 KB |
+| 160 | **365.25 ms / 2.738 FPS** | 351.81 ms / 2.842 FPS | 62.3 KB |
+| 176 | 368.53 ms / 2.713 FPS | -- | 68.3 KB |
+| 192 | 372.94 ms / 2.681 FPS | -- | 74.7 KB |
+| 208 | 376.89 ms / 2.653 FPS | -- | 81.0 KB |
+| 256 | 389.72 ms / 2.566 FPS | 383.45 ms / 2.608 FPS | 99.4 KB |
+
+For reference, the default draw-order executable measures 540.89 ms and
+363.06 ms (4.1g). Share 0 is the same pipeline in this executable's layout,
+still arming the window and clearing the data cache at every acknowledgement,
+which is why it is 17 and 15 ms behind the default.
+
+- **Cycle-exact: 557.8 -> 365.2 ms, 1.79 -> 2.74 FPS (+53%)** at
+  the best share, and 389.7 ms with every qualified triangle streamed.
+  Against the default executable's 540.89 ms that is **-175.6 ms and +48%
+  FPS**.
+- The curve has two slopes. Below the optimum the frame waits on the
+  rasterizer, and every further 16/256 of the triangles handed to the DSP
+  buys 14 to 22 ms. Above it the frame waits on the DSP and the wire, and
+  every further 16/256 costs about 4 ms. The optimum is where the two
+  processors finish together.
+- On the MMU ledger, which charges the 68030 no instruction execution time,
+  the rasterizer is cheaper and the optimum sits lower: the lowest of the five
+  points taken is 330.5 ms at share 64, and with everything
+  streamed the frame is slower than with nothing streamed. The balance point
+  belongs to the machine that runs it.
+- The stream is 99.4 KB per frame at share 256 (82.1 KB over all 512 frames),
+  the size 3.16's recording predicted, and 62.3 KB at share 160.
+
+**What it settles.** The transport question of 3.16 and item 26: a DSP that
+walks rows and pixels, a handshaked SSI route at four tracks and a
+four-instruction consumer are together faster than the 68030 rasterizing
+alone, by 176 ms a frame against the default executable in the cycle-exact
+emulator (193 ms against this executable with nothing streamed), at an
+identical picture. The DSP's idle time (4.1e) is gone at full share: the frame then
+waits on it.
+
+**Not established.**
+
+- No physical Falcon has run this, and three of its assumptions are
+  emulator-only: four record tracks at the 32 MHz clock in handshake mode
+  (7.4f), a record address that is exact to the word at the moment the DSP's
+  acknowledgement arrives (a real record path has a FIFO), and data-cache
+  coherency of a window read while DMA is still filling the part behind it.
+- The share is spread evenly along the draw list. The DSP knows each
+  triangle's size and the host does not; a size-aware choice on the DSP is
+  untried.
+- The two clip paths of the walker are unexercised (above).
+
+**Next levers, unmeasured.** A one-unit span header (x and length, with the
+level and the row sent only when they change) would remove up to one unit in
+six from the wire (8,168 of 49,700 per frame at full share). At high shares
+almost nothing is left to draw after the last chunk (the raster stage is
+10.9 ms at share 256), so the DSP's FINISH work for the next frame is no
+longer hidden behind it; that is read off the stage timers, not isolated.
+
+**Memory.** The executable is 15,546 / 1,172,294 / 2,493,542 bytes of
+text/data/BSS (3,681,382 in all) against 3,084,552 for the default: the
+512 KiB record window, the 21,792-byte triangle table, 2,724 mark bytes and
+the linked `ssi_dma.s`. It runs in the 4 MiB the measurements use.
+
+Raw counters are in
+[`docs/performance/span-stream-2026-11-18.json`](docs/performance/span-stream-2026-11-18.json).
+
+**Reproduction.**
+
+```sh
+make DOSBOX=/path/to/DOSBox trex_m68030_span
+python3 tools/measure_frames.py TREX/m68030/trex_span.tos \
+  TREX/m68030/TREXSPAN.LOD hatari_runs/span-ce --dsp-name TREXSPAN.LOD \
+  --cpu-core cycle-exact --videl-contention on --frames 265 --timeout 2400
+cp TREX/m68030/trex_span.tos hatari_runs/span_all.tos
+python3 tools/patch_data_flag.py hatari_runs/span_all.tos \
+  TREX/m68030/build/trex_span.lst span_stream_share 256 160
+make DOSBOX=/path/to/DOSBox trex_m68030_offset_probe   # the reference stream
+python3 tools/compare_span_stream.py hatari_runs/span-ce/spanstrm.res \
+  hatari_runs/offset-on-ce/spanstrm.res
+```
 
 ## 8. When SSI/crossbar streaming is worthwhile
 
@@ -8963,6 +9261,14 @@ The open roadmap, in recommended order (expected effects from the section
    back as packet-stage waiting, so in the emulator the live frame is bound by
    the DSP-side chunk cycle rather than by CPU service.  Cheapening the
    integrity check is not a lever; the physical result is still the gate.
+
+   **Four record tracks quadruple the emulated route (7.4f, 2026-11-18).**
+   `Settracks(3, 3)` moves the 7.4b probe frame in 40 ms instead of 130,
+   byte-exact, and takes the live packet pipeline from 631.3 to 596.7 ms
+   cycle-exact and from 539.3 to 427.7 ms on the MMU ledger with all 512
+   frame hashes intact: level with the host-port pipeline, still behind the
+   draw-order default.  The one-track pipeline was wire-bound, as 7.4e
+   inferred.  Opt-in (`-DTREX_SSI_TRACKS4`); hardware untested.
 16. **Closed to a measured mechanism.**  Three findings, each by scan:
    the Gouraud buffer growth moved the unpinned preshaded CLUT banks and
    cost 80 ms at an unchanged instruction stream — they are pinned now.
@@ -9255,6 +9561,17 @@ The open roadmap, in recommended order (expected effects from the section
     The stream is 80-130 KB per frame.  Producing it on the DSP and getting it
     to the 68030 -- SSI/DMA into ST-RAM, or block-gated reads straight from the
     host port (7.3a) -- is unpriced and is the whole question.
+    **Built and measured -- see section 7.4g.**  The DSP walks the rows and
+    pixels of marked triangles and sends spans and texel offsets over SSI
+    into one DMA record window per frame; the 68030 draws them with the
+    probe's loop.  The DSP's stream is byte-identical to the one the
+    68030's own walker records, and all 512 frame hashes match.  With 160
+    of every 256 qualified triangles streamed the cycle-exact frame is
+    **557.8 -> 365.2 ms (1.79 -> 2.74 FPS)**; with all of them it is 389.7 ms and waits
+    on the DSP.  Opt-in (`make trex_m68030_span`), emulator only: four
+    record tracks at 32 MHz, the record address at acknowledgement time
+    and cache coherency of a window still being filled are untested on a
+    Falcon.
 
 ## 11. References
 

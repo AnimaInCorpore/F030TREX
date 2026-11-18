@@ -164,8 +164,13 @@ byte-identical picture over 512 frames the diagnostic build measures
 ledger, and `TREX.TOS` **543.1 ms / 1.84 FPS** and **365.1 ms / 2.74 FPS**,
 against 599.7 and 425.7 ms for the previous pipeline on the same emulator.
 `make trex_m68030_legacy` builds that previous pipeline (`-DTREX_LEGACY_OT`,
-`TREXLEGA.LOD`). The figures in the rest of this paragraph are the previous
-pipeline's. Over the 265-frame prefix its full-mesh **diagnostic** build
+`TREXLEGA.LOD`). `make trex_m68030_span` builds an opt-in pair
+(`-DTREX_SPAN_STREAM`, `TREXSPAN.LOD`, `OPTIMIZATION.md` 7.4g) in which the DSP
+also walks the rows and pixels of most textured triangles and sends spans and
+texel offsets over SSI/DMA, leaving the 68030 the texel fetch and the
+framebuffer write: **365.2 ms / 2.74 FPS** cycle-exact at an identical
+picture, emulator only and not yet run on a Falcon. The figures in the rest of
+this paragraph are the previous pipeline's. Over the 265-frame prefix its full-mesh **diagnostic** build
 measured **433.7 ms / 2.31 FPS**, and `TREX.TOS` measures **431.1 ms /
 2.32 FPS** with its release-only overlay and default-disarmed prepass
 (2026-09-06, OPTIMIZATION.md 2.4m). The prelight pass now retains its exact
@@ -215,7 +220,9 @@ at `P:$07EF`, 464 words below the resident-index ceiling; its camera-lights
 A/B reference (`make trex_dsp_camlights`) ends at `P:$07DC`. The legacy
 index-order image (`ORDERED=0`, `make trex_dsp_legacy`) ends at `P:$099E`, and
 the extents quoted for the probe variants below are those of that image, on
-which they are built. Besides `ORDERED`, seven switches in the generated
+which they are built. `SPANSTREAM=1` (`make trex_dsp_span`) adds the span
+walker of section 7.4g to the default image and ends at `P:$0975`. Besides
+`ORDERED` and `SPANSTREAM`, seven switches in the generated
 `dspconf.inc` select what is assembled, because in the legacy image it does
 not all fit: the `CMD_SSI_STREAM` transport probe
 of section 7.4b (`SSIPROBE`, 103 words), the prelight pass (`PRELIGHT`, 66),

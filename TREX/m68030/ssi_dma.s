@@ -1106,7 +1106,15 @@ ssi_dma_claim:
         tst.l   d0
         bmi     .claim_failed_owned
         move.l  #7,ssi_dma_claim_stage
+        ; Track count.  One track is what the route was brought up with.
+        ; TREX_SSI_TRACKS4 asks for four: the record engine then takes
+        ; eight words per sample frame, which is how the handshaked route
+        ; reaches its specified rate (OPTIMIZATION.md 7.4f).
+        ifd TREX_SSI_TRACKS4
+        Settracks #3,#3
+        else
         Settracks #0,#0
+        endc
         move.l  d0,ssi_dma_xbios_results+(6*4)
         tst.l   d0
         bmi     .claim_failed_owned

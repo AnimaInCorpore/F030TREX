@@ -160,7 +160,14 @@ rest of this section are the legacy image's. Section 2.4m's cached cull
 preserves that extent: its marker/test and index skip replace the repeated
 area branches and box call. The optional variant extents below are unchanged.
 
-Besides `ORDERED`, seven switches in the generated `dspconf.inc` select what is assembled,
+`SPANSTREAM=1` (`make trex_dsp_span`, `OPTIMIZATION.md` 7.4g) extends the
+draw-order image: a listed triangle whose number carries bit 12 is not
+returned as a record but walked row for row and pixel for pixel by
+`span_stream_walk` and transmitted over SSI as spans and texel offsets. That
+image ends at `$0975` and pairs only with a `-DTREX_SPAN_STREAM` host, which
+loads it as `TREXSPAN.LOD`.
+
+Besides `ORDERED` and `SPANSTREAM`, seven switches in the generated `dspconf.inc` select what is assembled,
 because it no longer all fits — `SSIPROBE` (the `CMD_SSI_STREAM` transport
 probe, 103 words), `PRELIGHT` (the FINISH-window lighting pass and BUILD's
 table read, 66), `WINPROBE` (the window burn loop, 44), `PREPASSDIAG` (2.3j's

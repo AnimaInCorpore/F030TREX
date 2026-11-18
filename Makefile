@@ -48,6 +48,10 @@ PHASEPROBE=0
 # a -DTREX_LEGACY_OT host (or one of the variants that select it) and is
 # deployed as TREXLEGA.LOD so the two can never be confused.
 ORDERED=1
+# The span-and-offset stream image (OPTIMIZATION.md 7.4g): the ORDERED image
+# plus the row and pixel walker that transmits marked triangles over SSI.  It
+# pairs only with a -DTREX_SPAN_STREAM host and is deployed as TREXSPAN.LOD.
+SPANSTREAM=0
 
 # One generator for the assembler-visible build switches, used by every DSP
 # rule so a variant can never assemble against a stale or missing config.
@@ -59,7 +63,9 @@ ORDERED=1
 # lands in the same second as its own source is otherwise skipped -- and before
 # the stamp existed nothing tied the image to its configuration at all, so
 # asking for one variant could silently leave you the previous one.
-DSPCONF_ID=$(SSIPROBE)$(WINPROBE)$(PIOBURST)$(PREPASSDIAG)$(OBJLIGHTS)$(PRELIGHT)$(PHASEPROBE)$(ORDERED)
+# SPANSTREAM appends a letter instead of a ninth digit, so every identity
+# written down before it existed still names the same image.
+DSPCONF_ID=$(SSIPROBE)$(WINPROBE)$(PIOBURST)$(PREPASSDIAG)$(OBJLIGHTS)$(PRELIGHT)$(PHASEPROBE)$(ORDERED)$(if $(filter 1,$(SPANSTREAM)),s)
 DSPCONF_STAMP=./TREX/dsp/build/dspconf-$(DSPCONF_ID).stamp
 # Each configuration assembles to its own image, so asking for one names a file
 # that either exists (and is current) or does not (and is built).  Existence is
@@ -77,7 +83,7 @@ PHASE_LOD=./TREX/dsp/build/trex_dsp-00001110-$(DSPSRC_ID).lod
 # ./TREX/dsp/trex_dsp.lod, so a variant build can never leave the wrong image
 # in the tree for `make measure` or a release to pick up.
 DSPCONF_DEFAULT_ID=00001101
-DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\nPRELIGHT\tequ\t%s\nPHASEPROBE\tequ\t%s\nORDERED\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' '$(PRELIGHT)' '$(PHASEPROBE)' '$(ORDERED)' > ./TREX/dsp/build/dspconf.inc
+DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\nPRELIGHT\tequ\t%s\nPHASEPROBE\tequ\t%s\nORDERED\tequ\t%s\nSPANSTREAM\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' '$(PRELIGHT)' '$(PHASEPROBE)' '$(ORDERED)' '$(SPANSTREAM)' > ./TREX/dsp/build/dspconf.inc
 # Extra flags for the DSP assembly run.  Plain DOSBox needs none.  DOSBox-X
 # opens a working-folder prompt and a menu on macOS and then never reaches
 # BUILD.BAT, so it needs:
@@ -554,6 +560,28 @@ trex_dsp_legacy: create_dirs
 
 trex_m68030_legacy: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_legacy.tos trex_dsp_legacy
 
+# Span-and-offset stream pair (OPTIMIZATION.md 7.4g): the draw-order pipeline
+# with qualified-opaque triangles walked by the DSP and delivered as spans and
+# texel offsets over SSI/DMA.  trex_span.tos loads TREXSPAN.LOD and no other
+# image, and links the four-track route of 7.4f.  Opt-in; emulator-validated
+# only.
+SPAN_LOD=./TREX/dsp/build/trex_dsp-00001101s-$(DSPSRC_ID).lod
+.PHONY: trex_dsp_span trex_m68030_span
+trex_dsp_span: create_dirs
+	@$(MAKE) --no-print-directory SSIPROBE=0 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=1 PRELIGHT=1 PHASEPROBE=0 ORDERED=1 SPANSTREAM=1 trex_dsp
+	cp $(SPAN_LOD) ./TREX/m68030/TREXSPAN.LOD
+
+trex_m68030_span: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_span.tos trex_dsp_span
+
+./TREX/m68030/build/ssi_dma4.o: ./TREX/m68030/ssi_dma.s ./src/xbios.s
+	$(VASM) $< -quiet -Felf -m68030 -DTREX_SSI_TRACKS4 -o $@ -L ./TREX/m68030/build/ssi_dma4.lst
+
+./TREX/m68030/build/trex_span.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_SPAN_STREAM -o $@ -L ./TREX/m68030/build/trex_span.lst
+
+./TREX/m68030/trex_span.tos: ./TREX/m68030/build/trex_span.o ./TREX/m68030/build/ssi_dma4.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
 ./TREX/m68030/build/trex_legacy.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
 	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_LEGACY_OT -o $@ -L ./TREX/m68030/build/trex_legacy.lst
 
@@ -728,6 +756,7 @@ $(DSPVARIANT): ./TREX/dsp/trex_dsp.asm ./TREX/dsp/ssi_pkt.asm ./TREX/dsp/ssi_crc
 clean:
 	rm -f ./TREX/m68030/trex_pipe.tos ./TREX/m68030/trex_pipe_hash.tos
 	rm -f ./TREX/m68030/trex_offset.tos ./TREX/m68030/build/trex_offset.o ./TREX/m68030/build/trex_offset.lst
+	rm -f ./TREX/m68030/trex_span.tos ./TREX/m68030/TREXSPAN.LOD ./TREX/m68030/build/trex_span.o ./TREX/m68030/build/trex_span.lst ./TREX/m68030/build/ssi_dma4.o ./TREX/m68030/build/ssi_dma4.lst
 	rm -f ./TREX/m68030/trex_legacy.tos ./TREX/m68030/TREXLEGA.LOD ./TREX/m68030/build/trex_legacy.o ./TREX/m68030/build/trex_legacy.lst
 	rm -f ./TREX/m68030/trex_stream.tos ./TREX/m68030/build/trex_stream.o ./TREX/m68030/build/trex_stream.lst
 	rm -f ./TREX/m68030/trex_prestep.tos ./TREX/m68030/build/trex_prestep.o ./TREX/m68030/build/trex_prestep.lst

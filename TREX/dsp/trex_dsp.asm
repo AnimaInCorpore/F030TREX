@@ -108,6 +108,19 @@ PRELIGHT_SEQ	equ	PRELIGHT-ORDERED
 	IF	ORDERED*(1-PRELIGHT)
 	FAIL	'ORDERED needs the prelight table'
 	ENDIF
+; SPANSTREAM=1 extends the ORDERED image (OPTIMIZATION.md 7.4g).  A listed
+; triangle whose number carries bit 12 is not returned as a span-setup
+; record: BUILD walks its rows and pixels exactly as the host rasterizer
+; would and transmits the spans and one texel offset per pixel over SSI,
+; which the host has routed into a DMA record window.  ORDERED_PLAIN is
+; "ORDERED without SPANSTREAM", in the flat style of the switches above.
+ORDERED_PLAIN equ ORDERED-SPANSTREAM
+	IF	SPANSTREAM*(1-ORDERED)
+	FAIL	'SPANSTREAM extends the ORDERED image'
+	ENDIF
+	IF	SPANSTREAM*SSIPROBE
+	FAIL	'SPANSTREAM owns the SSI transmitter; build the SSI probes apart'
+	ENDIF
 
 TREX_VERTICES	= 1376
 TREX_PRIMITIVES	= 2724
@@ -468,6 +481,17 @@ PREPASS_STATUS_WORDS	= 8
 main
 	; Host-port mode, same setup as the original 3d.asm program.
 	movep	#1,x:m_pbc
+	IF	SPANSTREAM
+	; The transmitter of 7.4b's probe, switched on once: 16-bit words, PC5
+	; driven as the handshake frame line.  A word is taken only while the
+	; host's record window is armed, so nothing moves until BUILD sends.
+	movep	#0,x:m_crb
+	movep	#$4000,x:m_cra
+	movep	#$0140,x:m_pcc
+	movep	#$0020,x:m_pcddr
+	movep	#$1a00,x:m_crb
+	movep	#$0020,x:m_pcd
+	ENDIF
 
 main_loop
 	jsr	<receive_word
@@ -1189,7 +1213,18 @@ build_triangle_not_killed
 	IF	ORDERED
 	; The host lists survivors only, so there is no reject test: reload R2
 	; from the listed global number and unpack through the shared routine.
+	ENDIF
+	IF	ORDERED_PLAIN
 	move	x:(r3),x0
+	ENDIF
+	IF	SPANSTREAM
+	; Bit 12 of a listed number is the host's stream mark, not part of it.
+	move	x:(r3),a
+	move	#>TRI_INDEX_MASK,x0
+	and	x0,a
+	move	a1,x0
+	ENDIF
+	IF	ORDERED
 	jsr	<prepass_load_triangle
 	ENDIF
 	IF	PRELIGHT_SEQ
@@ -1250,6 +1285,12 @@ build_triangle_not_killed
 	ENDIF
 	IF	ORDERED
 	move	x:(r3),a
+	ENDIF
+	IF	SPANSTREAM
+	move	#>TRI_INDEX_MASK,x0
+	and	x0,a
+	ENDIF
+	IF	ORDERED
 	move	#prelight_table,x0
 	add	x0,a
 	move	a1,r0
@@ -1282,6 +1323,13 @@ build_triangle_not_killed
 	jclr	#PHASE_BIT_SPAN,y:<phase_mask,triangle_advance
 	ENDIF
 	jsr	<make_triangle_span
+	IF	SPANSTREAM
+	; A marked triangle leaves as spans and texel offsets and has no record.
+	jclr	#12,x:(r3),build_keeps_record
+	jsr	<span_stream_walk
+	jmp	<triangle_advance
+build_keeps_record
+	ENDIF
 
 	IF	PHASEPROBE
 	jclr	#PHASE_BIT_RECORD,y:<phase_mask,triangle_advance
@@ -1393,6 +1441,12 @@ triangle_advance
 	jne	<triangle_count_loop
 
 triangle_reply
+	IF	SPANSTREAM
+	; The acknowledgement tells the host that this chunk's spans are in its
+	; record window, so the last word has to have left the transmitter.
+ss_flush
+	jclr	#m_tde,x:m_sr,ss_flush
+	ENDIF
 	; The acknowledgement carries the SURVIVOR count, not the chunk size:
 	; Dsp_BlkUnpacked transfers a word count fixed before the call, so the
 	; host must learn the reply size here to size its GET_TRIANGLES receive.
@@ -2888,6 +2942,380 @@ span_uv_slot2
 	move	a1,x1
 	rts
 
+	IF	SPANSTREAM
+; -----------------------------------------------------------------------------
+; Span-and-offset stream (OPTIMIZATION.md 7.4g)
+;
+; span_stream_walk rasterizes the triangle make_triangle_span just set up,
+; row for row and pixel for pixel as the host's span_walk_half does, and
+; transmits sixteen-bit units over SSI:
+;
+;   per span   (tint << 4 | level) << 8 | length - 1
+;              y << 8 | x of the first pixel
+;              one unit per pixel: V integer << 8 | U integer
+;   then       $FFFF, the end of the triangle
+;
+; The arithmetic is the host's, to the bit.  Chain X positions are 12.12 and
+; live biased by 4095, so the integer part IS ceil(x) and the twelve-bit
+; complement of the fraction is the prestep distance f.  The U and V starts
+; are chain + floor(gradient * f / 4096); only their low sixteen bits are
+; ever sampled, which is why U may live in an address register.  The level is
+; the left chain's Q4.8 level clamped to 0..15.  Left-edge and top clipping
+; advance the chains by whole pixels or rows with the same products the host
+; uses; neither runs for the shipped camera.
+;
+; A unit is written as soon as the transmitter is empty.  The wait has no
+; bound: the host arms its record window before it sends the first chunk.
+;
+; Registers: R4/N4 the pixel's U and its step, R5/N5 the left chain's U and
+; its row step, R7/N7 the row's y << 8, R0 a span's pixel count, R6 its
+; position unit.  R1-R3 and N2 belong to BUILD and are not touched.
+; Clobbers A, B, X0, X1, Y0, Y1.
+; -----------------------------------------------------------------------------
+span_stream_walk
+	move	#>$800,y1
+	move	#>$80,x1
+	move	y:span_sx0,x0
+	mpy	x0,y1,a		; sx0 << 12 in A0
+	move	a0,x0
+	move	#>4095,a
+	add	x0,a
+	move	a1,y:<ss_xl
+	move	a1,y:<ss_xr
+	move	y:span_su0,x0
+	mpy	x1,x0,a
+	move	a0,r5		; U, Q8.8
+	move	y:span_sv0,x0
+	mpy	x1,x0,a
+	move	a0,y:<ss_vl		; V, Q8.8
+	move	y:span_sl0,x0
+	mpy	x1,x0,a
+	move	a0,y:<ss_lvl		; level, Q4.8
+	move	y:span_dvdx,x0
+	mpy	x1,x0,a
+	move	a0,y:<ss_dv		; the pixel loop steps V << 8
+	move	y:span_dudx,x0
+	move	x0,n4
+	move	#>$100,n7
+	move	y:triangle_shade,a
+	move	#>$30,x0
+	and	x0,a
+	move	a1,x0
+	mpy	x1,x0,a		; tint << 12 in A0
+	move	a0,x0
+	move	#>-1,a
+	add	x0,a
+	move	a1,y:<ss_tint		; the header adds the pixel count, hence the -1
+	move	y:span_sy0,x0
+	move	x0,y:<ss_y
+	move	y:span_mid,a
+	tst	a
+	jne	<ss_mid_left
+
+	; Middle vertex on the right: the long edge is the left chain.
+	move	y:span_sl_long,x0
+	move	x0,y:<ss_sl
+	move	y:span_dul_up,x0
+	move	x0,n5
+	move	y:span_dvl_up,x0
+	move	x0,y:<ss_dvl
+	move	y:span_rows_up,a
+	tst	a
+	jeq	<ss_mr_lower
+	move	a1,y:<ss_rows
+	move	y:span_sl_up,x0
+	move	x0,y:<ss_sr
+	move	y:span_dll_up,x0
+	move	x0,y:<ss_dlvl
+	jsr	<ss_half
+ss_mr_lower
+	move	y:span_rows_low,a
+	tst	a
+	jeq	<ss_walk_end
+	move	a1,y:<ss_rows
+	move	#>$800,y1
+	move	y:span_sx1,x0
+	mpy	x0,y1,a
+	move	a0,x0
+	move	#>4095,a
+	add	x0,a
+	move	a1,y:<ss_xr		; the right chain restarts at the middle vertex
+	move	y:span_sl_low,x0
+	move	x0,y:<ss_sr
+	move	y:span_dll_low,x0
+	move	x0,y:<ss_dlvl
+	jsr	<ss_half
+	jmp	<ss_walk_end
+
+	; Middle vertex on the left: the long edge is the right chain.
+ss_mid_left
+	move	y:span_sl_long,x0
+	move	x0,y:<ss_sr
+	move	y:span_rows_up,a
+	tst	a
+	jeq	<ss_ml_lower
+	move	a1,y:<ss_rows
+	move	y:span_sl_up,x0
+	move	x0,y:<ss_sl
+	move	y:span_dul_up,x0
+	move	x0,n5
+	move	y:span_dvl_up,x0
+	move	x0,y:<ss_dvl
+	move	y:span_dll_up,x0
+	move	x0,y:<ss_dlvl
+	jsr	<ss_half
+ss_ml_lower
+	move	y:span_rows_low,a
+	tst	a
+	jeq	<ss_walk_end
+	move	a1,y:<ss_rows
+	; The left chain -- position, U, V and level -- restarts at the middle
+	; vertex.
+	move	#>$800,y1
+	move	#>$80,x1
+	move	y:span_sx1,x0
+	mpy	x0,y1,a
+	move	a0,x0
+	move	#>4095,a
+	add	x0,a
+	move	a1,y:<ss_xl
+	move	y:span_su1,x0
+	mpy	x1,x0,a
+	move	a0,r5
+	move	y:span_sv1,x0
+	mpy	x1,x0,a
+	move	a0,y:<ss_vl
+	move	y:span_sl1,x0
+	mpy	x1,x0,a
+	move	a0,y:<ss_lvl
+	move	y:span_sl_low,x0
+	move	x0,y:<ss_sl
+	move	y:span_dul_low,x0
+	move	x0,n5
+	move	y:span_dvl_low,x0
+	move	x0,y:<ss_dvl
+	move	y:span_dll_low,x0
+	move	x0,y:<ss_dlvl
+	jsr	<ss_half
+ss_walk_end
+ss_wait_end
+	jclr	#m_tde,x:m_sr,ss_wait_end
+	movep	#$ffff00,x:m_tx		; end of the triangle
+	rts
+
+; One trapezoid half: ss_rows rows from row ss_y, chains continuing in place.
+ss_half
+	move	y:<ss_y,a
+	tst	a
+	jmi	<ss_top_clip
+ss_top_ok
+	; A = the first row.  Rows below the screen only shorten the count.
+	move	y:<ss_rows,x0
+	add	x0,a
+	move	#>SCREEN_HEIGHT,x1
+	cmp	x1,a
+	jle	<ss_bottom_ok
+	move	y:<ss_y,x0
+	tfr	x1,a
+	sub	x0,a
+	move	a1,y:<ss_rows
+ss_bottom_ok
+	move	y:<ss_rows,a
+	tst	a
+	jle	<ss_half_end
+	move	a1,y0		; rows to walk
+	move	y:<ss_y,x0
+	move	#>$80,x1
+	mpy	x1,x0,b
+	move	b0,r7		; y << 8
+	add	x0,a
+	move	a1,y:<ss_y		; the row after this half
+	move	#>$800,y1
+	do	y0,ss_rows_end
+
+	; Integer span: left = ceil(xl), right = ceil(xr) - 1.
+	move	y:<ss_xr,x0
+	mpy	x0,y1,b
+	move	y:<ss_xl,x0
+	mpy	x0,y1,a	b1,x1		; A1 = left, A0 = fraction << 12; X1 = ceil(xr)
+	move	a0,b
+	lsr	b	a1,x0		; X0 = left
+	move	#$7ff800,y0
+	eor	y0,b
+	move	b1,y0		; Y0 = prestep distance f << 11
+	tfr	x1,b
+	move	#>SCREEN_WIDTH,x1
+	cmp	x1,b
+	jle	<ss_right_ok
+	tfr	x1,b		; right edge clipped to the last column
+ss_right_ok
+	tfr	x0,a
+	tst	a
+	jmi	<ss_left_clip
+	sub	x0,b		; pixels in the span
+	jle	<ss_row_next
+	move	r7,a
+	add	x0,a	b1,r0		; y << 8 | x; R0 = pixel count
+	move	a1,r6
+	jsr	<ss_header
+	; U and V at the first pixel, the header already on the wire.
+	move	y:span_dudx,x1
+	move	r5,a
+	mac	x1,y0,a	y:span_dvdx,x1
+	move	y:<ss_vl,b
+	mac	x1,y0,b	a1,r4
+ss_row_v
+	; The pixel loop carries V << 8, so its integer part is the top byte.
+	move	b1,x0
+	move	#>$80,x1
+	mpy	x1,x0,a
+	move	a0,b
+	move	y:<ss_dv,x1
+	move	#$ff0000,y0
+	do	r0,ss_pixels_end
+	move	r4,x0
+	tfr	b,a	(r4)+n4
+	and	y0,a
+	or	x0,a		; V integer << 16 | U, the low byte never leaves the chip
+ss_pixel_wait
+	jclr	#m_tde,x:m_sr,ss_pixel_wait
+	movep	a1,x:m_tx
+	add	x1,b
+ss_pixels_end
+
+ss_row_next
+	move	y:<ss_xl,a
+	move	y:<ss_sl,x0
+	add	x0,a	(r5)+n5
+	move	a1,y:<ss_xl
+	move	y:<ss_xr,a
+	move	y:<ss_sr,x0
+	add	x0,a	(r7)+n7
+	move	a1,y:<ss_xr
+	move	y:<ss_vl,a
+	move	y:<ss_dvl,x0
+	add	x0,a
+	move	a1,y:<ss_vl
+	move	y:<ss_lvl,a
+	move	y:<ss_dlvl,x0
+	add	x0,a
+	move	a1,y:<ss_lvl
+	nop
+ss_rows_end
+ss_half_end
+	rts
+
+; A span's two header units.  R0 = pixel count, R6 = y << 8 | x.
+; Clobbers A, X0 and X1; leaves B, Y0 and Y1 alone.
+ss_header
+	move	y:<ss_lvl,a
+	tst	a
+	jpl	<ss_level_low
+	clr	a
+ss_level_low
+	move	#>$0fff,x1
+	cmp	x1,a
+	jle	<ss_level_high
+	tfr	x1,a
+ss_level_high
+	move	#>$0f00,x1
+	and	x1,a		; level << 8
+	move	y:<ss_tint,x1
+	add	x1,a
+	move	r0,x1
+	add	x1,a		; (tint << 4 | level) << 8 | length - 1
+	move	a1,x0
+	move	#>$80,x1
+	mpy	x1,x0,a		; aligned to the transmitter's top sixteen bits
+ss_header_wait1
+	jclr	#m_tde,x:m_sr,ss_header_wait1
+	movep	a0,x:m_tx
+	move	r6,x0
+	mpy	x1,x0,a
+ss_header_wait2
+	jclr	#m_tde,x:m_sr,ss_header_wait2
+	movep	a0,x:m_tx
+	rts
+
+; Left edge off screen: the span starts at column zero and U/V advance by
+; the clipped distance as well as by the prestep.
+; In: A = left (negative), B = min(ceil(xr), SCREEN_WIDTH), Y0 = f << 11.
+ss_left_clip
+	tst	b
+	jle	<ss_row_next
+	neg	a	b1,r0		; clipped pixels; R0 = pixel count
+	move	a1,y:ss_clip
+	move	r7,x0
+	move	x0,r6		; position unit: column zero
+	jsr	<ss_header
+	move	y:ss_clip,x0
+	move	y:span_dudx,x1
+	mpy	x1,x0,b
+	asr	b
+	move	b0,y:ss_tmp		; du/dx * clipped pixels, low word
+	move	r5,a
+	mac	x1,y0,a
+	move	y:ss_tmp,x1
+	add	x1,a
+	move	a1,r4
+	move	y:span_dvdx,x1
+	mpy	x1,x0,a
+	asr	a
+	move	a0,y:ss_tmp
+	move	y:<ss_vl,b
+	mac	x1,y0,b
+	move	y:ss_tmp,x0
+	add	x0,b
+	jmp	<ss_row_v
+
+; First row above the screen: skip min(-y, rows) rows by advancing the
+; chains, as the host's catch-up does.  The level chain is NOT advanced
+; there either.
+ss_top_clip
+	neg	a
+	move	y:<ss_rows,x0
+	cmp	x0,a
+	jle	<ss_top_rows
+	tfr	x0,a
+ss_top_rows
+	move	a1,y0		; rows skipped
+	move	y:<ss_rows,a
+	sub	y0,a
+	move	a1,y:<ss_rows
+	move	y:<ss_y,a
+	add	y0,a
+	move	a1,y:<ss_y
+	move	y:<ss_sl,x0
+	mpy	y0,x0,a
+	asr	a
+	move	a0,x0
+	move	y:<ss_xl,a
+	add	x0,a
+	move	a1,y:<ss_xl
+	move	y:<ss_sr,x0
+	mpy	y0,x0,a
+	asr	a
+	move	a0,x0
+	move	y:<ss_xr,a
+	add	x0,a
+	move	a1,y:<ss_xr
+	move	y:<ss_dvl,x0
+	mpy	y0,x0,a
+	asr	a
+	move	a0,x0
+	move	y:<ss_vl,a
+	add	x0,a
+	move	a1,y:<ss_vl
+	move	n5,x0
+	mpy	y0,x0,a
+	asr	a
+	move	a0,x0
+	move	r5,a
+	add	x0,a
+	move	a1,r5
+	move	y:<ss_y,a
+	jmp	<ss_top_ok
+	ENDIF
 lookup_projected_z
 	; x0 = vertex index, returns z in x0.  The record base must be folded
 	; into the address: writing the scaled index straight into R0 would
@@ -4546,6 +4974,29 @@ prepass_cls_bit	= shade_sum_r
 ; does not overlap it.
 prepass_cnt_lo
 	ds	PREPASS_CNT_COUNT
+	IF	SPANSTREAM
+; Span-stream walker state.  The twelve cells the row loop touches alias
+; on-chip Y scalars below Y:$40, so every reference is the one-word short
+; form: the lighting pass's per-triangle temporaries and the two projection
+; temporaries, none of which BUILD reads in a prelight image, and the three
+; corner levels, which are dead once make_triangle_span has returned.  No
+; value outlives one span_stream_walk call.  The two clip scratch cells sit
+; in the class-counter bank an ORDERED image never touches.
+ss_xl equ shade_sum_r  ; left chain X, 12.12, biased by 4095
+ss_sl equ shade_sum_g
+ss_xr equ shade_acc_r  ; right chain X, biased likewise
+ss_sr equ shade_acc_g
+ss_vl equ shade_level  ; left chain V, Q8.8
+ss_dvl equ shade_ratio_r
+ss_lvl equ shade_ratio_g  ; left chain level, Q4.8
+ss_dlvl equ corner_levels
+ss_rows equ corner_levels+1
+ss_y equ corner_levels+2
+ss_dv equ project_temp_y  ; dv/dx << 8
+ss_tint equ project_temp_z  ; (tint << 12) - 1
+ss_clip equ prepass_cnt_lo
+ss_tmp equ prepass_cnt_lo+1
+	ENDIF
 
 ; Sticky arming flag, written only by CMD_PREPASS.  It starts at zero, so an
 ; unmodified host never runs the prepass at all.

@@ -196,6 +196,24 @@ TREX_STREAM_DRAW set 1
 	ifd	TREX_STREAM_PROBE
 TREX_STREAM_DRAW set 1
 	endc
+; TREX_SPAN_STREAM (OPTIMIZATION.md 7.4g) is the draw-order pipeline with the
+; qualified-opaque triangles delivered as spans and texel offsets: the DSP
+; walks their rows and pixels and sends the result over SSI into a DMA record
+; window, and the 68030 keeps the texel fetch and the framebuffer write.
+; Every other triangle still arrives as a span-setup record over the host
+; port.  It pairs with the SPANSTREAM=1 DSP image under its own file name and
+; links against ssi_dma.s.  TREX_SPAN_CONSUMER is the stream's draw loop,
+; which the offset probe of 3.16 shares so its CPU-recorded stream can serve
+; as the reference for the DSP's.
+	ifd	TREX_SPAN_STREAM
+	ifd	TREX_LEGACY_OT
+	fail	"TREX_SPAN_STREAM extends the draw-order pipeline; it has no legacy form"
+	endc
+TREX_SPAN_CONSUMER set 1
+	endc
+	ifd	TREX_OFFSET_PROBE
+TREX_SPAN_CONSUMER set 1
+	endc
 ; Bucket = average-Z key >> OT_KEY_SHIFT.  The key is the sum of three
 ; camera-space z values, so it scales with the object distance.  The shift has
 ; to cover the whole choreography, which opens at z=62000 and ends at z=3100:
@@ -903,6 +921,9 @@ trex_init
 	ifd TREX_SSI_PIPELINE
 	bsr	ssi_packets_init
 	endc
+	ifd	TREX_SPAN_STREAM
+	bsr	span_stream_init
+	endc
 
 	; These are the state objects a real implementation would pass to the
 	; Psy-Q/GTE and DSP backends.
@@ -1123,6 +1144,29 @@ trex_dummy_frame
 	cmp.l	frame_number,d0
 	bne	.no_framebuffer_dump
 	bsr	trex_write_framebuffer_debug
+	ifd	TREX_SPAN_CONSUMER
+	; The same frame's span stream, for tools/compare_span_stream.py.
+	ifd	TREX_OFFSET_PROBE
+	lea	offset_stream,a0
+	move.l	offset_stream_ptr,d0
+	else
+	lea	span_stream_buffer,a0
+	move.l	span_stream_ptr,d0
+	endc
+	sub.l	a0,d0
+	ble	.no_framebuffer_dump
+	move.l	d0,span_dump_bytes
+	Fcreate	span_dump_path,#0
+	tst.l	d0
+	bmi	.no_framebuffer_dump
+	move.w	d0,d7
+	ifd	TREX_OFFSET_PROBE
+	Fwrite	d7,span_dump_bytes,offset_stream
+	else
+	Fwrite	d7,span_dump_bytes,span_stream_buffer
+	endc
+	Fclose	d7
+	endc
 .no_framebuffer_dump
 
 	ifd	TREX_FRAME_HASH
@@ -1185,6 +1229,9 @@ trex_shutdown
 	ifd	TREX_SSI_SHADOW
 	bsr	ssi_shadow_release_route
 	endc
+	ifd	TREX_SPAN_STREAM
+	jsr	ssi_dma_release
+	endc
 	bsr	gpu_close
 	bsr	dsp_close
 	bsr	lib_psyq_shutdown
@@ -1235,6 +1282,24 @@ trex_write_render_stats
 	Fwrite	d7,#(RENDER_STATS_LONGS*4),render_stats_buffer
 	Fclose	d7
 .trex_stats_done
+	ifd	TREX_OFFSET_PROBE
+	Fcreate	offset_stat_path,#0
+	tst.l	d0
+	bmi	.offset_stat_done
+	move.w	d0,d7
+	Fwrite	d7,#(6*4),offset_stat
+	Fclose	d7
+.offset_stat_done
+	endc
+	ifd	TREX_SPAN_STREAM
+	Fcreate	span_stat_path,#0
+	tst.l	d0
+	bmi	.span_stat_done
+	move.w	d0,d7
+	Fwrite	d7,#(SPAN_STAT_LONGS*4),span_stat
+	Fclose	d7
+.span_stat_done
+	endc
 	; Span-record validation report, rewritten with the render stats so an
 	; interrupted run still yields a verdict.  Only when the validation ran:
 	; without it the counters are all zero and the file said nothing, yet it
@@ -2890,6 +2955,9 @@ dsp_packets_begin
 	clr.l	dsp_triangle_output_count
 	ifd	TREX_ORDERED
 	bsr	order_fetch_and_sort
+	ifd	TREX_SPAN_STREAM
+	bsr	span_stream_begin_frame
+	endc
 	move.l	d0,dsp_triangles_remaining
 	else
 	move.l	#TREX_PRIMITIVES,dsp_triangles_remaining
@@ -2932,13 +3000,48 @@ dsp_send_build_chunk
 	move.l	d4,d5
 	beq	.chunk_list_done
 	subq.l	#1,d5
+	ifd	TREX_SPAN_STREAM
+	movem.l	d2-d3/a3-a4,-(sp)
+	lea	span_tri_table,a3
+	lea	order_marks,a4
+	adda.l	d6,a4		; this chunk's first draw-list position
+	endc
 .chunk_list_copy
 	moveq	#0,d0
 	move.w	(a2)+,d0
+	ifd	TREX_SPAN_STREAM
+	; Bit 12 asks the DSP to walk this triangle and stream its spans
+	; instead of returning its record.  span_stream_share of every 256
+	; qualified triangles are marked, spread evenly along the list, so the
+	; work can be divided between the two processors; order_marks keeps the
+	; decision for the draw loop.
+	move.l	d0,d1
+	moveq	#0,d3
+	tst.l	span_stream_frame
+	beq	.chunk_list_plain
+	tst.l	(0,a3,d0.l*8)
+	beq	.chunk_list_plain
+	move.l	span_share_acc,d2
+	add.l	span_stream_share,d2
+	cmpi.l	#256,d2
+	bcs	.chunk_list_share
+	subi.l	#256,d2
+	ori.w	#$1000,d1
+	moveq	#1,d3
+.chunk_list_share
+	move.l	d2,span_share_acc
+.chunk_list_plain
+	move.b	d3,(a4)+
+	move.l	d1,(a1)+
+	else
 	move.l	d0,(a1)+
+	endc
 	move.l	(0,a0,d0.l*8),(a1)+
 	move.l	(4,a0,d0.l*8),(a1)+
 	dbra	d5,.chunk_list_copy
+	ifd	TREX_SPAN_STREAM
+	movem.l	(sp)+,d2-d3/a3-a4
+	endc
 .chunk_list_done
 	move.l	d4,d5
 	add.l	d4,d5
@@ -4150,6 +4253,17 @@ dsp_drain_chunk_pipeline
 	bne	.dsp_cull_failed
 
 .dsp_cull_launch_next
+	ifd	TREX_SPAN_STREAM
+	; The acknowledgement also says this chunk's spans are in the record
+	; window.  DMA wrote them behind the 68030's back, so whatever the data
+	; cache holds of that window is stale: drop it before the first read.
+	tst.l	span_stream_frame
+	beq	.span_ack_done
+	movec	cacr,d0
+	ori.w	#$0800,d0		; CD: clear the data cache
+	movec	d0,cacr
+.span_ack_done
+	endc
 	; This chunk's records are in the host buffer (or it had none), so the
 	; DSP's output buffer is free: advance the base bookkeeping and launch
 	; the next chunk NOW.  The unpack below then overlaps its compute.
@@ -4242,8 +4356,15 @@ stream_drain_chunks
 .stream_loop
 	tst.l	dsp_chunk_inflight
 	beq	.stream_fetched
+	ifd	TREX_SPAN_STREAM
+	; Drawing follows the draw LIST here, not the packet buffer: a listed
+	; triangle is either the next packet or the next stretch of the stream.
+	move.l	order_drawn,d0
+	cmp.l	dsp_triangle_input_count,d0
+	else
 	move.l	stream_drawn,d0
 	cmp.l	dsp_triangle_output_count,d0
+	endc
 	bcc	.stream_fetch		; nothing undrawn: block on the DSP
 	tst.l	stream_fetch_ahead
 	beq	.stream_draw
@@ -4261,8 +4382,13 @@ stream_drain_chunks
 	tst.l	stream_fetch_ahead
 	bne	.stream_done
 .stream_naive_tail
+	ifd	TREX_SPAN_STREAM
+	move.l	order_drawn,d0
+	cmp.l	dsp_triangle_input_count,d0
+	else
 	move.l	stream_drawn,d0
 	cmp.l	dsp_triangle_output_count,d0
+	endc
 	bcc	.stream_done
 	bsr	stream_draw_packet
 	bra	.stream_naive_tail
@@ -4270,6 +4396,143 @@ stream_drain_chunks
 	moveq	#1,d0
 	rts
 
+	ifd	TREX_SPAN_STREAM
+SPAN_STREAM_BYTES = 512*1024
+	ifnd	SPAN_STREAM_SHARE
+; The cycle-exact emulator's optimum (7.4g).  The balance point belongs to
+; the machine that runs it; a physical Falcon will want its own figure.
+SPAN_STREAM_SHARE = 160
+	endc
+SPAN_STAT_LONGS = 8
+; Claim the DSP-transmit -> DMA-record route once.  Without it the frame
+; flag never sets, no list entry is marked and this build is the plain
+; draw-order pipeline.
+span_stream_init
+	clr.l	span_stream_enabled
+	move.l	#-1,span_stat
+	move.l	span_stream_share,span_stat+28
+	tst.l	span_stream_wanted
+	beq	.span_init_done
+	; The stream carries the left chain's interpolated level.  A flat-shaded
+	; build takes each packet's own level instead, which only the record
+	; path knows how to do, so it keeps every record.
+	tst.l	gouraud_enabled
+	beq	.span_init_done
+	tst.l	dsp_program_loaded
+	beq	.span_init_done
+	lea	span_stream_buffer,a0
+	lea	span_stream_buffer_end,a1
+	jsr	ssi_dma_claim
+	move.l	d0,span_stat		; claim result, zero when the route is ours
+	tst.l	d0
+	bne	.span_init_done
+	move.l	#1,span_stream_enabled
+.span_init_done
+	rts
+
+; Per triangle: its texture page and that page's opaque word CLUT, or a zero
+; page for a triangle that is not qualified-opaque and keeps its record.
+; The conditions are the packet resolve's own (3.8), all of them static.
+span_build_table
+	movem.l	d0-d3/a0-a4,-(sp)
+	lea	span_tri_table,a0
+	lea	gpu_texture_meta_buffer,a1
+	lea	trex_opaque_triangle_data,a2
+	lea	texture_page_pixels_table,a3
+	lea	texture_page_opaque_clut_table,a4
+	move.w	#TREX_PRIMITIVES-1,d3
+.span_table_triangle
+	moveq	#0,d0
+	moveq	#0,d1
+	tst.l	28(a1)		; native TPAGE, zero for an untextured face
+	beq	.span_table_store
+	tst.l	opaque_path_enabled
+	beq	.span_table_store
+	tst.l	raster_force_flat
+	bne	.span_table_store
+	tst.b	(a2)
+	beq	.span_table_store
+	move.l	24(a1),d2
+	swap	d2		; byte offset into the page tables
+	move.l	(0,a3,d2.l),d0
+	move.l	(0,a4,d2.l),d1
+.span_table_store
+	move.l	d0,(a0)+
+	move.l	d1,(a0)+
+	lea	32(a1),a1
+	addq.l	#1,a2
+	dbra	d3,.span_table_triangle
+	move.l	#1,span_table_ready
+	movem.l	(sp)+,d0-d3/a0-a4
+	rts
+
+; In/out: D0 = survivors in the draw list.  Decides whether this frame is
+; streamed and arms one record window for all of it.  The DSP transmits only
+; while BUILD walks marked triangles, and a handshaked word is recorded only
+; when the DSP sends one, so the window fills with exactly the stream.
+span_stream_begin_frame
+	move.l	d0,order_total
+	clr.l	order_drawn
+	clr.l	span_stream_frame
+	clr.l	span_frame_triangles
+	clr.l	span_share_acc
+	tst.l	span_stream_enabled
+	beq	.span_begin_done
+	tst.l	dsp_direct_frame
+	beq	.span_begin_done		; a validation frame keeps every record
+	tst.l	span_table_ready
+	bne	.span_begin_table
+	bsr	span_build_table
+.span_begin_table
+	lea	span_stream_buffer,a0
+	move.l	a0,span_stream_ptr
+	lea	span_stream_buffer_end,a1
+	jsr	ssi_dma_arm_record
+	tst.l	d0
+	bne	.span_begin_failed
+	move.l	#1,span_stream_frame
+	bra	.span_begin_done
+.span_begin_failed
+	addq.l	#1,span_stat+24		; arm failures
+	clr.l	span_stream_enabled
+.span_begin_done
+	move.l	order_total,d0
+	rts
+
+; After the last triangle of a frame: the record address has to stand exactly
+; where the consumer stopped reading.  Anything else means the two sides
+; disagree about the stream, and the counter says so.
+span_stream_end_frame
+	tst.l	span_stream_frame
+	beq	.span_end_done
+	moveq	#0,d0
+	move.b	$ffff8909.w,d0
+	lsl.l	#8,d0
+	move.b	$ffff890b.w,d0
+	lsl.l	#8,d0
+	move.b	$ffff890d.w,d0
+	move.l	span_stream_ptr,d1
+	move.l	d1,d2
+	andi.l	#$00ffffff,d2
+	cmp.l	d0,d2
+	beq	.span_end_agree
+	addq.l	#1,span_stat+20		; frames whose two ends disagree
+.span_end_agree
+	sub.l	#span_stream_buffer,d1		; this frame's stream, in bytes
+	lea	span_stat+4,a0
+	addq.l	#1,(a0)+		; streamed frames
+	add.l	d1,(a0)+		; bytes, summed
+	cmp.l	(a0),d1
+	bls	.span_end_max
+	move.l	d1,(a0)		; bytes, largest frame
+.span_end_max
+	addq.l	#4,a0
+	move.l	span_frame_triangles,d0
+	add.l	d0,(a0)		; streamed triangles, summed
+	jsr	ssi_dma_stop
+.span_end_done
+	rts
+	endc
 	ifd	TREX_ORDERED
 ; Ask the ORDERED DSP image for its draw-order keys and sort them.  Each key
 ; word is bucket<<12 | global triangle number for one survivor, in ascending
@@ -4340,6 +4603,29 @@ order_fetch_and_sort
 	endc
 ; Draw the next undrawn packet.  rasterize_packet preserves D7/A2/A3 only.
 stream_draw_packet
+	ifd	TREX_SPAN_STREAM
+	move.l	order_drawn,d0
+	addq.l	#1,order_drawn
+	lea	order_marks,a0
+	tst.b	(0,a0,d0.l)
+	beq	.draw_record		; this position kept its record
+	lea	order_list,a0
+	moveq	#0,d1
+	move.w	(0,a0,d0.l*2),d1		; global triangle number
+	lea	span_tri_table,a0
+	lea	(0,a0,d1.l*8),a0
+	move.l	(a0)+,a5		; texture page
+	move.l	(a0),a0		; the page's opaque word CLUT
+	move.l	span_stream_ptr,a1
+	move.l	a3,-(sp)
+	move.l	render_base,a3
+	bsr	span_stream_draw
+	move.l	(sp)+,a3
+	move.l	a1,span_stream_ptr
+	addq.l	#1,span_frame_triangles
+	rts
+.draw_record
+	endc
 	move.l	stream_drawn,d0
 	addq.l	#1,stream_drawn
 	lsl.l	#7,d0		; GPU_PACKET_BYTES = 128
@@ -5420,8 +5706,13 @@ gpu_submit_ot
 	TimeMark	stat_mark_raster
 	move.l	dsp_packet_count_shadow,gpu_ot_node_count
 .stream_draw_tail
+	ifd	TREX_SPAN_STREAM
+	move.l	order_drawn,d0
+	cmp.l	order_total,d0
+	else
 	move.l	stream_drawn,d0
 	cmp.l	dsp_packet_count_shadow,d0
+	endc
 	bcc	.gpu_submit_raster_done
 	bsr	stream_draw_packet
 	bra	.stream_draw_tail
@@ -5499,6 +5790,9 @@ gpu_submit_ot
 	endc
 	bsr	gpu_rasterize_ot
 .gpu_submit_raster_done
+	ifd	TREX_SPAN_STREAM
+	bsr	span_stream_end_frame
+	endc
 	TimeAdd	stat_mark_raster,stat_t_raster
 	TimeMark	stat_mark_present
 	; Keep this call site exactly one word-sized BSR in both release variants.
@@ -5604,6 +5898,25 @@ offset_record_frame
 	move.l	offset_stream_ptr,d0
 	sub.l	#offset_stream,d0
 	move.l	d0,dc_clear_longwords
+	lea	offset_stat,a0
+	addq.l	#1,(a0)+		; frames
+	add.l	d0,(a0)+		; stream bytes, summed
+	cmp.l	(a0),d0
+	bls	.record_bytes_max
+	move.l	d0,(a0)
+.record_bytes_max
+	addq.l	#4,a0
+	move.l	offset_frame_spans,d0
+	add.l	d0,(a0)+		; spans, summed
+	cmp.l	(a0),d0
+	bls	.record_spans_max
+	move.l	d0,(a0)
+.record_spans_max
+	addq.l	#4,a0
+	move.l	offset_frame_packets,d0
+	add.l	d0,(a0)		; recorded packets, summed
+	clr.l	offset_frame_spans
+	clr.l	offset_frame_packets
 	rts
 
 ; A0 = packet.  Records it when it is qualified-opaque and the stream has
@@ -5618,8 +5931,11 @@ offset_record_packet
 	cmpi.l	#offset_stream_end-OFFSET_STREAM_GUARD,d0
 	bhi	.record_skip
 	move.l	d0,GPU_PACKET_RESOLVE+20(a0)
+	addq.l	#1,offset_frame_packets
 	move.l	#1,offset_record_mode
+	move.l	raster_pixel_count,-(sp)		; the consumer counts these pixels
 	bsr	rasterize_packet
+	move.l	(sp)+,raster_pixel_count
 	clr.l	offset_record_mode
 	move.l	offset_stream_ptr,a0
 	move.w	#-1,(a0)+		; end of this packet's spans
@@ -5636,15 +5952,45 @@ offset_draw_packet
 	beq	rasterize_packet
 	move.l	d0,a1
 	move.l	GPU_PACKET_RESOLVE+4(a0),a5		; texture page
+	move.l	GPU_PACKET_RESOLVE+16(a0),d0		; shade
+	andi.l	#$30,d0
+	lsl.l	#8,d0
+	add.l	d0,d0		; tint * 8,192 bytes of word banks
 	move.l	GPU_PACKET_RESOLVE+8(a0),a0		; tint's bank-zero CLUT base
+	suba.l	d0,a0		; the page's own bank zero
+	move.l	a3,-(sp)		; the walk's next-node pointer
+	move.l	render_base,a3
+	bsr	span_stream_draw
+	move.l	(sp)+,a3
+	rts
+	endc
+
+	ifd	TREX_SPAN_CONSUMER
+; Draw one triangle from a span-and-offset stream (OPTIMIZATION.md 7.4g).
+; Per span: (tint << 4 | level) << 8 | length - 1, then y << 8 | x, then one
+; texel offset V << 8 | U per pixel.  A unit with bit 15 set ends the
+; triangle.  The 68030 keeps exactly the texel fetch and the framebuffer
+; write; everything else was decided by whoever produced the stream.
+; In:  A0 = the texture page's opaque word CLUT, bank zero of tint zero
+;      A1 = stream, A3 = render window, A5 = texture page
+; Out: A1 = first unit after the terminator; the pixels are added to
+;      raster_pixel_count.  Clobbers D0-D5/A4/A6.
+span_stream_draw
 	moveq	#0,d0
 	moveq	#0,d1
+	moveq	#0,d2
+	moveq	#0,d5
 .draw_span
-	move.w	(a1)+,d4
+	move.w	(a1)+,d3
 	bmi	.draw_done
-	move.l	(a1)+,a4
+	moveq	#0,d4
+	move.b	d3,d4		; length - 1
+	clr.b	d3
+	lea	(0,a0,d3.w*2),a6		; this span's CLUT bank
 	move.w	(a1)+,d2
-	lea	(0,a0,d2.w),a6
+	lea	(0,a3,d2.l*2),a4		; first pixel
+	addq.l	#1,d5
+	add.l	d4,d5
 .draw_pixel
 	move.w	(a1)+,d1		; texel offset, V << 8 | U
 	move.b	(0,a5,d1.l),d0		; texel -> palette index
@@ -5652,6 +5998,7 @@ offset_draw_packet
 	dbra	d4,.draw_pixel
 	bra	.draw_span
 .draw_done
+	add.l	d5,raster_pixel_count
 	rts
 	endc
 ; Walk the OT from far to near and invoke the software triangle backend for
@@ -6810,19 +7157,28 @@ span_walk_half
 	; Entered like any pixel body: D4 = span length - 1, A4 = first pixel,
 	; A6 = this row's CLUT bank, D5/D6 = prestepped U/V, A0/A1 = du/dx and
 	; dv/dx.  Instead of drawing it appends one span to the stream:
-	;   word  length - 1
-	;   long  address of the first pixel
-	;   word  CLUT bank offset from the tint's bank zero
+	;   word  (tint << 4 | level) << 8 | length - 1
+	;   word  y << 8 | x of the first pixel
 	;   then one word per pixel, V integer << 8 | U integer
+	; This is the wire format of 7.4g, so the stream recorded here is the
+	; reference the DSP's stream is compared against.
 	; with the index built by the opaque body's own four instructions.
 .span_record
-	move.l	a4,d0
-	move.l	offset_stream_ptr,a4
-	move.w	d4,(a4)+
-	move.l	d0,(a4)+
+	addq.l	#1,offset_frame_spans
+	move.l	a4,d1
+	sub.l	render_base,d1
+	lsr.l	#1,d1		; y << 8 | x
 	move.l	a6,d0
-	sub.l	raster_clut_tint_base,d0
+	sub.l	raster_clut_tint_base,d0		; level << 9
+	lsr.l	#1,d0
+	move.l	raster_shade,d2
+	andi.l	#$30,d2
+	lsl.l	#8,d2		; tint << 12
+	or.l	d2,d0
+	move.b	d4,d0		; | length - 1
+	move.l	offset_stream_ptr,a4
 	move.w	d0,(a4)+
+	move.w	d1,(a4)+
 .span_record_pixel
 	move.w	d6,d1
 	move.w	d5,d0
@@ -7809,6 +8165,12 @@ banner_text
 ; Dsp_LoadProg reads the LOD from the current GEMDOS directory.  The Makefile
 ; copies the runtime LOD next to this executable.
 trex_dsp_lod_path
+	ifd	TREX_SPAN_STREAM
+	; Its own name: this host marks list entries for the DSP's span walker,
+	; and an image without the walker would read the mark as part of the
+	; triangle number.
+	dc.b	'TREXSPAN.LOD',0
+	else
 	ifd TREX_SSI_PIPELINE
 	dc.b	'TREXPIPE.LOD',0
 	else
@@ -7860,7 +8222,23 @@ trex_dsp_lod_path
 	endc
 	endc
 	endc
+	endc
 
+	ifd	TREX_OFFSET_PROBE
+offset_stat_path
+	dc.b	'offstat.res',0
+	even
+	endc
+	ifd	TREX_SPAN_CONSUMER
+span_dump_path
+	dc.b	'spanstrm.res',0
+	even
+	endc
+	ifd	TREX_SPAN_STREAM
+span_stat_path
+	dc.b	'spanstat.res',0
+	even
+	endc
 render_stats_path
 	dc.b	'render_stats.res',0
 
@@ -7924,6 +8302,19 @@ span_validate_enabled
 ; same linked layout.
 offset_probe_enabled
 	dc.l	1
+	endc
+	ifd	TREX_SPAN_STREAM
+; 1 = claim the SSI/DMA route and stream qualified-opaque triangles; 0 = this
+; build is the plain draw-order pipeline in the same linked layout.  A data
+; longword so tools/patch_data_flag.py compares both.
+span_stream_wanted
+	dc.l	1
+; How many of every 256 qualified-opaque triangles are streamed, 0..256.
+; The rest keep their records and are rasterized by the 68030 itself.  This
+; is the load balance between the two processors: at 256 the frame waits on
+; the DSP and the wire, at 0 on the rasterizer (7.4g has the sweep).
+span_stream_share
+	dc.l	SPAN_STREAM_SHARE
 	endc
 	ifd	TREX_STREAM_DRAW
 ; 1 = fetch ahead and draw while the DSP computes; 0 = draw each chunk
@@ -9819,12 +10210,56 @@ fps_text
 	even
 	endc
 
+	ifd	TREX_SPAN_CONSUMER
+span_dump_bytes
+	ds.l	1
+	endc
+	ifd	TREX_SPAN_STREAM
+; Span-stream state, appended after every other allocation so no pinned
+; buffer moves.  span_stat: claim result, streamed frames, bytes summed,
+; bytes of the largest frame, streamed triangles summed, frames whose record
+; address and read position disagree, arm failures, the share in force.
+span_stream_enabled
+	ds.l	1
+span_stream_frame
+	ds.l	1
+span_table_ready
+	ds.l	1
+span_stream_ptr
+	ds.l	1
+span_frame_triangles
+	ds.l	1
+order_total
+	ds.l	1
+order_drawn
+	ds.l	1
+span_share_acc
+	ds.l	1
+; One byte per draw-list position: nonzero when that triangle was marked.
+order_marks
+	ds.b	TREX_PRIMITIVES
+	even
+span_stat
+	ds.l	SPAN_STAT_LONGS
+span_tri_table
+	ds.l	2*TREX_PRIMITIVES
+span_stream_buffer
+	ds.b	SPAN_STREAM_BYTES
+span_stream_buffer_end
+	endc
 	ifd	TREX_OFFSET_PROBE
 ; Offset-stream probe state, appended after every other allocation so no
 ; pinned buffer moves.
 offset_record_mode
 	ds.l	1
 offset_stream_ptr
+	ds.l	1
+; frames, bytes summed, bytes max, spans summed, spans max, packets summed
+offset_stat
+	ds.l	6
+offset_frame_spans
+	ds.l	1
+offset_frame_packets
 	ds.l	1
 offset_stream
 	ds.b	OFFSET_STREAM_BYTES
