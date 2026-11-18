@@ -45,8 +45,8 @@ slide show by design -- the workload is
 identical on every run, which is what
 makes it a yardstick.
 
-NOT the v1.2 release.  This is built
-from the current sources (2026-11-18):
+This is the v1.3 release build
+(2026-11-18):
 the DSP sends depth keys, the 68030
 draws in that order as data arrives,
 and for most textured triangles the DSP
@@ -57,8 +57,11 @@ WHAT IS BEING ASKED
 ----------------------------------------
 
 Under a corrected Hatari this build
-measures 366.8 ms per frame, 2.73 FPS,
-against v1.2's 511.2 ms and 1.956 FPS.
+measures 353.1 ms per frame, 2.83 FPS,
+against v1.2's 510.3 ms and 1.96 FPS
+on the same settings; with its
+stricter cycle-exact model 366.8 ms
+against v1.2's 681.8 ms.
 But that emulator only approximates a
 Falcon, and the span stream has never
 run on real hardware.

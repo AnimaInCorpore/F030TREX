@@ -177,5 +177,52 @@
  "hash_512": {
   "frmhash_sha256": "0a3f2fa18026a943846a6320718fd9dfbb21e7414113ee405dc473d51c4b8ab8",
   "reference": "0a3f2fa18026a943846a6320718fd9dfbb21e7414113ee405dc473d51c4b8ab8"
+ },
+ "v1_2_release": {
+  "note": "Published v1.2 TREX.ZIP (rebuilt from tag v1.2 byte-identically), stats_flush_enabled patched to 1, timed on the same Hatari binary as the runs above",
+  "tos_sha256": "b2b2a6e30bab8059c1bc5f8ada3f9d2f6efaa33c2ebc63d85e3ce0a1ef8c4a41",
+  "lod_sha256": "ed481eb11176f343b9f4533a4011439f637a84d79d697e27d040d9c598beb1b5",
+  "runs": {
+   "ce": {
+    "stats": {
+     "frames": 265,
+     "vbl_start": 648,
+     "vbl_end": 9691,
+     "hz200_start": 18584,
+     "hz200_end": 54718,
+     "t_setframe": 726,
+     "t_packets": 12995,
+     "t_clear": 849,
+     "t_otinsert": 237,
+     "t_raster": 21290,
+     "t_present": 18,
+     "pixels": 9046388,
+     "ot_nodes": 1149,
+     "dsp_packets": 1149,
+     "ot_prims": 1149
+    },
+    "ms_per_frame": 681.774
+   },
+   "mmu": {
+    "stats": {
+     "frames": 265,
+     "vbl_start": 583,
+     "vbl_end": 7351,
+     "hz200_start": 18322,
+     "hz200_end": 45366,
+     "t_setframe": 687,
+     "t_packets": 12647,
+     "t_clear": 772,
+     "t_otinsert": 147,
+     "t_raster": 12756,
+     "t_present": 8,
+     "pixels": 9046388,
+     "ot_nodes": 1149,
+     "dsp_packets": 1149,
+     "ot_prims": 1149
+    },
+    "ms_per_frame": 510.264
+   }
+  }
  }
 }

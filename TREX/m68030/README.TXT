@@ -3,7 +3,7 @@
   DSP56001 geometry + 68030 raster
 ========================================
 
-Release v1.2
+Release v1.3
 
 A Falcon030 port of the T-Rex sequence
 from the PlayStation disc "Demo One"
@@ -156,13 +156,20 @@ filled in software every single frame.
 
 The only figures recorded so far come
 from corrected Hatari, whose timing only
-approximates a real machine: 1.956
+approximates a real machine: 2.83
 frames per second for this build
-(511.2 ms/frame), with about 47 percent
-in the rasterizer and 47 percent in DSP
-readback and packet building.  Older
-emulator figures used twice the Falcon
-DSP clock.
+(353.1 ms/frame), against 1.96 for
+v1.2 on the same emulator settings,
+and 2.73 against 1.47 with Hatari's
+stricter cycle-exact CPU and bus
+model.  The
+DSP now also walks most
+textured triangles pixel by pixel and
+streams the result to the 68030, so
+the two processors finish each frame
+close together.  Older emulator
+figures used twice the Falcon DSP
+clock.
 Nothing has been measured on real
 hardware yet.  The number on your own
 Falcon is the interesting one.

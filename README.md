@@ -12,9 +12,13 @@ Prebuilt release archives are on the
 `TREX.ZIP` contains `TREX.TOS`, `TREX.LOD` and the 40-column `README.TXT`,
 ready to unpack and run on a stock Falcon030 or under Hatari.  The current
 release is
-[v1.2](https://github.com/AnimaInCorpore/F030TREX/releases/tag/v1.2) --
-the full-mesh package rebuilt from the post-v1.1 DSP and M68030 sources,
-with the corrected release benchmark and validation fixes included.
+[v1.3](https://github.com/AnimaInCorpore/F030TREX/releases/tag/v1.3) --
+the draw-order pipeline with the DSP span-and-offset stream over SSI/DMA
+(OPTIMIZATION.md 7.4h). On the same corrected Hatari it measures
+353.1 ms / 2.83 FPS on the MMU ledger against v1.2's 510.3 ms / 1.96 FPS, and
+366.8 ms / 2.73 FPS cycle-exact with Videl contention against v1.2's
+681.8 ms / 1.47 FPS. It locks the Falcon
+sound system while it runs; no physical Falcon has run it yet.
 
 ## Building
 
@@ -200,9 +204,11 @@ key 5.1 and the prelight fetch 2.1 -- 128.1 ms once the ladder's own guards
 (~2 ms, measured by its control arm) are taken out.  `make_triangle_span` is
 the largest measured item left inside BUILD.
 
-The v1.2 release has a measured figure: **511.2 ms per frame, 1.956 FPS**
-under a Hatari corrected to run the DSP at the Falcon's real clock
-(OPTIMIZATION.md 2.4e). Older figures in that file were taken on a stock
+The v1.3 release measures **353.1 ms per frame, 2.83 FPS** on the MMU
+ledger and **366.8 ms / 2.73 FPS** cycle-exact with Videl contention, under a
+Hatari corrected to run the DSP at the Falcon's real clock (OPTIMIZATION.md
+7.4h). The published v1.2, timed on the same emulator binary, measures
+510.3 ms / 1.96 FPS and 681.8 ms / 1.47 FPS (2.4e had 511.2 ms). Older figures in that file were taken on a stock
 emulator that ran the DSP at twice its rate and are ~24% optimistic on the
 whole frame; sections 2.4b--2.4j are the corrected ones. Still not a Falcon
 measurement.

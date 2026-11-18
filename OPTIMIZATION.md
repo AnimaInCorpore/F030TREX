@@ -8399,6 +8399,7 @@ copy of 2.4e, `stats_flush_enabled` patched to 1.
 | **Default diagnostic** | **365.34 ms / 2.737 FPS** | **351.77 ms / 2.843 FPS** |
 | Previous default release (4.1g) | 543.08 ms / 1.841 FPS | 365.09 ms / 2.739 FPS |
 | **Default release (`TREX.TOS`)** | **366.79 ms / 2.726 FPS** | **353.06 ms / 2.832 FPS** |
+| Published v1.2 release, same emulator binary | 681.77 ms / 1.467 FPS | 510.26 ms / 1.960 FPS |
 
 The diagnostic is **-175.6 ms, +48.1% FPS** cycle-exact and **-11.3 ms,
 +3.2% FPS** on the MMU ledger; the release is -176.3 ms (+48.1%) and -12.0 ms
@@ -8409,6 +8410,16 @@ diagnostic are set frame 13.5, packet 258.3, clear 16.2, raster 77.0 ms.
 The share stays at 160, the cycle-exact optimum; on the MMU ledger share 64
 measured lower (330.5 ms, 7.4g), and the share is one patchable data longword
 (`span_stream_share`) if hardware puts the balance point elsewhere.
+
+The v1.2 row is the published `TREX.ZIP` (rebuilt from tag `v1.2`
+byte-identically), timing-patched the same way. Its MMU-ledger figure
+reproduces 2.4e's 511.2 ms within 1 ms on today's emulator binary, so that
+comparison holds across the emulator rebuilds; its cycle-exact figure had
+never been taken. v1.2 shipped the occlusion prepass armed, which removes
+3,278 of 9,049,666 pixels over the prefix, so the two releases do not draw an
+identical workload. This is what the **v1.3** release is measured against:
+**-157.2 ms (+44.5% FPS)** on the MMU ledger and **-315.0 ms (+85.9% FPS)**
+cycle-exact.
 
 **Gates.** All **512 frame hashes** of the default hash build match the
 reference (`frmhash.res` `0a3f2fa1...`), and frame 100 is `d89958b3...3d16`
