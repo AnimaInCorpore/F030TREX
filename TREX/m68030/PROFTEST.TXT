@@ -39,6 +39,16 @@ WHAT TO SEND BACK
 
   RENDER_S.RES  the stage timings
   FB.RES        the frame-100 picture
+  SPANSTAT.RES  span stream counters
+  SPANSTRM.RES  frame 100's span stream
+
+Since 2026-11-18 the DSP also streams
+spans to the 68030 over SSI and record
+DMA, so this build locks the sound
+system while it runs.  SPANSTAT.RES
+says whether the stream ran at all.
+The stage numbers below are from the
+build before that.
 
 RENDER_S.RES splits the frame into DSP
 set-up, DSP readback and packet build,

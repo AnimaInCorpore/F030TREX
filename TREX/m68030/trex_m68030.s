@@ -188,6 +188,23 @@ TREX_ORDERED set 1
 	endc
 TREX_STREAM_DRAW set 1
 	endc
+; The span stream (TREX_SPAN_STREAM, below) is the default form of the
+; draw-order pipeline since 2026-11-18 (OPTIMIZATION.md 7.4h).
+; TREX_PLAIN_ORDER builds the draw-order pipeline without it -- every survivor
+; a span-setup record over the host port -- as the A/B reference; it pairs
+; with the SPANSTREAM=0 image under its own file name.
+	ifnd	TREX_LEGACY_OT
+	ifnd	TREX_PLAIN_ORDER
+	ifnd	TREX_SPAN_STREAM
+TREX_SPAN_STREAM set 1
+	endc
+	endc
+	endc
+	ifd	TREX_PLAIN_ORDER
+	ifd	TREX_SPAN_STREAM
+	fail	"TREX_PLAIN_ORDER is the draw-order pipeline without the span stream"
+	endc
+	endc
 ; TREX_STREAM_DRAW assembles the draw-on-arrival path: the chunk loop that
 ; draws while it waits (stream_drain_chunks) and the tail that draws the
 ; rest (gpu_submit_ot).  The default build has it through TREX_ORDERED.  The
@@ -201,8 +218,9 @@ TREX_STREAM_DRAW set 1
 ; walks their rows and pixels and sends the result over SSI into a DMA record
 ; window, and the 68030 keeps the texel fetch and the framebuffer write.
 ; Every other triangle still arrives as a span-setup record over the host
-; port.  It pairs with the SPANSTREAM=1 DSP image under its own file name and
-; links against ssi_dma.s.  TREX_SPAN_CONSUMER is the stream's draw loop,
+; port.  It pairs with the SPANSTREAM=1 DSP image, which is the default
+; trex_dsp.lod / TREX.LOD, and links against ssi_dma.s built with
+; TREX_SSI_TRACKS4.  TREX_SPAN_CONSUMER is the stream's draw loop,
 ; which the offset probe of 3.16 shares so its CPU-recorded stream can serve
 ; as the reference for the DSP's.
 	ifd	TREX_SPAN_STREAM
@@ -8166,10 +8184,20 @@ banner_text
 ; copies the runtime LOD next to this executable.
 trex_dsp_lod_path
 	ifd	TREX_SPAN_STREAM
-	; Its own name: this host marks list entries for the DSP's span walker,
-	; and an image without the walker would read the mark as part of the
-	; triangle number.
-	dc.b	'TREXSPAN.LOD',0
+	; The default pair since 7.4h: this host marks list entries for the
+	; DSP's span walker, and an image without the walker would read the
+	; mark as part of the triangle number, so the plain draw-order image
+	; lives under TREXORDR.LOD and never under these names.
+	ifd	TREX_RELEASE
+	dc.b	'TREX.LOD',0
+	else
+	dc.b	'trex_dsp.lod',0
+	endc
+	else
+	ifd	TREX_PLAIN_ORDER
+	; Twelve characters, like the default name, so the A/B partner keeps
+	; the data layout of the name string.
+	dc.b	'TREXORDR.LOD',0
 	else
 	ifd TREX_SSI_PIPELINE
 	dc.b	'TREXPIPE.LOD',0
@@ -8216,6 +8244,7 @@ trex_dsp_lod_path
 	dc.b	'TREXLEGA.LOD',0
 	else
 	dc.b	'trex_dsp.lod',0
+	endc
 	endc
 	endc
 	endc

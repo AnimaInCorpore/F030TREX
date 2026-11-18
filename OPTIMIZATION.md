@@ -88,16 +88,20 @@ in [`TREX/m68030/trex_m68030.s`](TREX/m68030/trex_m68030.s).
 
 ## 2. Current measured baseline
 
-**Latest active baseline (2026-11-18): section 4.1g.** The draw-order
-pipeline is the default. On Hatari `c5d5bf34` the diagnostic build measures
-**540.9 ms / 1.85 FPS** on the cycle-exact profile with Videl contention and
-**363.1 ms / 2.75 FPS** on the MMU ledger, and the release **543.1 ms /
-1.84 FPS** and **365.1 ms / 2.74 FPS**, over the 265-frame prefix, with all
-512 frame hashes identical to the previous pipeline's. Everything below this
-paragraph in section 2, and every section outside 4.1e-4.1g, was measured on
+**Latest active baseline (2026-11-18): section 7.4h.** The draw-order
+pipeline with the span-and-offset stream of 7.4g is the default: the DSP walks
+the rows and pixels of 160 of every 256 qualified-opaque triangles and streams
+spans and texel offsets over SSI/DMA. On Hatari `c5d5bf34` the diagnostic
+build measures **365.3 ms / 2.74 FPS** on the cycle-exact profile with Videl
+contention and **351.8 ms / 2.84 FPS** on the MMU ledger, and the release
+**366.8 ms / 2.73 FPS** and **353.1 ms / 2.83 FPS**, over the 265-frame
+prefix, with all 512 frame hashes identical to the reference. The plain
+draw-order pipeline (`TREX_PLAIN_ORDER`, section 4.1g) measured 540.9 ms and
+363.1 ms on the same two profiles. Everything below this paragraph in
+section 2, and every section outside 4.1e-4.1g and 7.4g-7.4h, was measured on
 the previous index-order pipeline, which `TREX_LEGACY_OT` still builds and
-which measures 599.7 ms and 425.7 ms on the same two profiles. No physical
-Falcon has run the new default.
+which measures 599.7 ms and 425.7 ms. No physical Falcon has run either
+draw-order default.
 
 **Previous baseline of the index-order pipeline (2026-09-06): section 2.4m.** The
 diagnostic measures **433.7 ms / 2.31 FPS**, and the release **431.1 ms /
@@ -5923,6 +5927,12 @@ with the default hash build's.
 packages build. This section records what the switch changed and what the
 defaults measure.
 
+**Status: superseded as the default by section 7.4h,** which adds the span
+stream of 7.4g on top of this pipeline. What this section calls the default
+is now the plain draw-order pair, `make trex_m68030_plain` (`-DTREX_PLAIN_ORDER`,
+`TREXORDR.LOD`); its host is this section's default executable except for the
+file name, and its image is byte-identical to the one tracked here.
+
 **What "default" means now.**
 
 - **Host.** `trex_m68030.s` selects the draw-order pipeline unless
@@ -8130,6 +8140,11 @@ the four-track `ssi_dma.s` of 7.4f) and the `SPANSTREAM=1` DSP image, which
 the host loads as `TREXSPAN.LOD` and as nothing else. The default pair is
 byte-identical to before.
 
+**Status: the default pipeline since section 7.4h.** The "opt-in" wording, the
+`trex_span.tos` / `TREXSPAN.LOD` names and the reproduction commands below
+describe the state in which it was first measured; 7.4h has the current build
+targets and file names. The mechanism, protocol and measurements stand.
+
 **Division of work.** The pipeline is 4.1f's: the DSP sends one depth key per
 survivor, the host sorts them and lists the survivors, far to near, in BUILD
 chunks. New is a mark, bit 12 of a listed triangle number. A marked triangle
@@ -8324,6 +8339,102 @@ python3 tools/patch_data_flag.py hatari_runs/span_all.tos \
 make DOSBOX=/path/to/DOSBox trex_m68030_offset_probe   # the reference stream
 python3 tools/compare_span_stream.py hatari_runs/span-ce/spanstrm.res \
   hatari_runs/offset-on-ce/spanstrm.res
+```
+
+### 7.4h The span stream is the default (2026-11-18)
+
+7.4g's pair is now what `make trex_m68030`, `make trex_release` and the
+hardware packages build. This section records what the switch changed and
+what the defaults measure.
+
+**What "default" means now.**
+
+- **Host.** Every draw-order host defines `TREX_SPAN_STREAM` unless
+  `-DTREX_PLAIN_ORDER` is given, and links `ssi_dma4.o` (`ssi_dma.s` with
+  `-DTREX_SSI_TRACKS4`, 7.4f): `trex_m68030.tos`, `trex_run.tos`, `TREX.TOS`,
+  `trex_framehash.tos`, `trex_pio_cal.tos`, `trex_prestep.tos` and the two
+  rasterizer-split profile builds. The legacy variants of 4.1g are untouched.
+  The profile builds' `TREX_PROFILE_NO_PIXELS` / `NO_ROWS` switches act on
+  the record path only, not on `span_stream_draw`, so the split of
+  `measure_split` (already marked stale) no longer isolates the rasterizer.
+- **DSP.** `SPANSTREAM` defaults to `$(ORDERED)`, so the default
+  configuration is `00001101s`: the tracked `TREX/dsp/trex_dsp.lod` is the
+  span image (P:`$0975`, SHA256 `92d4744c...`, the image 7.4g measured), and
+  `trex_dsp_cam.lod` its `OBJLIGHTS=0` counterpart (P:`$0962`). Every
+  `ORDERED=0` variant -- legacy, SSI pipeline and bring-up, phase ladder -- is
+  `SPANSTREAM=0` by construction, because the walker does not assemble on the
+  legacy image; their images are byte-identical to before (legacy
+  `14789e0a...`).
+- **Pairing by file name.** The span host loads `trex_dsp.lod`, or
+  `TREX.LOD` as the release. The plain draw-order pair is the A/B reference:
+  `make trex_m68030_plain` builds `trex_plain.tos` (`-DTREX_PLAIN_ORDER`)
+  and deploys the `SPANSTREAM=0` image as `TREXORDR.LOD`, the only name that
+  host loads. That image is byte-identical to the default tracked before this
+  section, and `trex_plain.tos` is byte-identical to the previous default
+  executable except for the twelve bytes of the file name. The new default
+  diagnostic executable differs from 7.4g's `trex_span.tos` in exactly the
+  eleven bytes of its name string, so 7.4g's layout and measurements describe
+  it. `make trex_m68030_span` remains as a name for the default pair.
+- **Sound system.** The default now claims the sound system once at start-up
+  (`Locksnd`, then the DSP-transmit -> DMA-record route, 7.4f) and releases it
+  on exit. If the claim fails -- another program holds the sound system, or
+  any gate of `ssi_dma_claim` refuses -- `span_stream_init` marks nothing and
+  the run is the plain draw-order pipeline with the stream's host overhead
+  (7.4g's share-0 row). The hardware notes (`FPSTEST.TXT`, `README.TXT`) say
+  so; until this section the release never touched the sound system.
+
+**Measured**, identical 265-frame prefixes, Hatari `2.6.1-devel`, fork
+source `c5d5bf34`, TOS 4.02, 16 MHz 68030, corrected 32 MHz DSP, 4 MiB ST RAM.
+The Hatari binary was rebuilt from the same source since 7.4g and hashes
+differently (`d1dc43ab...` against `2007b44a...`). Raw counters and input
+hashes are in
+[`docs/performance/span-default-2026-11-18.json`](docs/performance/span-default-2026-11-18.json).
+These are emulator measurements, not physical-Falcon timings, and the two
+profiles must not be mixed. The release rows are the layout-identical timing
+copy of 2.4e, `stats_flush_enabled` patched to 1.
+
+| Build | Cycle-exact, contention on | MMU ledger |
+|---|---:|---:|
+| Previous default diagnostic (4.1g) | 540.89 ms / 1.849 FPS | 363.06 ms / 2.754 FPS |
+| **Default diagnostic** | **365.34 ms / 2.737 FPS** | **351.77 ms / 2.843 FPS** |
+| Previous default release (4.1g) | 543.08 ms / 1.841 FPS | 365.09 ms / 2.739 FPS |
+| **Default release (`TREX.TOS`)** | **366.79 ms / 2.726 FPS** | **353.06 ms / 2.832 FPS** |
+
+The diagnostic is **-175.6 ms, +48.1% FPS** cycle-exact and **-11.3 ms,
++3.2% FPS** on the MMU ledger; the release is -176.3 ms (+48.1%) and -12.0 ms
+(+3.4%). The diagnostic reproduces 7.4g's share-160 figures to within one
+200 Hz tick per 20 ms of run (365.34 against 365.25 ms, 351.77 against
+351.81 ms), on the rebuilt emulator binary. The cycle-exact stages of the
+diagnostic are set frame 13.5, packet 258.3, clear 16.2, raster 77.0 ms.
+The share stays at 160, the cycle-exact optimum; on the MMU ledger share 64
+measured lower (330.5 ms, 7.4g), and the share is one patchable data longword
+(`span_stream_share`) if hardware puts the balance point elsewhere.
+
+**Gates.** All **512 frame hashes** of the default hash build match the
+reference (`frmhash.res` `0a3f2fa1...`), and frame 100 is `d89958b3...3d16`
+in every run. Every 265-frame run writes 9,049,666 pixels and ends with 500
+packets; `spanstat.res` reports a successful claim, 265 streamed frames,
+16,519,624 bytes, 150,800 streamed triangles, no frame whose record address
+and read position disagree and no arm failure, in all four runs (and 512
+frames, no disagreement, in the hash run). The legacy, SSI pipeline, prepass,
+phase, probe and bring-up hosts all still assemble and link.
+
+**Not measured.** No physical Falcon has run the stream (7.4g's three
+emulator-only assumptions stand). The hardware packages (`fps_package`,
+`prof_package`) now carry it, so the next hardware run is its first; the
+plain pair is the A/B partner, and a run whose `spanstat.res` claim word is
+nonzero measured the fallback, not the stream.
+
+**Reproduction.**
+
+```sh
+make DOSBOX=/path/to/DOSBox trex_m68030 trex_release trex_m68030_plain
+python3 tools/measure_frames.py TREX/m68030/trex_m68030.tos \
+  TREX/dsp/trex_dsp.lod hatari_runs/default-ce \
+  --cpu-core cycle-exact --videl-contention on --frames 265 --timeout 2400
+python3 tools/measure_frames.py TREX/m68030/trex_plain.tos \
+  TREX/m68030/TREXORDR.LOD hatari_runs/plain-ce --dsp-name TREXORDR.LOD \
+  --cpu-core cycle-exact --videl-contention on --frames 265 --timeout 2400
 ```
 
 ## 8. When SSI/crossbar streaming is worthwhile
@@ -9568,7 +9679,8 @@ The open roadmap, in recommended order (expected effects from the section
     68030's own walker records, and all 512 frame hashes match.  With 160
     of every 256 qualified triangles streamed the cycle-exact frame is
     **557.8 -> 365.2 ms (1.79 -> 2.74 FPS)**; with all of them it is 389.7 ms and waits
-    on the DSP.  Opt-in (`make trex_m68030_span`), emulator only: four
+    on the DSP.  **The default since section 7.4h** (365.3 / 366.8 ms
+    diagnostic / release cycle-exact), emulator only: four
     record tracks at 32 MHz, the record address at acknowledgement time
     and cache coherency of a window still being filled are untested on a
     Falcon.

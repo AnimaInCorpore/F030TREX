@@ -78,6 +78,12 @@ program is holding the DSP, the demo
 still runs.  The T-Rex stays absent;
 the FPS field still updates on black.
 
+The demo locks the sound system while
+it runs (Locksnd) and routes the DSP's
+SSI output to record DMA.  If another
+program holds the sound system, it
+runs without the stream, slower.
+
 
 WHAT YOU SEE
 ------------
@@ -120,12 +126,18 @@ DSP56001
   It sends one depth key per visible
   triangle, then builds the triangles
   in the order the 68030 names them.
+  For most textured triangles it also
+  walks the rows and pixels itself and
+  streams spans and texel offsets to
+  the 68030 over SSI and record DMA.
 
 68030
   Sorts the depth keys, then draws
   each batch as it arrives with a
   textured Gouraud span rasterizer in
-  painter's order, no Z buffer.
+  painter's order, no Z buffer; for
+  streamed triangles only the texel
+  fetch and the pixel write are left.
 
 Light
   Three coloured lights and a reddish

@@ -1,0 +1,181 @@
+{
+ "date": "2026-11-18",
+ "scope": "Emulator runs; no physical Falcon measurements",
+ "section": "OPTIMIZATION.md 7.4h",
+ "hatari_source": "c5d5bf3435d0b22769cfb5f8c1b3831d21ec51e8",
+ "hatari_sha256": "d1dc43ab0b28aee0f0cc4adba25ac5526cbc4af2e94be49d054a6e67b1165872",
+ "note": "Hatari binary rebuilt from the same fork source as 7.4g; its sha256 differs from 7.4g's 2007b44a...",
+ "dsp": {
+  "trex_dsp.lod (SPANSTREAM=1, default)": "92d4744cb0807860842506d100a05e00a7ab2a8e0bd8c2d5a2f8f46e5c758e23",
+  "trex_dsp_cam.lod": "ff48be52cf123e85cb1fcd44f1296c392bf1ba3277b10c165fae1f10b59a711e",
+  "TREXORDR.LOD (SPANSTREAM=0)": "8388cf9f19ae87363e81035a44b2d8b462f305c4219cd3f9d2390a81807ba773",
+  "TREXLEGA.LOD": "14789e0af6654096816ae1d0c1dfdf7acc08da7f6edcc53a5fabe3772aff5859"
+ },
+ "binaries": {
+  "trex_m68030.tos": "b94f6054233d2c896f0f1942a8759c6eda9d875f3f7d98c07fc19baf7b561da2",
+  "TREX.TOS": "ed2ecc2b4688f68a6ecb6b0d14b29494e69d09e28c20441ef49c2d69fd038148",
+  "TREX.TOS timing copy (stats_flush_enabled=1)": "0e52b6e73e84313a3898250d2e781f5ff3effeeaccc48a9757033c9d7820d49a",
+  "trex_framehash.tos": "f3a665d79e30e675f36f75f873417eedd09b880715b3add5a730b1c81950cf40",
+  "trex_plain.tos": "25b751cad9d80086bd4958875b8dce91ca7f6f190294bdf63201d83652c82fe3"
+ },
+ "runs": {
+  "diag-ce": {
+   "profile": "cycle-exact, videl contention on",
+   "stats": {
+    "frames": 265,
+    "vbl_start": 650,
+    "vbl_end": 5496,
+    "hz200_start": 18591,
+    "hz200_end": 37954,
+    "t_setframe": 716,
+    "t_packets": 13691,
+    "t_clear": 857,
+    "t_otinsert": 0,
+    "t_raster": 4079,
+    "t_present": 1,
+    "pixels": 9049666,
+    "ot_nodes": 500,
+    "dsp_packets": 500,
+    "ot_prims": 500
+   },
+   "ms_per_frame": 365.34,
+   "stage_ms": {
+    "setframe": 13.509,
+    "packets": 258.321,
+    "clear": 16.17,
+    "raster": 76.962,
+    "present": 0.019
+   },
+   "span": {
+    "claim": 0,
+    "frames": 265,
+    "bytes": 16519624,
+    "bytes_max": 114042,
+    "triangles": 150800,
+    "disagree": 0,
+    "arm_failures": 0,
+    "share": 160
+   },
+   "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16"
+  },
+  "diag-mmu": {
+   "profile": "MMU ledger",
+   "stats": {
+    "frames": 265,
+    "vbl_start": 582,
+    "vbl_end": 5248,
+    "hz200_start": 18320,
+    "hz200_end": 36964,
+    "t_setframe": 680,
+    "t_packets": 16483,
+    "t_clear": 771,
+    "t_otinsert": 0,
+    "t_raster": 685,
+    "t_present": 2,
+    "pixels": 9049666,
+    "ot_nodes": 500,
+    "dsp_packets": 500,
+    "ot_prims": 500
+   },
+   "ms_per_frame": 351.774,
+   "stage_ms": {
+    "setframe": 12.83,
+    "packets": 311.0,
+    "clear": 14.547,
+    "raster": 12.925,
+    "present": 0.038
+   },
+   "span": {
+    "claim": 0,
+    "frames": 265,
+    "bytes": 16519624,
+    "bytes_max": 114042,
+    "triangles": 150800,
+    "disagree": 0,
+    "arm_failures": 0,
+    "share": 160
+   },
+   "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16"
+  },
+  "rel-ce": {
+   "profile": "cycle-exact, videl contention on",
+   "stats": {
+    "frames": 265,
+    "vbl_start": 650,
+    "vbl_end": 5515,
+    "hz200_start": 18591,
+    "hz200_end": 38031,
+    "t_setframe": 736,
+    "t_packets": 13607,
+    "t_clear": 852,
+    "t_otinsert": 0,
+    "t_raster": 4207,
+    "t_present": 18,
+    "pixels": 9049666,
+    "ot_nodes": 500,
+    "dsp_packets": 500,
+    "ot_prims": 500
+   },
+   "ms_per_frame": 366.792,
+   "stage_ms": {
+    "setframe": 13.887,
+    "packets": 256.736,
+    "clear": 16.075,
+    "raster": 79.377,
+    "present": 0.34
+   },
+   "span": {
+    "claim": 0,
+    "frames": 265,
+    "bytes": 16519624,
+    "bytes_max": 114042,
+    "triangles": 150800,
+    "disagree": 0,
+    "arm_failures": 0,
+    "share": 160
+   }
+  },
+  "rel-mmu": {
+   "profile": "MMU ledger",
+   "stats": {
+    "frames": 265,
+    "vbl_start": 582,
+    "vbl_end": 5265,
+    "hz200_start": 18320,
+    "hz200_end": 37032,
+    "t_setframe": 691,
+    "t_packets": 16464,
+    "t_clear": 768,
+    "t_otinsert": 0,
+    "t_raster": 762,
+    "t_present": 7,
+    "pixels": 9049666,
+    "ot_nodes": 500,
+    "dsp_packets": 500,
+    "ot_prims": 500
+   },
+   "ms_per_frame": 353.057,
+   "stage_ms": {
+    "setframe": 13.038,
+    "packets": 310.642,
+    "clear": 14.491,
+    "raster": 14.377,
+    "present": 0.132
+   },
+   "span": {
+    "claim": 0,
+    "frames": 265,
+    "bytes": 16519624,
+    "bytes_max": 114042,
+    "triangles": 150800,
+    "disagree": 0,
+    "arm_failures": 0,
+    "share": 160
+   }
+  }
+ },
+ "hash_512": {
+  "frmhash_sha256": "0a3f2fa18026a943846a6320718fd9dfbb21e7414113ee405dc473d51c4b8ab8",
+  "reference": "0a3f2fa18026a943846a6320718fd9dfbb21e7414113ee405dc473d51c4b8ab8"
+ }
+}

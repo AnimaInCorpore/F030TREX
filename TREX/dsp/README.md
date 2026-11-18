@@ -152,20 +152,26 @@ disarmed captures are byte-identical at frame 100 and at hold frame 291,
 with zero prepass protocol failures or capacity overruns across the hold.
 
 The frontend reserves `X:$0000-$3DFF` and `Y:$0000-$3EF7`. The full-mesh
-program occupies P from `$0040`. The default draw-order image (`ORDERED=1`,
-`OPTIMIZATION.md` 4.1f/4.1g) omits the occlusion prepass and ends at `$07EF`,
-464 words before the Y indices at `$09C0`; the legacy index-order image
+program occupies P from `$0040`. The draw-order images (`ORDERED=1`,
+`OPTIMIZATION.md` 4.1f/4.1g) omit the occlusion prepass; the plain one ends at
+`$07EF`, 464 words before the Y indices at `$09C0`, and the default span-stream
+image below at `$0975`; the legacy index-order image
 (`ORDERED=0`) ends at `$099E`. The prepass descriptions and the extents in the
 rest of this section are the legacy image's. Section 2.4m's cached cull
 preserves that extent: its marker/test and index skip replace the repeated
 area branches and box call. The optional variant extents below are unchanged.
 
-`SPANSTREAM=1` (`make trex_dsp_span`, `OPTIMIZATION.md` 7.4g) extends the
-draw-order image: a listed triangle whose number carries bit 12 is not
-returned as a record but walked row for row and pixel for pixel by
-`span_stream_walk` and transmitted over SSI as spans and texel offsets. That
-image ends at `$0975` and pairs only with a `-DTREX_SPAN_STREAM` host, which
-loads it as `TREXSPAN.LOD`.
+`SPANSTREAM=1` (`OPTIMIZATION.md` 7.4g) extends the draw-order image, and
+since 7.4h it is the default: the tracked `trex_dsp.lod` and the release's
+`TREX.LOD` are this image. A listed triangle whose number carries bit 12 is
+not returned as a record but walked row for row and pixel for pixel by
+`span_stream_walk` and transmitted over SSI as spans and texel offsets. It
+ends at `$0975`, 74 words below `$09C0`, and pairs with the default host,
+which is a `TREX_SPAN_STREAM` host. `SPANSTREAM=0` is the plain draw-order
+image (`$07EF`); `make trex_m68030_plain` deploys it as `TREXORDR.LOD` for the
+`-DTREX_PLAIN_ORDER` A/B host. `SPANSTREAM` follows `ORDERED` unless given, so
+every `ORDERED=0` variant assembles without the walker. The tracked
+`trex_dsp_cam.lod` is the `SPANSTREAM=1 OBJLIGHTS=0` counterpart.
 
 Besides `ORDERED` and `SPANSTREAM`, seven switches in the generated `dspconf.inc` select what is assembled,
 because it no longer all fits — `SSIPROBE` (the `CMD_SSI_STREAM` transport

@@ -37,9 +37,10 @@ make trex_release
 ```
 
 This produces `TREX/m68030/TREX.TOS`: the full 2,724-triangle model with
-textured Gouraud lighting and no per-frame diagnostic file writes. The DSP
-occlusion path remains compiled in but defaults to disarmed because its current
-conservative yield measures as a net loss at the corrected DSP clock. Its
+textured Gouraud lighting and no per-frame diagnostic file writes. It is the
+span-stream pipeline (`OPTIMIZATION.md` 7.4h), linked with the four-track
+SSI/DMA route, so it locks the Falcon sound system while it runs. The DSP
+occlusion prepass is not in it; it survives only in the legacy build. Its
 matching `TREX.LOD` is copied beside it for deployment, and
 `TREX/m68030/README.TXT` is the 40-column, CRLF release note that ships with
 them; those three files together are the release archive.
@@ -164,12 +165,17 @@ byte-identical picture over 512 frames the diagnostic build measures
 ledger, and `TREX.TOS` **543.1 ms / 1.84 FPS** and **365.1 ms / 2.74 FPS**,
 against 599.7 and 425.7 ms for the previous pipeline on the same emulator.
 `make trex_m68030_legacy` builds that previous pipeline (`-DTREX_LEGACY_OT`,
-`TREXLEGA.LOD`). `make trex_m68030_span` builds an opt-in pair
-(`-DTREX_SPAN_STREAM`, `TREXSPAN.LOD`, `OPTIMIZATION.md` 7.4g) in which the DSP
-also walks the rows and pixels of most textured triangles and sends spans and
-texel offsets over SSI/DMA, leaving the 68030 the texel fetch and the
-framebuffer write: **365.2 ms / 2.74 FPS** cycle-exact at an identical
-picture, emulator only and not yet run on a Falcon. The figures in the rest of
+`TREXLEGA.LOD`). **Since 7.4h the default also streams spans** (`OPTIMIZATION.md`
+7.4g/7.4h): the DSP walks the rows and pixels of most textured triangles and
+sends spans and texel offsets over SSI/DMA, leaving the 68030 the texel fetch
+and the framebuffer write. At an identical picture over 512 frames the
+diagnostic build measures **365.3 ms / 2.74 FPS** cycle-exact and
+**351.8 ms / 2.84 FPS** on the MMU ledger, and `TREX.TOS` **366.8 ms /
+2.73 FPS** and **353.1 ms / 2.83 FPS**; the draw-order figures above are now
+the plain pair's, `make trex_m68030_plain` (`-DTREX_PLAIN_ORDER`,
+`TREXORDR.LOD`). The default claims the sound system (`Locksnd`, DSP transmit
+to DMA record) while it runs and falls back to the plain pipeline if it cannot.
+Emulator only; no Falcon has run the stream yet. The figures in the rest of
 this paragraph are the previous pipeline's. Over the 265-frame prefix its full-mesh **diagnostic** build
 measured **433.7 ms / 2.31 FPS**, and `TREX.TOS` measures **431.1 ms /
 2.32 FPS** with its release-only overlay and default-disarmed prepass
@@ -215,13 +221,14 @@ lighting word per triangle, and the FINISH window -- otherwise idle DSP time
 while the 68030 rasterizes -- lights every survivor of the frame ahead of
 BUILD, which reads the table instead of computing.
 
-The default draw-order image (`ORDERED=1`) omits the occlusion sweep and ends
-at `P:$07EF`, 464 words below the resident-index ceiling; its camera-lights
-A/B reference (`make trex_dsp_camlights`) ends at `P:$07DC`. The legacy
-index-order image (`ORDERED=0`, `make trex_dsp_legacy`) ends at `P:$099E`, and
-the extents quoted for the probe variants below are those of that image, on
-which they are built. `SPANSTREAM=1` (`make trex_dsp_span`) adds the span
-walker of section 7.4g to the default image and ends at `P:$0975`. Besides
+The default image (`ORDERED=1 SPANSTREAM=1`) is the draw-order image with the
+span walker of section 7.4g; it omits the occlusion sweep and ends at
+`P:$0975`, 74 words below the resident-index ceiling, and its camera-lights
+A/B reference (`make trex_dsp_camlights`) ends at `P:$0962`. The plain
+draw-order image (`SPANSTREAM=0`, `make trex_m68030_plain`) ends at `P:$07EF`.
+The legacy index-order image (`ORDERED=0`, `make trex_dsp_legacy`) ends at
+`P:$099E`, and the extents quoted for the probe variants below are those of
+that image, on which they are built. Besides
 `ORDERED` and `SPANSTREAM`, seven switches in the generated
 `dspconf.inc` select what is assembled, because in the legacy image it does
 not all fit: the `CMD_SSI_STREAM` transport probe

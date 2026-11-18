@@ -12,9 +12,11 @@ protected medium and the number it shows
 is not being slowed down by anything
 measuring it.
 
-It also does not touch the sound system.
-That is the other test package
-(TREXDMA), not this one.
+It DOES lock the sound system while it
+runs: the DSP streams spans to the
+68030 over SSI into record DMA.  If
+another program holds the sound system
+it runs without the stream, slower.
 
 WHAT TO RUN
 ----------------------------------------
@@ -44,25 +46,29 @@ identical on every run, which is what
 makes it a yardstick.
 
 NOT the v1.2 release.  This is built
-from the current sources, which are 18
-commits further on, and it is faster:
-the frame-ahead lighting pass and the
-packed normal table (2026-09-02) took
-the frame from 498 ms to 457 ms.
+from the current sources (2026-11-18):
+the DSP sends depth keys, the 68030
+draws in that order as data arrives,
+and for most textured triangles the DSP
+walks the rows and pixels itself and
+streams spans and texel offsets.
 
 WHAT IS BEING ASKED
 ----------------------------------------
 
 Under a corrected Hatari this build
-measures 457.1 ms per frame, 2.19 FPS,
+measures 366.8 ms per frame, 2.73 FPS,
 against v1.2's 511.2 ms and 1.956 FPS.
 But that emulator only approximates a
-Falcon, and nothing has ever been
-measured on real hardware.
+Falcon, and the span stream has never
+run on real hardware.
 
 The number on your own machine is the
 one nobody has.  Please report what the
 counter settles at, and on what -- stock
 Falcon, accelerator, RAM, TOS version.
+If the picture breaks, hangs, or looks
+wrong, please say so: that is a result
+too.
 
 ========================================
