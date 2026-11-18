@@ -32,12 +32,15 @@ def main():
     parser.add_argument("--dsp-name", choices=("trex_dsp.lod", "TREX.LOD",
                                               "TREXSSI.LOD", "TREXPHAS.LOD",
                                               "TREXDMA.LOD", "TREXPIPE.LOD",
-                                              "TREXLEGA.LOD", "TREXSPAN.LOD"),
+                                              "TREXLEGA.LOD", "TREXSPAN.LOD",
+                                              "TREXHIRS.LOD"),
                         default="trex_dsp.lod", help="binary-specific DSP loader name")
     parser.add_argument("--cpu-core", choices=("mmu", "cycle-exact"),
                         default="mmu", help="MMU ledger or cycle-exact CPU model")
     parser.add_argument("--videl-contention", choices=("off", "on"),
                         default="off", help="explicit bus model; ledger default is off")
+    parser.add_argument("--memsize", type=int, choices=(4, 14), default=4,
+                        help="ST-RAM in MiB; the 640x400 build needs 14")
     parser.add_argument("--hatari", type=Path, default=ROOT.parent /
                         "F030Arcade/third_party/hatari/build/src/hatari")
     parser.add_argument("--tos", type=Path, default=ROOT.parent /
@@ -66,7 +69,7 @@ def main():
                "true" if args.videl_contention == "on" else "false",
                "--patch-tos", "true",
                "--fast-boot", "true", "--tos", str(paths["tos"]),
-               "--dsp", "emu", "--memsize", "4", "--ttram", "0",
+               "--dsp", "emu", "--memsize", str(args.memsize), "--ttram", "0",
                "--monitor", "rgb", "--frameskips", "4", "--sound", "off",
                "--benchmark", "--confirm-quit", "off", "--log-level", "fatal",
                "--alert-level", "fatal", "--harddrive", ".",

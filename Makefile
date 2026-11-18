@@ -57,6 +57,10 @@ ORDERED=1
 # does not assemble without it, so every ORDERED=0 variant (legacy, SSI
 # pipeline and bring-up, phase ladder) is SPANSTREAM=0 by construction.
 SPANSTREAM=$(ORDERED)
+# 640x400 interlaced image (OPTIMIZATION.md 6.6a): the span-stream image built
+# for a 640x400 render target, with a three-unit span header.  It pairs only
+# with the -DTREX_HIRES host, which loads it as TREXHIRS.LOD.
+HIRES=0
 
 # One generator for the assembler-visible build switches, used by every DSP
 # rule so a variant can never assemble against a stale or missing config.
@@ -70,7 +74,7 @@ SPANSTREAM=$(ORDERED)
 # asking for one variant could silently leave you the previous one.
 # SPANSTREAM appends a letter instead of a ninth digit, so every identity
 # written down before it existed still names the same image.
-DSPCONF_ID=$(SSIPROBE)$(WINPROBE)$(PIOBURST)$(PREPASSDIAG)$(OBJLIGHTS)$(PRELIGHT)$(PHASEPROBE)$(ORDERED)$(if $(filter 1,$(SPANSTREAM)),s)
+DSPCONF_ID=$(SSIPROBE)$(WINPROBE)$(PIOBURST)$(PREPASSDIAG)$(OBJLIGHTS)$(PRELIGHT)$(PHASEPROBE)$(ORDERED)$(if $(filter 1,$(SPANSTREAM)),s)$(if $(filter 1,$(HIRES)),i)
 DSPCONF_STAMP=./TREX/dsp/build/dspconf-$(DSPCONF_ID).stamp
 # Each configuration assembles to its own image, so asking for one names a file
 # that either exists (and is current) or does not (and is built).  Existence is
@@ -88,7 +92,7 @@ PHASE_LOD=./TREX/dsp/build/trex_dsp-00001110-$(DSPSRC_ID).lod
 # ./TREX/dsp/trex_dsp.lod, so a variant build can never leave the wrong image
 # in the tree for `make measure` or a release to pick up.
 DSPCONF_DEFAULT_ID=00001101s
-DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\nPRELIGHT\tequ\t%s\nPHASEPROBE\tequ\t%s\nORDERED\tequ\t%s\nSPANSTREAM\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' '$(PRELIGHT)' '$(PHASEPROBE)' '$(ORDERED)' '$(SPANSTREAM)' > ./TREX/dsp/build/dspconf.inc
+DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\nPRELIGHT\tequ\t%s\nPHASEPROBE\tequ\t%s\nORDERED\tequ\t%s\nSPANSTREAM\tequ\t%s\nHIRES\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' '$(PRELIGHT)' '$(PHASEPROBE)' '$(ORDERED)' '$(SPANSTREAM)' '$(HIRES)' > ./TREX/dsp/build/dspconf.inc
 # Extra flags for the DSP assembly run.  Plain DOSBox needs none.  DOSBox-X
 # opens a working-folder prompt and a menu on macOS and then never reaches
 # BUILD.BAT, so it needs:
@@ -584,6 +588,24 @@ trex_dsp_plain: create_dirs
 	cp $(PLAIN_LOD) ./TREX/m68030/TREXORDR.LOD
 
 trex_m68030_plain: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_plain.tos trex_dsp_plain
+
+# 640x400 interlaced pair (OPTIMIZATION.md 6.6a): TOS's own true-colour
+# 640x400 RGB/TV mode, rendered in full.  Two 512,000-byte screens and a
+# 2 MiB stream window need more than 4 MiB: run it with 14 MiB of ST-RAM.
+# trex_hires.tos loads TREXHIRS.LOD and no other image.
+HIRES_LOD=./TREX/dsp/build/trex_dsp-00001101si-$(DSPSRC_ID).lod
+.PHONY: trex_dsp_hires trex_m68030_hires
+trex_dsp_hires: create_dirs
+	@$(MAKE) --no-print-directory SSIPROBE=0 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=1 PRELIGHT=1 PHASEPROBE=0 ORDERED=1 SPANSTREAM=1 HIRES=1 trex_dsp
+	cp $(HIRES_LOD) ./TREX/m68030/TREXHIRS.LOD
+
+trex_m68030_hires: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires.tos trex_dsp_hires
+
+./TREX/m68030/build/trex_hires.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -o $@ -L ./TREX/m68030/build/trex_hires.lst
+
+./TREX/m68030/trex_hires.tos: ./TREX/m68030/build/trex_hires.o ./TREX/m68030/build/ssi_dma4.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 ./TREX/m68030/build/trex_plain.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
 	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_PLAIN_ORDER -o $@ -L ./TREX/m68030/build/trex_plain.lst

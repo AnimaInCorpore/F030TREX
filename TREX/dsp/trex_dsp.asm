@@ -128,8 +128,20 @@ TREX_PRIMITIVES	= 2724
 ; bounding-box rejection below uses them to drop fully off-screen triangles.
 ; 240 since the host presents through a 256-pixel-wide Videl mode whose wide
 ; pixels cover the screen width 320 square ones used to.
+; HIRES=1 (OPTIMIZATION.md 6.6a) renders 640x400 for the Videl's 640x400
+; interlaced true-colour RGB mode.  Its spans can be longer than 256 pixels
+; and its rows longer than 256 bytes, so the span stream sends three header
+; units instead of two (ss_header).
+	IF	HIRES
+SCREEN_WIDTH	= 640
+SCREEN_HEIGHT	= 400
+	ELSE
 SCREEN_WIDTH	= 240
 SCREEN_HEIGHT	= 224
+	ENDIF
+	IF	HIRES*(1-SPANSTREAM)
+	FAIL	'HIRES is built on the span-stream image'
+	ENDIF
 ; Largest triangle chunk one BUILD_TRIANGLES call may carry.  32 since the
 ; span-setup record: at seventeen result words per survivor the output buffer
 ; is the largest X allocation after the resident arrays, and 64-triangle
@@ -2996,16 +3008,24 @@ span_stream_walk
 	move	a0,y:<ss_dv		; the pixel loop steps V << 8
 	move	y:span_dudx,x0
 	move	x0,n4
+	IF	HIRES
+	move	#>1,n7		; R7 is the row itself
+	ELSE
 	move	#>$100,n7
+	ENDIF
 	move	y:triangle_shade,a
 	move	#>$30,x0
 	and	x0,a
 	move	a1,x0
 	mpy	x1,x0,a		; tint << 12 in A0
+	IF	HIRES
+	move	a0,y:<ss_tint		; the header sends the length apart
+	ELSE
 	move	a0,x0
 	move	#>-1,a
 	add	x0,a
 	move	a1,y:<ss_tint		; the header adds the pixel count, hence the -1
+	ENDIF
 	move	y:span_sy0,x0
 	move	x0,y:<ss_y
 	move	y:span_mid,a
@@ -3125,9 +3145,13 @@ ss_bottom_ok
 	jle	<ss_half_end
 	move	a1,y0		; rows to walk
 	move	y:<ss_y,x0
+	IF	HIRES
+	move	x0,r7		; y
+	ELSE
 	move	#>$80,x1
 	mpy	x1,x0,b
 	move	b0,r7		; y << 8
+	ENDIF
 	add	x0,a
 	move	a1,y:<ss_y		; the row after this half
 	move	#>$800,y1
@@ -3154,9 +3178,14 @@ ss_right_ok
 	jmi	<ss_left_clip
 	sub	x0,b		; pixels in the span
 	jle	<ss_row_next
+	IF	HIRES
+	move	b1,r0		; R0 = pixel count
+	move	x0,r6		; x of the first pixel
+	ELSE
 	move	r7,a
 	add	x0,a	b1,r0		; y << 8 | x; R0 = pixel count
 	move	a1,r6
+	ENDIF
 	jsr	<ss_header
 	; U and V at the first pixel, the header already on the wire.
 	move	y:span_dudx,x1
@@ -3206,8 +3235,21 @@ ss_half_end
 	rts
 
 ; A span's two header units.  R0 = pixel count, R6 = y << 8 | x.
+; HIRES sends three: length - 1, (tint << 4 | level) << 9 | y, then x;
+; R7 = y, R6 = x.
 ; Clobbers A, X0 and X1; leaves B, Y0 and Y1 alone.
 ss_header
+	IF	HIRES
+	move	r0,a
+	move	#>1,x1
+	sub	x1,a		; length - 1, at most 639: bit 15 stays clear
+	move	a1,x0
+	move	#>$80,x1
+	mpy	x1,x0,a
+ss_header_wait0
+	jclr	#m_tde,x:m_sr,ss_header_wait0
+	movep	a0,x:m_tx
+	ENDIF
 	move	y:<ss_lvl,a
 	tst	a
 	jpl	<ss_level_low
@@ -3222,8 +3264,14 @@ ss_level_high
 	and	x1,a		; level << 8
 	move	y:<ss_tint,x1
 	add	x1,a
+	IF	HIRES
+	asl	a		; (tint << 4 | level) << 9
+	move	r7,x1
+	add	x1,a		; | y
+	ELSE
 	move	r0,x1
 	add	x1,a		; (tint << 4 | level) << 8 | length - 1
+	ENDIF
 	move	a1,x0
 	move	#>$80,x1
 	mpy	x1,x0,a		; aligned to the transmitter's top sixteen bits
@@ -3245,8 +3293,12 @@ ss_left_clip
 	jle	<ss_row_next
 	neg	a	b1,r0		; clipped pixels; R0 = pixel count
 	move	a1,y:ss_clip
+	IF	HIRES
+	move	#0,r6		; column zero
+	ELSE
 	move	r7,x0
 	move	x0,r6		; position unit: column zero
+	ENDIF
 	jsr	<ss_header
 	move	y:ss_clip,x0
 	move	y:span_dudx,x1

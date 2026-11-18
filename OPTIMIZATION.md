@@ -97,7 +97,10 @@ contention and **351.8 ms / 2.84 FPS** on the MMU ledger, and the release
 **366.8 ms / 2.73 FPS** and **353.1 ms / 2.83 FPS**, over the 265-frame
 prefix, with all 512 frame hashes identical to the reference. The plain
 draw-order pipeline (`TREX_PLAIN_ORDER`, section 4.1g) measured 540.9 ms and
-363.1 ms on the same two profiles. Everything below this paragraph in
+363.1 ms on the same two profiles. An opt-in 640x400 interlaced pair (TOS's
+own true-colour RGB mode, rendered in full, 14 MiB of ST-RAM; section 6.6a)
+measures **681.7 ms / 1.47 FPS** and **613.1 ms / 1.63 FPS**; it is not the
+default. Everything below this paragraph in
 section 2, and every section outside 4.1e-4.1g and 7.4g-7.4h, was measured on
 the previous index-order pipeline, which `TREX_LEGACY_OT` still builds and
 which measures 599.7 ms and 425.7 ms. No physical Falcon has run either
@@ -6973,6 +6976,145 @@ after the exit comes back at exactly the 648x602 of a reference boot that
 never ran the demo. Note that Hatari renders one buffer pixel as one host
 pixel: it does not model the wide pixels, so its screenshots and `fb.res` are
 both squeezed by 0.8 against a real Falcon.
+
+### 6.6a 640x400 interlaced: opt-in, 681.7 ms (2026-11-18)
+
+`make DOSBOX=/path/to/DOSBox trex_m68030_hires` builds an opt-in pair that
+renders the whole of a **640x400 interlaced true-colour** RGB/TV mode:
+`trex_hires.tos` (`-DTREX_HIRES`) and the `HIRES=1` DSP image (configuration
+`00001101si`, P:`$0978`), which the host loads as `TREXHIRS.LOD` and as nothing
+else. The default pair and the release are untouched: rebuilt after the
+change, `trex_m68030.tos` and `TREX.TOS` are byte-identical to before and the
+tracked `trex_dsp.lod` reassembles unchanged.
+
+**The mode is TOS's.** A probe that calls `Setscreen(log, phys, 3, $012c)`
+(`BPS16|COL80|PAL|VERTFLAG`) under TOS 4.02 in Hatari, on its own 600,000-byte
+buffer, and reads the Videl back gave:
+
+| Register | Value | Meaning |
+|---|---|---|
+| `$ffff8282` | `$01fe0199` | HHT \| HBB |
+| `$ffff8286` | `$00500071` | HBE \| HDB |
+| `$ffff828a` | `$012201b2` | HDE \| HSS |
+| `$ffff82a2` | `$02700265` | VFT \| VBB |
+| `$ffff82a6` | `$002f007e` | VBE \| VDB |
+| `$ffff82aa` | `$020e026b` | VDE \| VSS |
+| `$ffff820a` | `$0200` | 50 Hz |
+| `$ffff82c0` | `$0181` | 32 MHz clock, RGB |
+| `$ffff82c2` | `$0006` | 2 cycles/pixel, interlace |
+| `$ffff8266` | `$0100` | true colour |
+| `$ffff8210` | `$0280` | 640 words per line |
+
+A plain `Vsetmode($012c)` is not a usable probe: it clears a 512,000-byte
+screen from TOS's own screen address near the top of RAM and bus-errors past
+the end of it, at 4 and at 14 MiB alike. TOS 4.02 accepts the mode on RGB/TV;
+these values are TOS's tables, not a Screenspain dump, and no real monitor has
+shown them for this program. On VGA a 640-wide true-colour picture does not
+exist, so the build restores the saved Videl state there and renders without
+a display.
+
+**Geometry.** 640 of these 16 MHz pixels span the width 256 of the default's
+6.3 MHz ones, and an interlaced line is half as tall as a 224-line one, so the
+projection is the default's at the new pitch: focal 1865 (746 * 2.5) and 1866
+(933 * 2), centre 320/200. The framing is the default build's except that 400
+half-height lines show the height of 200 of its 224 lines. The whole screen is
+rendered (no window margin), at a 1,280-byte stride.
+
+**What changes with `TREX_HIRES`.**
+
+- **Span-stream header: three units.** Spans reach 640 pixels and a row
+  address no longer fits a sixteen-bit `y << 8 | x`, so a span is
+  `length - 1` (bit 15 stays clear, so `$FFFF` still terminates), then
+  `(tint << 4 | level) << 9 | y` (masking with `$FE00` is the bank's byte
+  offset in the 512-byte word CLUT), then `x`. The texel units are unchanged.
+  The DSP keeps R7 = y and R6 = x and `ss_header` sends the extra unit; the
+  host consumer forms the address with one `MULU.W #1280` per span. Each
+  span costs one wire unit more than in the default format.
+- **Row address** in `rasterize_packet`: `MULS.L #1280` instead of the
+  512-stride shift/add.
+- **`DC_EMPTY`** is derived from `SCREEN_WIDTH` (its value for the default is
+  the old `$00f08000`).
+- **The packed per-half pixel counter** may in principle overflow its word at
+  this size; it only feeds `raster_pixel_count`, so the guard is waived for
+  this build and the counts below are not affected (no triangle approaches
+  65,536 pixels).
+- **Stream window 2 MiB** (512 KiB default). The largest frame measured is
+  480,418 bytes, which would have overrun the default window -- and a full
+  window stalls the DSP for good (7.4g).
+- **Memory: needs 14 MiB.** Two 512,000-byte screens and the 2 MiB window put
+  the program past 4 MiB, so it does not run on a 4 MiB Falcon.
+  `tools/measure_frames.py --memsize 14` runs it; the default build measures
+  the same at 14 as at 4 MiB (controls below).
+- The build refuses `TREX_OCCL`, `TREX_OFFSET_PROBE` and `TREX_SSI_HATARI`.
+
+**Measured**, identical 265-frame prefixes, Hatari `2.6.1-devel`, fork source
+`c5d5bf34`, binary `d1dc43ab`, TOS 4.02, 16 MHz 68030, corrected 32 MHz DSP,
+**14 MiB** ST-RAM, `--monitor rgb`. Emulator measurements, not
+physical-Falcon timings; the two profiles must not be mixed.
+
+| Build | Cycle-exact, contention on | MMU ledger |
+|---|---:|---:|
+| Default 240x224, 14 MiB (control) | 365.1 ms / 2.74 FPS | 351.8 ms / 2.84 FPS |
+| **640x400i, share 160** | **681.7 ms / 1.47 FPS** | **613.1 ms / 1.63 FPS** |
+
+The controls reproduce 7.4h's 4 MiB figures (365.3 / 351.8 ms), so the memory
+size is not a factor. Cycle-exact stages, default against 640x400: set frame
+13.6 / 13.0, packet 258.2 / 453.4, clear 16.0 / 65.4, raster 76.9 / 149.5 ms.
+Pixels written rise from 34,149.7 to 160,686.4 a frame (4.71x), the stream
+from 62.3 KB to 263.9 KB a frame, survivors in the last frame from 500 to 522
+(triangles too thin to cover a pixel center at 240x224 now do). **The frame
+costs 1.87x for 4.71x the pixels**: the DSP's per-triangle term does not grow,
+and the 68030 draws most pixels in the four-instruction stream loop. The
+clear quadruples with the screen area; delta clearing still covers only
+the dirty bands.
+
+Two share points, same executable, cycle-exact with contention:
+
+| Share of 256 | Frame | Packet stage | Raster stage |
+|---:|---:|---:|---:|
+| 0 | 967.2 ms / 1.03 FPS | 176.5 ms | 711.7 ms |
+| 160 | **681.7 ms / 1.47 FPS** | 453.4 ms | 149.5 ms |
+| 256 | 764.6 ms / 1.31 FPS | 657.8 ms | 27.9 ms |
+
+160 beats both ends; the curve between them was not swept, so the optimum
+is not located at this resolution.
+
+**Gates.**
+
+- Frame 100 (`fb.res`, 512,000 bytes) hashes `d6d0c18b...52ca` at shares 0,
+  160 and 256 and on both profiles: the DSP walker with the three-unit header
+  and the 68030 walker draw the identical picture.
+- `spanstat.res`: claim 0, 265 streamed frames, 69,936,990 bytes, 155,328
+  streamed triangles, no frame whose record address and read position
+  disagree, no arm failure.
+- Converted, frame 100 frames the model like the default build's frame 100,
+  slightly tighter vertically as described; a Hatari screenshot (`--cmd-fifo`,
+  `hatari-debug screenshot`, frame 100) shows the full 640x400 picture on the
+  RGB display. Hatari presents the two fields as one frame; a TV interlaces
+  them, which no capture here shows.
+
+**Memory.** 15,648 / 1,172,192 / 4,861,030 bytes of text/data/BSS
+(6,048,870 in all) against 3,681,382 for the default: +794,624 for the two
+screens and +1,572,864 for the stream window.
+
+**Not established.** No physical Falcon or TV has shown this mode for this
+program, and Hatari does not model a real interlaced display's flicker or the
+monitor's response. Hatari's contention model charges the larger Videl fetch;
+how much of the frame that is, is not isolated. The share optimum is not
+located.
+
+Raw counters, commands and input hashes are in
+[`docs/performance/hires-2026-11-18.json`](docs/performance/hires-2026-11-18.json).
+
+**Reproduction.**
+
+```sh
+make DOSBOX=/path/to/DOSBox trex_m68030_hires
+python3 tools/measure_frames.py TREX/m68030/trex_hires.tos \
+  TREX/m68030/TREXHIRS.LOD hatari_runs/hires-ce --dsp-name TREXHIRS.LOD \
+  --memsize 14 --cpu-core cycle-exact --videl-contention on --frames 265 \
+  --timeout 6000
+```
 
 ### 6.7 Texture and CLUT reads
 

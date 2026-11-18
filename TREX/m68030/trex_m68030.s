@@ -72,10 +72,30 @@ RENDER_STATS_LONGS	= 22+DC_STATS_LONGS
 ; (PS1_PROJECTION_X below).  Vertically nothing changes: the 224 rendered
 ; lines are the 224 displayed lines on both monitor types, so the RGB/TV crop
 ; the 320x200 mode forced is gone.
+	ifd	TREX_HIRES
+; 640x400 interlaced (OPTIMIZATION.md 6.6a): TOS's own true-colour 640x400
+; RGB/TV mode -- 32 MHz clock, two cycles a pixel, interlace -- rendered in
+; full.  640 of these pixels span the width 256 wide ones do, and each
+; interlaced line is half as tall as a 224-line one.
+VIDEO_SCREEN_WIDTH	= 640
+VIDEO_SCREEN_HEIGHT	= 400
+SCREEN_WIDTH		= 640
+SCREEN_HEIGHT		= 400
+	ifd	TREX_OCCL
+	fail	"TREX_HIRES does not support TREX_OCCL"
+	endc
+	ifd	TREX_OFFSET_PROBE
+	fail	"TREX_HIRES does not support TREX_OFFSET_PROBE"
+	endc
+	ifd	TREX_SSI_HATARI
+	fail	"TREX_HIRES does not support TREX_SSI_HATARI"
+	endc
+	else
 VIDEO_SCREEN_WIDTH	= 256
 VIDEO_SCREEN_HEIGHT	= 224
 SCREEN_WIDTH		= 240
 SCREEN_HEIGHT		= 224
+	endc
 
 ; -----------------------------------------------------------------------------
 ; Delta clearing
@@ -108,7 +128,7 @@ DC_PAGE_BYTES		= DC_BANDS*DC_ENTRY
 ; Empty marker: xmin = 240, xmax = -32768.  After the clear's clamp of xmin to
 ; 0 the right edge is -32767, which is below the left edge, so the band skips
 ; itself -- no separate valid bit and no extra test in either loop.
-DC_EMPTY		= $00f08000
+DC_EMPTY		= (SCREEN_WIDTH<<16)+$8000
 
 TREX_VERTICES		= 1376
 TREX_NORMALS		= 3610
@@ -203,6 +223,11 @@ TREX_SPAN_STREAM set 1
 	ifd	TREX_PLAIN_ORDER
 	ifd	TREX_SPAN_STREAM
 	fail	"TREX_PLAIN_ORDER is the draw-order pipeline without the span stream"
+	endc
+	endc
+	ifd	TREX_HIRES
+	ifnd	TREX_SPAN_STREAM
+	fail	"TREX_HIRES is built on the default span-stream pipeline"
 	endc
 	endc
 ; TREX_STREAM_DRAW assembles the draw-on-arrival path: the chunk loop that
@@ -449,8 +474,17 @@ ANIMATION_MATRICES	= 32
 ; and 4.49 with the PS1's own 469/933 numbers.  The PS1 framebuffer figures
 ; cannot be carried over directly -- its 640x240 pixels are half as wide as
 ; tall, and that squeeze is undone by the display, not by the projection.
+	ifd	TREX_HIRES
+; The default's projection at this mode's pixel pitch: 640 pixels span the
+; 256-pixel width (746 * 2.5) and 400 interlaced lines are half as tall as
+; the default's (933 * 2).  The framing is the default build's, except that
+; 400 half-height lines show 200 of its 224 lines' height.
+PS1_PROJECTION_X	= 1865
+PS1_PROJECTION_Y	= 1866
+	else
 PS1_PROJECTION_X	= 746
 PS1_PROJECTION_Y	= 933
+	endc
 ; Deliberate deviation, not a source value: the source's own 2000 is
 ; faithfully reproduced by leaving the per-frame translation untouched, but
 ; on request the whole choreography sits further from the camera -- opening
@@ -4415,7 +4449,12 @@ stream_drain_chunks
 	rts
 
 	ifd	TREX_SPAN_STREAM
+	ifd	TREX_HIRES
+; 4.8 times the default's pixels; its largest frame was 114 KB at share 160.
+SPAN_STREAM_BYTES = 2048*1024
+	else
 SPAN_STREAM_BYTES = 512*1024
+	endc
 	ifnd	SPAN_STREAM_SHARE
 ; The cycle-exact emulator's optimum (7.4g).  The balance point belongs to
 ; the machine that runs it; a physical Falcon will want its own figure.
@@ -5272,7 +5311,29 @@ gpu_open
 
 	; --- monitor-specific Videl timing, from snowbros (see the constants) ---
 	cmpi.w	#2,video_monitor_type_shadow
+	ifd	TREX_HIRES
+	; A 640-wide true-colour picture exists only on RGB/TV: VGA's 25 MHz
+	; scan cannot fetch it.  On VGA the build renders without a display;
+	; the base and border colour written above go back to what TOS had.
+	bne	.gpu_hires_rgb
+	bsr	video_restore_registers
+	bra	.gpu_video_unavailable
+.gpu_hires_rgb
+	; TOS 4.02's own Setscreen(rez 3, mode $012c) values, read back in
+	; Hatari (BPS16|COL80|PAL|VERTFLAG): 32 MHz, 2 cycles/pixel, interlace.
+	move.l	#$1fe0199,$ffff8282.w		; HHT=$1fe  HBB=$199
+	move.l	#$500071,$ffff8286.w		; HBE=$050  HDB=$071
+	move.l	#$12201b2,$ffff828a.w		; HDE=$122  HSS=$1b2
+	move.l	#$2700265,$ffff82a2.w		; VFT=$270  VBB=$265
+	move.l	#$2f007e,$ffff82a6.w		; VBE=$02f  VDB=$07e
+	move.l	#$20e026b,$ffff82aa.w		; VDE=$20e  VSS=$26b
+	move.w	#$200,$ffff820a.w		; 50 Hz
+	move.w	#$181,$ffff82c0.w		; 32 MHz, RGB
+	move.w	#$6,d0				; 2 cycles/pixel, interlace
+	bra	.gpu_videl_common
+	else
 	beq	.gpu_set_vga_mode
+	endc
 
 	; RGB/TV: 256x224 true colour, 50.0 Hz, 15625 Hz.  25.175 MHz clock at
 	; 4 cycles/pixel (divider 4), which is what makes the 256 pixels cover
@@ -5999,6 +6060,22 @@ span_stream_draw
 	moveq	#0,d2
 	moveq	#0,d5
 .draw_span
+	ifd	TREX_HIRES
+	; Three units: length - 1, (tint << 4 | level) << 9 | y, x.
+	moveq	#0,d4
+	move.w	(a1)+,d4		; length - 1
+	bmi	.draw_done
+	move.w	(a1)+,d3
+	move.w	d3,d2
+	andi.w	#$fe00,d3		; bank * 512 bytes
+	lea	(0,a0,d3.w),a6		; this span's CLUT bank
+	andi.l	#$1ff,d2		; y
+	mulu.w	#FRAMEBUFFER_STRIDE,d2
+	lea	(0,a3,d2.l),a4
+	move.w	(a1)+,d2		; x
+	lea	(0,a4,d2.w*2),a4		; first pixel
+	moveq	#0,d2
+	else
 	move.w	(a1)+,d3
 	bmi	.draw_done
 	moveq	#0,d4
@@ -6007,6 +6084,7 @@ span_stream_draw
 	lea	(0,a0,d3.w*2),a6		; this span's CLUT bank
 	move.w	(a1)+,d2
 	lea	(0,a3,d2.l*2),a4		; first pixel
+	endc
 	addq.l	#1,d5
 	add.l	d4,d5
 .draw_pixel
@@ -6472,8 +6550,12 @@ rasterize_packet
 	; FRAMEBUFFER_STRIDE is exactly 512.  Shift/add is the same four bytes as
 	; the immediate multiply, preserves every following address, and removes
 	; one CPU multiply per packet without adding a DSP protocol word.
+	ifd	TREX_HIRES
+	muls.l	#FRAMEBUFFER_STRIDE,d1		; 1,280 bytes a row
+	else
 	lsl.l	#8,d1
 	add.l	d1,d1
+	endc
 	move.l	render_base,a4
 	adda.l	d1,a4
 	move.l	a4,raster_fb_row
@@ -6742,9 +6824,15 @@ span_walk_half
 	move.l	d0,raster_lvl
 	clr.l	raster_dlvl
 .span_level_live
+	ifnd	TREX_HIRES
 	ifgt	SCREEN_WIDTH*SCREEN_HEIGHT-65535
 	fail	"Packed row/pixel counter requires a half below 65536 pixels"
 	endc
+	endc
+	; TREX_HIRES: a half could in principle exceed 65,535 pixels.  The word
+	; is only the pixel statistic (raster_pixel_count); the row count and
+	; the drawing are unaffected, so an overflow would miscount, not
+	; misdraw.  None of this mesh's triangles comes close.
 	move.l	raster_rows,d7
 	move.l	d7,-(sp)
 	subq.w	#1,d7
@@ -8188,10 +8276,15 @@ trex_dsp_lod_path
 	; DSP's span walker, and an image without the walker would read the
 	; mark as part of the triangle number, so the plain draw-order image
 	; lives under TREXORDR.LOD and never under these names.
+	ifd	TREX_HIRES
+	; 640x400 and the three-unit span header: only the HIRES=1 image.
+	dc.b	'TREXHIRS.LOD',0
+	else
 	ifd	TREX_RELEASE
 	dc.b	'TREX.LOD',0
 	else
 	dc.b	'trex_dsp.lod',0
+	endc
 	endc
 	else
 	ifd	TREX_PLAIN_ORDER
