@@ -511,6 +511,18 @@ TREX_MESH_DEPS = ./TREX/model/trex.o3d ./TREX/model/trex_facenormals.bin \
 ./TREX/m68030/trex_ssi_dma.tos: ./TREX/m68030/build/trex_ssi_dma.o ./TREX/m68030/build/ssi_dma.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
+# Opt-in incremental U/V prestep (OPTIMIZATION.md 3.14): bit-exact, slower on
+# both emulator profiles, kept for a physical-Falcon A/B against
+# trex_m68030.tos.  Never the default.
+.PHONY: trex_m68030_prestep
+trex_m68030_prestep: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_prestep.tos ./TREX/m68030/trex_dsp.lod
+
+./TREX/m68030/build/trex_prestep.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_PRESTEP_INCREMENTAL -o $@ -L ./TREX/m68030/build/trex_prestep.lst
+
+./TREX/m68030/trex_prestep.tos: ./TREX/m68030/build/trex_prestep.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
 ./TREX/m68030/build/trex_framehash.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
 	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_FRAME_HASH -o $@ -L ./TREX/m68030/build/trex_framehash.lst
 
@@ -664,6 +676,7 @@ $(DSPVARIANT): ./TREX/dsp/trex_dsp.asm ./TREX/dsp/ssi_pkt.asm ./TREX/dsp/ssi_crc
 # from that file by the build.
 clean:
 	rm -f ./TREX/m68030/trex_pipe.tos ./TREX/m68030/trex_pipe_hash.tos
+	rm -f ./TREX/m68030/trex_prestep.tos ./TREX/m68030/build/trex_prestep.o ./TREX/m68030/build/trex_prestep.lst
 	rm -f ./TREX/m68030/trex_pipe_nocrc.tos ./TREX/m68030/build/trex_pipe_nocrc.o ./TREX/m68030/build/trex_pipe_nocrc.lst
 	rm -f ./TREX/m68030/build/trex_pipe.o ./TREX/m68030/build/trex_pipe.lst
 	rm -f ./TREX/m68030/build/trex_pipe_hash.o ./TREX/m68030/build/trex_pipe_hash.lst

@@ -5543,6 +5543,9 @@ rasterize_packet
 	; store runs unconditionally, in both switch arms, so it counts against
 	; the baseline as well and cannot flatter the A/B result.
 	move.l	a0,dc_packet
+	ifd	TREX_PRESTEP_INCREMENTAL
+	clr.l	raster_uv_live		; left chain (re)loaded: W is rebuilt
+	endc
 
 
 	; Everything class-derivable arrived precomputed from the packet
@@ -5666,6 +5669,9 @@ rasterize_packet
 	move.l	24(a0),d7			; rows_low
 	beq	.raster_packet_done		; flat bottom: no lower half
 	move.l	48(a0),raster_xl		; x1r
+	ifd	TREX_PRESTEP_INCREMENTAL
+	clr.l	raster_uv_live		; left chain (re)loaded: W is rebuilt
+	endc
 	move.l	80(a0),d1			; middle vertex u|v<<8
 	moveq	#0,d0
 	move.b	d1,d0
@@ -5872,6 +5878,93 @@ span_walk_half
 	move.l	raster_rows,d7
 	move.l	d7,-(sp)
 	subq.w	#1,d7
+	ifd	TREX_PRESTEP_INCREMENTAL
+	; Incremental U/V prestep state (OPTIMIZATION.md 3.14).  The row needs
+	;   start = ul + ((du * f) >> 12)   mod 2^16,   f = 4095 - (A3 & 4095)
+	; and each row moves f by -(sl & 4095), plus 4096 when A3's low twelve
+	; bits carry.  With W = (ul << 16) + ((du * f) << 4) the start is W's
+	; high word, and W advances by one of two constants per row:
+	;   no carry: (dul << 16) - ((du * (sl & 4095)) << 4)
+	;   carry:    that plus du << 16
+	; Everything is exact mod 2^32, and bits 12..27 of the product are the
+	; only ones the MULS.L/ASR pair ever delivered to the pixel loop.
+	; A chain that continues into the second trapezoid half keeps its W and
+	; steps (raster_uv_live); rasterize_packet clears the flag whenever it
+	; reloads the left chain.  This block is fetched uncached once per left
+	; chain, so it addresses its cells through A4/A6 instead of absolute
+	; longs: A6 walks uv_live/ul/vl/dul/dvl, A4 the accumulators, and
+	; raster_sl sits eight bytes below raster_uvw.  D0-D2/D4-D6 are dead here.
+	lea	raster_uv_live,a6
+	tst.l	(a6)+		; A6 -> ul, vl, dul, dvl
+	bne	.span_uv_ready
+	lea	raster_uvw,a4
+	move.l	a3,d2
+	not.l	d2
+	andi.l	#$00000fff,d2		; f
+	move.l	a0,d0
+	muls.l	d2,d0		; du * f mod 2^32
+	lsl.l	#4,d0
+	swap	d0
+	add.w	2(a6),d0		; + ul in the high word
+	swap	d0
+	move.l	d0,(a4)+
+	move.l	a1,d0
+	muls.l	d2,d0
+	lsl.l	#4,d0
+	swap	d0
+	add.w	6(a6),d0
+	swap	d0
+	move.l	d0,(a4)+		; A4 -> step pairs
+	tst.w	d7
+	bne	.span_uv_steps
+	; A one-row half needs no recurrence.  Keep ul/vl authoritative for a
+	; continuing half instead; the row's own step then adds stale constants
+	; to a W nothing reads again.
+	move.l	8(a6),d0
+	add.l	d0,(a6)
+	move.l	12(a6),d0
+	add.l	d0,4(a6)
+	bra	.span_uv_ready
+.span_uv_steps
+	addq.l	#1,-4(a6)		; uv_live: 0 -> 1
+	move.w	-14(a4),d4		; low word of raster_sl
+	move.w	d4,d2
+	andi.w	#$0fff,d2		; slope fraction; D2's high word is still zero
+	move.l	a0,d0
+	muls.l	d2,d0
+	lsl.l	#4,d0
+	neg.l	d0
+	swap	d0
+	add.w	10(a6),d0		; + dul in the high word
+	swap	d0		; U step, no carry
+	move.l	d0,d1
+	swap	d1
+	add.w	a0,d1
+	swap	d1		; U step, carry
+	move.l	a1,d5
+	muls.l	d2,d5
+	lsl.l	#4,d5
+	neg.l	d5
+	swap	d5
+	add.w	14(a6),d5
+	swap	d5		; V step, no carry
+	move.l	d5,d6
+	swap	d6
+	add.w	a1,d6
+	swap	d6		; V step, carry
+	; The row selects by the CHANGE of xl bit 12, which is the carry only
+	; when the slope's own bit 12 is clear; otherwise the pairs trade places.
+	btst	#12,d4
+	beq	.span_uv_store
+	exg	d0,d1
+	exg	d5,d6
+.span_uv_store
+	move.l	d0,(a4)+
+	move.l	d5,(a4)+
+	move.l	d1,(a4)+
+	move.l	d6,(a4)
+.span_uv_ready
+	endc
 
 .span_row_loop
 	; Integer span from the 12.12 chain positions: left is ceil(xl) and
@@ -5900,6 +5993,7 @@ span_walk_half
 	; multiples of 2^20 -- zero mod 2^16.  The sampled texel is therefore
 	; bit-identical; fb.res of the frame-100 close-up gates that claim.
 	; d3 keeps the biased right chain, d4 is free until the span length below.
+	ifnd	TREX_PRESTEP_INCREMENTAL
 	move.l	raster_ul,d5
 	move.l	raster_vl,d6
 	; With A3 holding xl+4095, the prestep fraction is the 12-bit
@@ -5919,6 +6013,14 @@ span_walk_half
 	asr.l	#4,d4
 	add.l	d4,d6
 .span_prestep_done
+	else
+	; Incremental form (OPTIMIZATION.md 3.14): the high word of each
+	; raster_uvw accumulator IS the prestepped Q8.8 start, exact mod 2^16.
+	; Only the low words of D5/D6 are ever read, so their stale upper
+	; words do not matter.
+	move.w	raster_uvw,d5
+	move.w	raster_uvw+4,d6
+	endc
 
 	; Gouraud span level: one bank select per row from the left-chain
 	; level, clamped against interpolation rounding overshoot.  Which bank
@@ -6010,12 +6112,30 @@ span_walk_half
 	tst.l	raster_feed_row
 	bne	.span_feed_row_done
 	endc
+	ifnd	TREX_PRESTEP_INCREMENTAL
 	adda.l	raster_sl,a3
 	add.l	raster_sr,d3
 	move.l	raster_dul,d0
 	add.l	d0,raster_ul
 	move.l	raster_dvl,d0
 	add.l	d0,raster_vl
+	else
+	; Bit 12 of (old xl) XOR (new xl) is the 12-bit fraction carry XOR bit 12
+	; of the slope.  The half setup stored the two step pairs in that order,
+	; so the changed bit selects the pair directly: no branch, no multiply.
+	move.w	a3,d0
+	adda.l	raster_sl,a3
+	add.l	raster_sr,d3
+	move.w	a3,d1
+	eor.w	d1,d0
+	rol.w	#7,d0		; bit 12 -> bit 3
+	andi.w	#8,d0		; 0 or 8: step pair offset
+	lea	raster_uvw,a4
+	move.l	(8,a4,d0.w),d1
+	add.l	d1,(a4)+
+	move.l	(8,a4,d0.w),d1
+	add.l	d1,(a4)
+	endc
 	move.l	raster_dlvl,d0
 	add.l	d0,raster_lvl
 	adda.w	#FRAMEBUFFER_STRIDE,a2
@@ -8851,6 +8971,16 @@ raster_sl
 	ds.l	1
 raster_sr
 	ds.l	1
+	ifd	TREX_PRESTEP_INCREMENTAL
+; Incremental U/V prestep (OPTIMIZATION.md 3.14): the U and V accumulators,
+; whose HIGH words are the prestepped Q8.8 span starts, then the two per-row
+; step pairs the walker selects by the change of xl bit 12.  They take the
+; six per-row cells' place -- and measured cache phase -- and must stay
+; exactly eight bytes above raster_sl; the cells they displace are per-half
+; now and move behind raster_walk_clip.
+raster_uvw
+	ds.l	6
+	else
 raster_ul
 	ds.l	1
 raster_vl
@@ -8863,6 +8993,7 @@ raster_rows
 	ds.l	1
 raster_y_current
 	ds.l	1
+	endc
 ; Edge values at the first pixel of the current row, stepped by dE/dy.
 raster_du_dx
 	ds.l	1
@@ -8900,6 +9031,26 @@ raster_lvl_shift
 ; pre-existing cell for the same reason raster_opaque was.
 raster_walk_clip
 	ds.l	1
+	ifd	TREX_PRESTEP_INCREMENTAL
+; Per-half chain cells of the incremental prestep build, in the order the
+; half setup walks them through A6.  raster_uv_live says the accumulators in
+; raster_uvw describe the current left chain.
+	cnop	0,4
+raster_uv_live
+	ds.l	1
+raster_ul
+	ds.l	1
+raster_vl
+	ds.l	1
+raster_dul
+	ds.l	1
+raster_dvl
+	ds.l	1
+raster_rows
+	ds.l	1
+raster_y_current
+	ds.l	1
+	endc
 	ifd TREX_SSI_HATARI
 raster_feed_row
 	ds.l	1

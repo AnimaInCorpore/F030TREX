@@ -1,0 +1,220 @@
+{
+  "date": "2026-11-18",
+  "scope": "Emulator diagnostic 265-frame prefix; no physical Falcon measurements",
+  "section": "OPTIMIZATION.md 3.14",
+  "hatari_version": "2.6.1-devel (Nov 18 2026)",
+  "hatari_source": "c5d5bf3435d0b22769cfb5f8c1b3831d21ec51e8",
+  "profiles": {
+    "ce": "--mmu false --cpu-exact true --compatible true --data-cache true --videl-contention true",
+    "mmu": "--mmu true --cpu-exact true --compatible true --data-cache true --videl-contention false"
+  },
+  "builds": {
+    "default": "no define; byte-identical to the 2.4n diagnostic executable",
+    "first_form": "rejected intermediate: 198-byte absolute-addressed setup, accumulators appended after raster_walk_clip",
+    "incremental": "-DTREX_PRESTEP_INCREMENTAL as kept: 168-byte A4/A6-relative setup, accumulators in the vacated per-row cells"
+  },
+  "row_loop_bytes": {
+    "default": 228,
+    "incremental": 198
+  },
+  "setup_bytes": {
+    "first_form": 198,
+    "incremental": 168
+  },
+  "runs": {
+    "default-ce": {
+      "binary_sha256": "d002e5c6e055e27c3cc460c074c573278014b04d95147978b4fa56d4b22b9b40",
+      "dsp_sha256": "14789e0af6654096816ae1d0c1dfdf7acc08da7f6edcc53a5fabe3772aff5859",
+      "hatari_sha256": "2007b44a2ed1e8201f746e549665899692f2ec0c7431ab6f9c846a8b41c61924",
+      "tos_sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb",
+      "stats": {
+        "frames": 265,
+        "vbl_start": 648,
+        "vbl_end": 8603,
+        "hz200_start": 18584,
+        "hz200_end": 50368,
+        "t_setframe": 729,
+        "t_packets": 8608,
+        "t_clear": 846,
+        "t_otinsert": 237,
+        "t_raster": 21344,
+        "t_present": 2,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149
+      },
+      "ms_per_frame": 599.698,
+      "raster_ms": 402.717,
+      "packet_ms": 162.415,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16",
+      "fps": 1.6675
+    },
+    "default-mmu": {
+      "binary_sha256": "d002e5c6e055e27c3cc460c074c573278014b04d95147978b4fa56d4b22b9b40",
+      "dsp_sha256": "14789e0af6654096816ae1d0c1dfdf7acc08da7f6edcc53a5fabe3772aff5859",
+      "hatari_sha256": "2007b44a2ed1e8201f746e549665899692f2ec0c7431ab6f9c846a8b41c61924",
+      "tos_sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb",
+      "stats": {
+        "frames": 265,
+        "vbl_start": 582,
+        "vbl_end": 6228,
+        "hz200_start": 18320,
+        "hz200_end": 40881,
+        "t_setframe": 692,
+        "t_packets": 8198,
+        "t_clear": 773,
+        "t_otinsert": 127,
+        "t_raster": 12749,
+        "t_present": 1,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149
+      },
+      "ms_per_frame": 425.679,
+      "raster_ms": 240.547,
+      "packet_ms": 154.679,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16",
+      "fps": 2.3492
+    },
+    "first_form-ce": {
+      "binary_sha256": "a15dd817d57a3782e2a3271c4f54981d14223e99adc07d67996c9920e8f3ba43",
+      "dsp_sha256": "14789e0af6654096816ae1d0c1dfdf7acc08da7f6edcc53a5fabe3772aff5859",
+      "hatari_sha256": "2007b44a2ed1e8201f746e549665899692f2ec0c7431ab6f9c846a8b41c61924",
+      "tos_sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb",
+      "stats": {
+        "frames": 265,
+        "vbl_start": 648,
+        "vbl_end": 8918,
+        "hz200_start": 18584,
+        "hz200_end": 51628,
+        "t_setframe": 718,
+        "t_packets": 8608,
+        "t_clear": 843,
+        "t_otinsert": 239,
+        "t_raster": 22612,
+        "t_present": 2,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149
+      },
+      "ms_per_frame": 623.472,
+      "raster_ms": 426.642,
+      "packet_ms": 162.415,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16",
+      "fps": 1.6039
+    },
+    "first_form-mmu": {
+      "binary_sha256": "a15dd817d57a3782e2a3271c4f54981d14223e99adc07d67996c9920e8f3ba43",
+      "dsp_sha256": "14789e0af6654096816ae1d0c1dfdf7acc08da7f6edcc53a5fabe3772aff5859",
+      "hatari_sha256": "2007b44a2ed1e8201f746e549665899692f2ec0c7431ab6f9c846a8b41c61924",
+      "tos_sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb",
+      "stats": {
+        "frames": 265,
+        "vbl_start": 582,
+        "vbl_end": 6706,
+        "hz200_start": 18318,
+        "hz200_end": 42790,
+        "t_setframe": 690,
+        "t_packets": 8217,
+        "t_clear": 774,
+        "t_otinsert": 129,
+        "t_raster": 14643,
+        "t_present": 0,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149
+      },
+      "ms_per_frame": 461.736,
+      "raster_ms": 276.283,
+      "packet_ms": 155.038,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16",
+      "fps": 2.1657
+    },
+    "incremental-ce": {
+      "binary_sha256": "58ffd101ef3d46df0b8a07412bfcbc12b5f358f25b31a1ed2ca800215ca25104",
+      "dsp_sha256": "14789e0af6654096816ae1d0c1dfdf7acc08da7f6edcc53a5fabe3772aff5859",
+      "hatari_sha256": "2007b44a2ed1e8201f746e549665899692f2ec0c7431ab6f9c846a8b41c61924",
+      "tos_sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb",
+      "stats": {
+        "frames": 265,
+        "vbl_start": 648,
+        "vbl_end": 8808,
+        "hz200_start": 18584,
+        "hz200_end": 51189,
+        "t_setframe": 738,
+        "t_packets": 8587,
+        "t_clear": 863,
+        "t_otinsert": 241,
+        "t_raster": 22150,
+        "t_present": 0,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149
+      },
+      "ms_per_frame": 615.189,
+      "raster_ms": 417.925,
+      "packet_ms": 162.019,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16",
+      "fps": 1.6255
+    },
+    "incremental-mmu": {
+      "binary_sha256": "58ffd101ef3d46df0b8a07412bfcbc12b5f358f25b31a1ed2ca800215ca25104",
+      "dsp_sha256": "14789e0af6654096816ae1d0c1dfdf7acc08da7f6edcc53a5fabe3772aff5859",
+      "hatari_sha256": "2007b44a2ed1e8201f746e549665899692f2ec0c7431ab6f9c846a8b41c61924",
+      "tos_sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb",
+      "stats": {
+        "frames": 265,
+        "vbl_start": 582,
+        "vbl_end": 6602,
+        "hz200_start": 18318,
+        "hz200_end": 42375,
+        "t_setframe": 689,
+        "t_packets": 8215,
+        "t_clear": 771,
+        "t_otinsert": 151,
+        "t_raster": 14217,
+        "t_present": 2,
+        "pixels": 9049666,
+        "ot_nodes": 1149,
+        "dsp_packets": 1149,
+        "ot_prims": 1149
+      },
+      "ms_per_frame": 453.906,
+      "raster_ms": 268.245,
+      "packet_ms": 155.0,
+      "frame100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16",
+      "fps": 2.2031
+    }
+  },
+  "muls_l_price": {
+    "ce": {
+      "iterations": 1048576,
+      "ticks_without": 158,
+      "ticks_with": 210,
+      "clocks_without": 12.054,
+      "clocks_with": 16.022,
+      "clocks_muls_l": 3.967
+    },
+    "mmu": {
+      "iterations": 1048576,
+      "ticks_without": 26,
+      "ticks_with": 26,
+      "clocks_without": 1.984,
+      "clocks_with": 1.984,
+      "clocks_muls_l": 0.0
+    }
+  },
+  "validation": {
+    "fixtures": "45 of 45 pass on the default and the incremental walker (26 existing, 19 new sloped-edge)",
+    "frame_hashes": "512 of 512 identical, default against incremental",
+    "frmhash_sha256": {
+      "default": "0a3f2fa18026a943846a6320718fd9dfbb21e7414113ee405dc473d51c4b8ab8",
+      "incremental": "0a3f2fa18026a943846a6320718fd9dfbb21e7414113ee405dc473d51c4b8ab8"
+    }
+  }
+}

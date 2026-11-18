@@ -4238,7 +4238,9 @@ architectural variant because its transfer can run without M68030 PIO and
 outside the consuming frame's critical path; section 8.1 specifies it. The
 next low-risk arithmetic experiment remains the CPU-side per-row ceil
 incrementalization in roadmap item 11. It attacks the same two hot multiplies
-without sending row data. The packet stride multiply has been removed locally.
+without sending row data. **Built and measured in 3.14: exact, and
+slower on both emulator profiles, which price the multiply at 0 and
+3.97 clocks.** The packet stride multiply has been removed locally.
 No performance baseline is changed by this section: all milliseconds above are
 cost-model estimates, and the output/build gates below record correctness only.
 
@@ -4972,6 +4974,145 @@ headroom left. Item 11's per-row ceil incrementalization is **not** a candidate
 here for a different reason: it removes arithmetic, and 2.4a's core charges
 instruction execution nothing, so it would measure as zero regardless of what
 it is worth on a Falcon.
+
+### 3.14 Incremental U/V prestep -- built exact, measured SLOWER on both emulator profiles (2026-11-18)
+
+3.7 and roadmap item 11 named this as the next arithmetic experiment: remove
+the two `MULS.L` every row spends moving U and V from the left edge to
+`ceil(xl)`. It is built, it is bit-exact, and under both emulator profiles it
+loses. It stays in the tree behind `-DTREX_PRESTEP_INCREMENTAL` only, as a
+physical-Falcon candidate; the default executable is byte-identical to the one
+2.4n measured (SHA256 `d002e5c6...9b40`).
+
+**The recurrence.** With A3 holding `xl + 4095`, the row computes
+`start = ul + ((du * f) >> 12)` with `f = 4095 - (A3 & 4095)`, and the pixel
+loops read only bits 0..15 of that sum. Adding the slope moves `f` by
+`-(sl & 4095)`, plus 4096 when the low twelve bits of A3 carry. So with
+
+```text
+W = (ul << 16) + ((du * f) << 4)                       mod 2^32
+```
+
+the span start is the high word of `W`, and `W` advances per row by one of two
+per-chain constants:
+
+```text
+no carry:  (dul << 16) - ((du * (sl & 4095)) << 4)
+carry:     the same, plus du << 16
+```
+
+Nothing is approximated: every step is exact mod 2^32, and bits 12..27 of the
+product are the only ones the old `MULS.L`/`ASR` pair ever delivered. The
+carry needs no test of its own. Bit 12 of `old xl XOR new xl` equals the carry
+XOR bit 12 of the slope, so the half setup stores the two step pairs in the
+order that bit selects, and the row indexes them with it -- no branch, no
+multiply.
+
+**Buffer ownership and register usage.** `raster_uvw` holds six longwords: the
+U and V accumulators, then the two step pairs. It takes the place, and the
+measured data-cache phase, of the six cells the row no longer touches
+(`raster_ul/vl/dul/dvl/rows/y_current`), which move behind `raster_walk_clip`
+after a new `raster_uv_live` flag and are per-half state now. `raster_uvw` must
+stay exactly eight bytes above `raster_sl`: the setup reaches the slope
+relative to A4. The row prologue reads the two accumulator high words with
+`MOVE.W`; D5/D6 keep stale upper words, which no pixel body, clip path or SSI
+callback reads. The row advance uses D0/D1/A4 as scratch. The setup runs once
+per left chain with D0-D2/D4-D6/A4/A6 dead, and costs four `MULS.L`.
+`rasterize_packet` clears `raster_uv_live` at packet entry and where the
+middle-left case reloads the left chain; a chain that continues into the lower
+half keeps its accumulators and steps and pays no second setup. A one-row half
+computes only its start (two multiplies), leaves the flag clear and advances
+`raster_ul/vl` once, so a continuing half rebuilds from authoritative cells.
+The top catch-up cannot meet a live chain: a chain is live only after a half
+walked two or more rows, which leaves `raster_y_current` non-negative. No packet field, DSP word, framebuffer or texture table changes.
+
+**Validation.** `tools/check_row_walk.py` now links the production state-cell
+declarations instead of inventing a layout, and gained nineteen sloped-edge
+fixtures whose expectations come from first principles: ten left slopes
+covering both signs and both values of slope bit 12 (including exactly +-4096,
+4095 and +-1), an integral start, 23-bit gradients with a 4095 fraction, five
+two-half splits including 1+59, 59+1 and 1+1, and sloped transparent and
+semitransparent spans. The previous twenty-six fixtures only ever drew
+vertical edges, so each exercised the prestep at one fixed fraction. All
+**45 fixtures pass on both walkers**. All **512 frame hashes** of the
+choreography and moving hold match the default build, the frame-100 checkpoint
+is `d89958b3...3d16` in every run, and every 265-frame run writes
+9,049,666 pixels and ends with 1,149 packets.
+
+**Measured**, identical 265-frame diagnostic prefixes, Hatari `2.6.1-devel
+(Nov 18 2026)`, fork source `c5d5bf34`, TOS 4.02, 16 MHz 68030, corrected
+32 MHz DSP, 4 MiB ST RAM. The two profiles must not be mixed. Raw counters and
+input hashes are in
+[`docs/performance/prestep-2026-11-18.json`](docs/performance/prestep-2026-11-18.json).
+These are emulator measurements, not physical-Falcon timings.
+
+| Diagnostic build | Cycle-exact, contention on | raster | MMU ledger | raster |
+|---|---:|---:|---:|---:|
+| Default (shipped) | 599.70 ms / 1.668 FPS | 402.72 | 425.68 ms / 2.349 FPS | 240.55 |
+| First form: absolute-addressed setup, cells appended | 623.47 ms | 426.64 | 461.74 ms | 276.28 |
+| `TREX_PRESTEP_INCREMENTAL` as kept | **615.19 ms / 1.626 FPS** | 417.92 | **453.91 ms / 2.203 FPS** | 268.25 |
+
+The kept form is **+15.5 ms** on the cycle-exact profile and **+28.2 ms** on
+the MMU ledger; the packet stage, clear and OT insertion move by under 0.5 ms
+in every arm. The first form's setup was 198 bytes and addressed every cell
+by absolute long; rewriting it relative to A4/A6 and giving the accumulators
+the vacated cells' phase brought it to 168 bytes and recovered 8 ms on each
+profile, which is what an uncached block costs per byte.
+
+**Why it loses here, measured.** `tools/price_muls.py` times 1,048,576
+iterations of the old per-channel sequence with and without its multiply, from
+the instruction cache:
+
+| Profile | without | with | one register-form `MULS.L` |
+|---|---:|---:|---:|
+| MMU ledger | 1.98 clocks | 1.98 clocks | **0.00 clocks** |
+| Cycle-exact, contention on | 12.05 clocks | 16.02 clocks | **3.97 clocks** |
+
+The MC68030 manual lists 44 clocks as the maximum for that instruction (3.7).
+So the term this change removes is priced at zero on one profile and at about
+a tenth of the documented maximum on the other, while the term it adds -- a
+168-byte block fetched uncached once per left chain, with four multiplies of
+its own -- is bus traffic, which both profiles charge. The row loop did shrink,
+from 228 to 198 bytes, and that buys nothing: it already ran from the cache.
+The MMU-ledger delta is therefore the whole price of the setup, and the
+12.7 ms the cycle-exact profile gives back is all it credits for two
+multiplies and six other instructions fewer on every row.
+
+**Estimate, not measurement: what a Falcon might say.** If the manual's 44
+clocks hold, each removed multiply is worth about 40 clocks more than the
+cycle-exact profile credits. At 12,439 rows and roughly 1,500 left chains per
+frame -- the chain count is an estimate from 1,019 packets, not a counter --
+about 18,800 multiplies go, or roughly **47 ms**, which would turn the
+cycle-exact +15.5 ms into about **-30 ms, 3% of the 952 ms hardware frame**.
+That projection inherits every error of a profile that is 1.63x optimistic
+overall (2.7a), including what the real bus charges for the setup block, so
+its sign is not established. Only an A/B on the machine can settle it.
+
+**Disposition.** Rejected for the default by the rule 2.4n states: fewer
+multiplies are a hypothesis until the whole linked frame wins.
+`make trex_m68030_prestep` builds `trex_prestep.tos` for a hardware comparison
+against `trex_m68030.tos`; neither a release nor a package variant exists.
+The corollary for the rest of the rasterizer is the useful part: **on these
+emulator profiles no change that trades instruction execution for uncached
+code or bus traffic can measure as a win**, so arithmetic removal has to be
+judged on hardware or not at all.
+
+**Reproduction.**
+
+```sh
+make trex_m68030 trex_m68030_prestep
+python3 tools/measure_frames.py TREX/m68030/trex_prestep.tos \
+  TREX/dsp/trex_dsp.lod hatari_runs/prestep-ce \
+  --cpu-core cycle-exact --videl-contention on --frames 265 --timeout 1500
+python3 tools/check_row_walk.py hatari_runs/prestep-fixtures \
+  --define TREX_PRESTEP_INCREMENTAL
+python3 tools/price_muls.py hatari_runs/muls-ce --cpu-core cycle-exact
+```
+
+The fixture and pricing helpers take `--hatari` and `--tos` for other local
+paths, as `measure_frames.py` does. For the hash gate assemble both walkers
+with `-DTREX_FRAME_HASH`, run each with `--frames 512` and compare the
+`frmhash.res` files; never quote timing from a hash build.
 
 ## 4. Work already assigned to the DSP
 
@@ -8077,6 +8218,16 @@ The open roadmap, in recommended order (expected effects from the section
    therefore **not** chain-cell read traffic.  The untested remainder is the
    four write-throughs per row, the memory-indirect span-entry jump, and
    instruction fetch across a hot path with 22 bytes of headroom.
+   **Eighth pass: the incremental U/V prestep, built exact and REJECTED for
+   the default (3.14).**  A per-chain recurrence replaces the two per-row
+   `MULS.L` with a carry-selected add; 45 fixtures and all 512 frame hashes
+   match.  It measures **+15.5 ms cycle-exact and +28.2 ms on the MMU
+   ledger**, because those profiles price a register `MULS.L` at 3.97 and
+   0.00 clocks against the manual's 44 while charging the 168-byte
+   per-chain setup as bus traffic.  It stays opt-in
+   (`-DTREX_PRESTEP_INCREMENTAL`, `make trex_m68030_prestep`) as a
+   physical-Falcon candidate estimated at about -30 ms there, sign not
+   established.  Arithmetic removal cannot be judged on these profiles.
 12. Cross-frame pipelining. **Stage 1 done, stage 2 measured and rejected.**
    **Current follow-up: 2.4m reuses visibility from the prelight pass.**
    Cached rejects bypass BUILD's index/vertex fetch and survivors reuse the

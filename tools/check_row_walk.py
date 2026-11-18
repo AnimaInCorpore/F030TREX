@@ -21,14 +21,29 @@ BACKGROUND = 0x0842
 
 
 def fixture(name, kind="opaque", x=0, right=W, y=0, rows=H,
-            halves=None, u=0, du=256, dv=0, fraction=0, level=0):
+            halves=None, u=0, du=256, dv=0, fraction=0, level=0,
+            sl=0, sr=0, dul=0, dvl=0):
+    """Expected image from first principles, one row at a time.
+
+    The left edge starts at x + fraction/4096 and moves sl/4096 pixels per
+    row (sr for the right edge); U and V on the left edge move dul and dvl.
+    A span covers the pixel centres ceil(xl) .. ceil(xr)-1 and samples at the
+    exact sub-pixel distance from the edge, with floor division throughout.
+    Sloped fixtures must stay inside the screen in Y: the model does not
+    reproduce the top catch-up.
+    """
     image = [BACKGROUND] * (STRIDE * H)
     count = 0
+    sloped = bool(sl or sr or dul or dvl)
+    assert not sloped or (y >= 0 and y + rows <= H)
     for sy in range(max(0, y), min(H, y + rows)):
-        for sx in range(max(0, x + bool(fraction)), min(W, right)):
-            distance = (sx - x) * 4096 - fraction
-            tu = ((u + distance * du // 4096) >> 8) & 255
-            tv = ((distance * dv // 4096) >> 8) & 255
+        row = sy - y if sloped else 0
+        xl = x * 4096 + fraction + row * sl
+        xr = right * 4096 + row * sr
+        for sx in range(max(0, -(-xl // 4096)), min(W, -(-xr // 4096))):
+            distance = sx * 4096 - xl
+            tu = ((u + row * dul + distance * du // 4096) >> 8) & 255
+            tv = ((row * dvl + distance * dv // 4096) >> 8) & 255
             index = (tu ^ tv) & 1
             if kind in ("transparent", "semi") and not index:
                 continue
@@ -48,24 +63,40 @@ def fixture(name, kind="opaque", x=0, right=W, y=0, rows=H,
                 + b"\x5a\x5a" * 8)
     return dict(name=name, kind=kind, x=x, right=right, y=y, rows=rows,
                 halves=halves, u=u, du=du, dv=dv, fraction=fraction,
-                level=level, expected=expected)
+                level=level, sl=sl, sr=sr, dul=dul, dvl=dvl, expected=expected)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("output", type=Path, help="new isolated output directory")
     ap.add_argument("--source", type=Path, default=ROOT / "TREX/m68030/trex_m68030.s")
+    ap.add_argument("--hatari", type=Path, default=ROOT.parent /
+                    "F030Arcade/third_party/hatari/build/src/hatari")
+    ap.add_argument("--tos", type=Path, default=ROOT.parent /
+                    "F030Arcade/third_party/tos/tos402.img")
+    ap.add_argument("--define", action="append", default=[],
+                    help="assembler symbol to define, e.g. TREX_PRESTEP_REFERENCE")
     args = ap.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    source = args.source.read_text()
+    source = args.source.read_text(encoding="utf-8")
     start = source.index("\nspan_walk_half\n")
     end = source.index("\n\tifd\tTREX_OCCL\n; ---", start)
     kernel = source[start:end]
     callback_start = source.index("\nssi_hatari_rasterize_row\n")
     callback_end = source.index("\n\tendc", callback_start)
     callback = source[callback_start:callback_end]
+    # The walker addresses some state cells relative to each other, so the
+    # harness links the production declarations themselves, conditionals
+    # included, instead of inventing a layout of its own.
+    state_start = source.index("\nRASTER_STATE_PHASE = ")
+    state_end = source.index("\n; Pin the render target", state_start)
+    state = source[state_start:state_end]
+    units = dict(re.findall(r"^(raster_[a-z_]+)\n\tds\.([lw])\t", state, re.M))
     cells = sorted(set(re.findall(r"\braster_[a-z_]+\b", kernel)))
+    undeclared = [cell for cell in cells if cell not in units]
+    if undeclared:
+        raise SystemExit("state cells without a declaration: " + ", ".join(undeclared))
     callback_cells = sorted(set(re.findall(r"\bssi_[a-z_]+\b", callback)) - {"ssi_hatari_rasterize_row"})
     cases = [fixture("maximum opaque half"),
              fixture("split half continuity", halves=(111, 113)),
@@ -90,6 +121,27 @@ def main():
              fixture("wide modulo product", du=0x7FFFFF, dv=-0x800000, fraction=4095, rows=2),
              fixture("fractional left clip", x=-3, right=10, du=-32768,
                      dv=32767, fraction=1, rows=2)]
+    # Sloped left edges exercise the per-row prestep on real fractions.  The
+    # four slopes cover both signs and both values of slope bit 12, which is
+    # what the incremental walker's step selection depends on.
+    chain = dict(right=230, y=8, du=12345, dv=-7777, dul=555, dvl=-333,
+                 u=40 * 256, fraction=1234)
+    for sl in (1500, 5000, -3000, -5000, 4096, 4095, -4096, 1, -1, 0):
+        cases.append(fixture("sloped left edge sl=%d" % sl, x=100, rows=60,
+                             sl=sl, sr=-700, **chain))
+    cases.append(fixture("sloped edge, integral start", x=100, right=230, y=8,
+                         rows=60, sl=2048, du=12345, dv=-7777, dul=555, dvl=-333))
+    cases.append(fixture("sloped wide gradients", x=100, right=230, y=8, rows=40,
+                         sl=-3333, du=0x7FFFFF, dv=-0x800000, dul=-70000,
+                         dvl=90000, fraction=4095))
+    for halves in ((30, 30), (1, 59), (59, 1), (2, 58), (1, 1)):
+        cases.append(fixture("sloped continuity %d+%d" % halves, x=100,
+                             rows=sum(halves), halves=halves, sl=-3000,
+                             sr=900, **chain))
+    cases.append(fixture("sloped transparent", "transparent", x=100, rows=60,
+                         sl=1500, **chain))
+    cases.append(fixture("sloped semitransparency", "semi", x=100, rows=60,
+                         sl=-5000, **chain))
     for kind in ("opaque", "transparent", "semi", "flat"):
         case = fixture("SSI callback " + kind, kind, rows=3)
         case["callback"] = True
@@ -108,12 +160,15 @@ def main():
             lines += [f"\tlea {guard},a0", "\tmoveq #7,d0",
                       f".{guard}{i}: move.w #$5a5a,(a0)+",
                       f"\tdbra d0,.{guard}{i}"]
-        for cell in cells:
-            lines.append(f"\tclr.l {cell}")
+        lines += ["\tlea state_begin,a0",
+                  "\tmove.w #(state_end-state_begin)/2-1,d0",
+                  f".state{i}: clr.w (a0)+", f"\tdbra d0,.state{i}"]
         values = dict(raster_xl=case["x"] * 4096 + case["fraction"],
                       raster_xr=case["right"] * 4096,
                       raster_y_current=case["y"], raster_rows=case["rows"],
                       raster_ul=case["u"], raster_du_dx=case["du"], raster_dv_dx=case["dv"],
+                      raster_sl=case["sl"], raster_sr=case["sr"],
+                      raster_dul=case["dul"], raster_dvl=case["dvl"],
                       raster_lvl=case["level"], raster_walk_clip=-1,
                       raster_flat_color=0x1234 << 16,
                       raster_lvl_shift=(9 if case["kind"] == "opaque" else 10) << 16)
@@ -121,7 +176,10 @@ def main():
             wide = not (-32768 <= case["du"] <= 32767 and -32768 <= case["dv"] <= 32767)
             values["raster_prestep_wide"] = 0xFF000000 if wide else 0
         for cell, value in values.items():
-            lines.append(f"\tmove.l #{value},{cell}")
+            if units[cell] == "w":      # word cells take the high word
+                lines.append(f"\tmove.w #{value >> 16},{cell}")
+            else:
+                lines.append(f"\tmove.l #{value},{cell}")
         palette = "palette_word" if case["kind"] == "opaque" else (
             "palette_semi" if case["kind"] == "semi" else "palette_long")
         lines += [f"\tmove.l #{palette},raster_clut_tint_base",
@@ -163,7 +221,7 @@ def main():
     lines += ["\teven", "texture:"]
     texture = bytes((x ^ y) & 1 for y in range(256) for x in range(256))
     (out / "texture.bin").write_bytes(texture)
-    lines += [f"\tincbin '{out / 'texture.bin'}'"]
+    lines += [f"\tincbin '{(out / 'texture.bin').as_posix()}'"]
     for name, word in (("palette_word", True), ("palette_long", False), ("palette_semi", False)):
         lines.append(name + ":")
         vals = [((0x5678 if x & 1 else 0x1234) if word else
@@ -173,22 +231,23 @@ def main():
             lines.append("\tdc." + ("w " if word else "l ")
                          + ",".join(f"${v:x}" for v in vals[k:k + 16]))
     lines += ["\tsection bss,bss", "handle: ds.w 1", "\teven", "gouraud_enabled: ds.l 1"]
-    lines += [f"{cell}: ds.l 1" for cell in cells + callback_cells]
+    lines += ["\teven", "state_begin:", state, "\teven", "state_end:"]
+    lines += [f"{cell}: ds.l 1" for cell in callback_cells]
     lines += ["render_base: ds.l 1", "callback_packet: ds.l 32"]
     lines += ["outblock: ds.l 3", "guard_before: ds.w 8",
               "framebuffer: ds.w 256*224", "guard_after: ds.w 8"]
     asm = out / "check.s"
-    asm.write_text("\n".join(lines) + "\n")
+    asm.write_text("\n".join(lines) + "\n", encoding="utf-8")
     subprocess.run([str(ROOT / "tools/vasm/vasmm68k_mot"), str(asm), "-quiet",
-                    "-Felf", "-m68030", "-o", str(out / "check.o")], check=True)
+                    "-Felf", "-m68030"] + ["-D" + name for name in args.define]
+                   + ["-o", str(out / "check.o")], check=True)
     subprocess.run([str(ROOT / "tools/vlink/vlink"), str(out / "check.o"),
                     "-tos-fastload", "-b", "ataritos", "-s", "-e", "start",
                     "-o", str(out / "CHECK.TOS")], check=True)
-    hatari = ROOT.parent / "F030Arcade/third_party/hatari/build/src/hatari"
-    command = [str(hatari), "--machine", "falcon", "--cpulevel", "3",
+    command = [str(args.hatari.resolve()), "--machine", "falcon", "--cpulevel", "3",
                "--cpuclock", "16", "--mmu", "false", "--cpu-exact", "true",
                "--compatible", "true", "--videl-contention", "true",
-               "--tos", str(ROOT.parent / "F030Arcade/third_party/tos/tos402.img"),
+               "--tos", str(args.tos.resolve()),
                "--fast-boot", "true", "--patch-tos", "true", "--memsize", "4",
                "--sound", "off", "--monitor", "rgb", "--benchmark",
                "--confirm-quit", "off", "--log-level", "fatal", "--alert-level", "fatal",
