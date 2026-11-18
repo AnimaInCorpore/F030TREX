@@ -1,0 +1,2119 @@
+{
+"date": "2026-11-18",
+"section": "OPTIMIZATION.md 2.5a",
+"source": "trex_fbseq.tos (-DTREX_FB_SEQUENCE), MMU ledger, 265 frames; pixel areas only, no timing",
+"inputs": {
+"binary": "8459c9d41022aa142bdab1fe89dcfb7cfc26108ed433772a7d70c655483e77e6",
+"dsp": "92d4744cb0807860842506d100a05e00a7ab2a8e0bd8c2d5a2f8f46e5c758e23",
+"hatari": "d1dc43ab0b28aee0f0cc4adba25ac5526cbc4af2e94be49d054a6e67b1165872",
+"tos": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb"
+},
+"fbseq_sha256": "5750003b82d767f50a94dd764b68adeb8f6930b858c2559529125c1d3724d9f7",
+"frames": 265,
+"per_frame": [
+{
+"frame": 2,
+"full": 53760,
+"bands": 4752,
+"dirty": 3614,
+"ideal": 59,
+"ideal_runs": 41
+},
+{
+"frame": 3,
+"full": 53760,
+"bands": 4768,
+"dirty": 3608,
+"ideal": 80,
+"ideal_runs": 45
+},
+{
+"frame": 4,
+"full": 53760,
+"bands": 4752,
+"dirty": 3573,
+"ideal": 89,
+"ideal_runs": 37
+},
+{
+"frame": 5,
+"full": 53760,
+"bands": 4704,
+"dirty": 3550,
+"ideal": 155,
+"ideal_runs": 68
+},
+{
+"frame": 6,
+"full": 53760,
+"bands": 4656,
+"dirty": 3548,
+"ideal": 227,
+"ideal_runs": 84
+},
+{
+"frame": 7,
+"full": 53760,
+"bands": 4400,
+"dirty": 3468,
+"ideal": 253,
+"ideal_runs": 82
+},
+{
+"frame": 8,
+"full": 53760,
+"bands": 4432,
+"dirty": 3398,
+"ideal": 279,
+"ideal_runs": 89
+},
+{
+"frame": 9,
+"full": 53760,
+"bands": 4368,
+"dirty": 3346,
+"ideal": 244,
+"ideal_runs": 73
+},
+{
+"frame": 10,
+"full": 53760,
+"bands": 4128,
+"dirty": 3258,
+"ideal": 140,
+"ideal_runs": 66
+},
+{
+"frame": 11,
+"full": 53760,
+"bands": 4160,
+"dirty": 3250,
+"ideal": 143,
+"ideal_runs": 70
+},
+{
+"frame": 12,
+"full": 53760,
+"bands": 4256,
+"dirty": 3316,
+"ideal": 119,
+"ideal_runs": 64
+},
+{
+"frame": 13,
+"full": 53760,
+"bands": 4176,
+"dirty": 3405,
+"ideal": 101,
+"ideal_runs": 50
+},
+{
+"frame": 14,
+"full": 53760,
+"bands": 4400,
+"dirty": 3546,
+"ideal": 93,
+"ideal_runs": 53
+},
+{
+"frame": 15,
+"full": 53760,
+"bands": 4544,
+"dirty": 3700,
+"ideal": 71,
+"ideal_runs": 47
+},
+{
+"frame": 16,
+"full": 53760,
+"bands": 4640,
+"dirty": 3865,
+"ideal": 41,
+"ideal_runs": 37
+},
+{
+"frame": 17,
+"full": 53760,
+"bands": 4848,
+"dirty": 4013,
+"ideal": 44,
+"ideal_runs": 41
+},
+{
+"frame": 18,
+"full": 53760,
+"bands": 4928,
+"dirty": 4127,
+"ideal": 63,
+"ideal_runs": 59
+},
+{
+"frame": 19,
+"full": 53760,
+"bands": 4976,
+"dirty": 4194,
+"ideal": 151,
+"ideal_runs": 112
+},
+{
+"frame": 20,
+"full": 53760,
+"bands": 5136,
+"dirty": 4245,
+"ideal": 269,
+"ideal_runs": 155
+},
+{
+"frame": 21,
+"full": 53760,
+"bands": 5216,
+"dirty": 4248,
+"ideal": 354,
+"ideal_runs": 192
+},
+{
+"frame": 22,
+"full": 53760,
+"bands": 5040,
+"dirty": 4178,
+"ideal": 404,
+"ideal_runs": 188
+},
+{
+"frame": 23,
+"full": 53760,
+"bands": 5184,
+"dirty": 4100,
+"ideal": 425,
+"ideal_runs": 191
+},
+{
+"frame": 24,
+"full": 53760,
+"bands": 5088,
+"dirty": 4053,
+"ideal": 386,
+"ideal_runs": 164
+},
+{
+"frame": 25,
+"full": 53760,
+"bands": 5056,
+"dirty": 4021,
+"ideal": 338,
+"ideal_runs": 156
+},
+{
+"frame": 26,
+"full": 53760,
+"bands": 4944,
+"dirty": 4004,
+"ideal": 230,
+"ideal_runs": 129
+},
+{
+"frame": 27,
+"full": 53760,
+"bands": 5088,
+"dirty": 4026,
+"ideal": 165,
+"ideal_runs": 93
+},
+{
+"frame": 28,
+"full": 53760,
+"bands": 5168,
+"dirty": 4121,
+"ideal": 121,
+"ideal_runs": 63
+},
+{
+"frame": 29,
+"full": 53760,
+"bands": 5216,
+"dirty": 4203,
+"ideal": 91,
+"ideal_runs": 50
+},
+{
+"frame": 30,
+"full": 53760,
+"bands": 5232,
+"dirty": 4309,
+"ideal": 95,
+"ideal_runs": 58
+},
+{
+"frame": 31,
+"full": 53760,
+"bands": 5440,
+"dirty": 4448,
+"ideal": 88,
+"ideal_runs": 63
+},
+{
+"frame": 32,
+"full": 53760,
+"bands": 5776,
+"dirty": 4603,
+"ideal": 72,
+"ideal_runs": 64
+},
+{
+"frame": 33,
+"full": 53760,
+"bands": 5936,
+"dirty": 4744,
+"ideal": 77,
+"ideal_runs": 61
+},
+{
+"frame": 34,
+"full": 53760,
+"bands": 6080,
+"dirty": 4889,
+"ideal": 101,
+"ideal_runs": 74
+},
+{
+"frame": 35,
+"full": 53760,
+"bands": 6224,
+"dirty": 5005,
+"ideal": 125,
+"ideal_runs": 92
+},
+{
+"frame": 36,
+"full": 53760,
+"bands": 6272,
+"dirty": 5065,
+"ideal": 227,
+"ideal_runs": 140
+},
+{
+"frame": 37,
+"full": 53760,
+"bands": 6496,
+"dirty": 5136,
+"ideal": 356,
+"ideal_runs": 193
+},
+{
+"frame": 38,
+"full": 53760,
+"bands": 6480,
+"dirty": 5076,
+"ideal": 438,
+"ideal_runs": 212
+},
+{
+"frame": 39,
+"full": 53760,
+"bands": 6352,
+"dirty": 5043,
+"ideal": 503,
+"ideal_runs": 231
+},
+{
+"frame": 40,
+"full": 53760,
+"bands": 6304,
+"dirty": 5006,
+"ideal": 508,
+"ideal_runs": 219
+},
+{
+"frame": 41,
+"full": 53760,
+"bands": 6128,
+"dirty": 4937,
+"ideal": 405,
+"ideal_runs": 173
+},
+{
+"frame": 42,
+"full": 53760,
+"bands": 6160,
+"dirty": 4887,
+"ideal": 307,
+"ideal_runs": 148
+},
+{
+"frame": 43,
+"full": 53760,
+"bands": 6192,
+"dirty": 4928,
+"ideal": 250,
+"ideal_runs": 124
+},
+{
+"frame": 44,
+"full": 53760,
+"bands": 5968,
+"dirty": 4993,
+"ideal": 181,
+"ideal_runs": 87
+},
+{
+"frame": 45,
+"full": 53760,
+"bands": 6160,
+"dirty": 5136,
+"ideal": 138,
+"ideal_runs": 69
+},
+{
+"frame": 46,
+"full": 53760,
+"bands": 6352,
+"dirty": 5329,
+"ideal": 111,
+"ideal_runs": 59
+},
+{
+"frame": 47,
+"full": 53760,
+"bands": 6528,
+"dirty": 5526,
+"ideal": 84,
+"ideal_runs": 60
+},
+{
+"frame": 48,
+"full": 53760,
+"bands": 6704,
+"dirty": 5753,
+"ideal": 73,
+"ideal_runs": 56
+},
+{
+"frame": 49,
+"full": 53760,
+"bands": 6864,
+"dirty": 5971,
+"ideal": 82,
+"ideal_runs": 70
+},
+{
+"frame": 50,
+"full": 53760,
+"bands": 7136,
+"dirty": 6141,
+"ideal": 96,
+"ideal_runs": 86
+},
+{
+"frame": 51,
+"full": 53760,
+"bands": 7248,
+"dirty": 6250,
+"ideal": 196,
+"ideal_runs": 136
+},
+{
+"frame": 52,
+"full": 53760,
+"bands": 7360,
+"dirty": 6353,
+"ideal": 370,
+"ideal_runs": 201
+},
+{
+"frame": 53,
+"full": 53760,
+"bands": 7536,
+"dirty": 6352,
+"ideal": 497,
+"ideal_runs": 229
+},
+{
+"frame": 54,
+"full": 53760,
+"bands": 7456,
+"dirty": 6288,
+"ideal": 564,
+"ideal_runs": 219
+},
+{
+"frame": 55,
+"full": 53760,
+"bands": 7456,
+"dirty": 6253,
+"ideal": 612,
+"ideal_runs": 220
+},
+{
+"frame": 56,
+"full": 53760,
+"bands": 7600,
+"dirty": 6195,
+"ideal": 586,
+"ideal_runs": 213
+},
+{
+"frame": 57,
+"full": 53760,
+"bands": 7424,
+"dirty": 6144,
+"ideal": 479,
+"ideal_runs": 205
+},
+{
+"frame": 58,
+"full": 53760,
+"bands": 7408,
+"dirty": 6108,
+"ideal": 364,
+"ideal_runs": 175
+},
+{
+"frame": 59,
+"full": 53760,
+"bands": 7248,
+"dirty": 6045,
+"ideal": 260,
+"ideal_runs": 123
+},
+{
+"frame": 60,
+"full": 53760,
+"bands": 7216,
+"dirty": 6067,
+"ideal": 169,
+"ideal_runs": 79
+},
+{
+"frame": 61,
+"full": 53760,
+"bands": 7392,
+"dirty": 6167,
+"ideal": 135,
+"ideal_runs": 69
+},
+{
+"frame": 62,
+"full": 53760,
+"bands": 7584,
+"dirty": 6308,
+"ideal": 131,
+"ideal_runs": 74
+},
+{
+"frame": 63,
+"full": 53760,
+"bands": 7776,
+"dirty": 6480,
+"ideal": 103,
+"ideal_runs": 69
+},
+{
+"frame": 64,
+"full": 53760,
+"bands": 7936,
+"dirty": 6687,
+"ideal": 77,
+"ideal_runs": 57
+},
+{
+"frame": 65,
+"full": 53760,
+"bands": 8176,
+"dirty": 6917,
+"ideal": 90,
+"ideal_runs": 64
+},
+{
+"frame": 66,
+"full": 53760,
+"bands": 8384,
+"dirty": 7173,
+"ideal": 146,
+"ideal_runs": 114
+},
+{
+"frame": 67,
+"full": 53760,
+"bands": 8736,
+"dirty": 7364,
+"ideal": 218,
+"ideal_runs": 148
+},
+{
+"frame": 68,
+"full": 53760,
+"bands": 8880,
+"dirty": 7532,
+"ideal": 313,
+"ideal_runs": 185
+},
+{
+"frame": 69,
+"full": 53760,
+"bands": 8928,
+"dirty": 7558,
+"ideal": 398,
+"ideal_runs": 214
+},
+{
+"frame": 70,
+"full": 53760,
+"bands": 8848,
+"dirty": 7546,
+"ideal": 488,
+"ideal_runs": 246
+},
+{
+"frame": 71,
+"full": 53760,
+"bands": 8720,
+"dirty": 7437,
+"ideal": 472,
+"ideal_runs": 234
+},
+{
+"frame": 72,
+"full": 53760,
+"bands": 8624,
+"dirty": 7422,
+"ideal": 428,
+"ideal_runs": 208
+},
+{
+"frame": 73,
+"full": 53760,
+"bands": 8512,
+"dirty": 7321,
+"ideal": 371,
+"ideal_runs": 199
+},
+{
+"frame": 74,
+"full": 53760,
+"bands": 8400,
+"dirty": 7265,
+"ideal": 287,
+"ideal_runs": 142
+},
+{
+"frame": 75,
+"full": 53760,
+"bands": 8464,
+"dirty": 7294,
+"ideal": 273,
+"ideal_runs": 124
+},
+{
+"frame": 76,
+"full": 53760,
+"bands": 8656,
+"dirty": 7435,
+"ideal": 249,
+"ideal_runs": 97
+},
+{
+"frame": 77,
+"full": 53760,
+"bands": 8896,
+"dirty": 7588,
+"ideal": 193,
+"ideal_runs": 75
+},
+{
+"frame": 78,
+"full": 53760,
+"bands": 9088,
+"dirty": 7840,
+"ideal": 162,
+"ideal_runs": 74
+},
+{
+"frame": 79,
+"full": 53760,
+"bands": 9440,
+"dirty": 8179,
+"ideal": 154,
+"ideal_runs": 97
+},
+{
+"frame": 80,
+"full": 53760,
+"bands": 9648,
+"dirty": 8585,
+"ideal": 96,
+"ideal_runs": 77
+},
+{
+"frame": 81,
+"full": 53760,
+"bands": 10048,
+"dirty": 8888,
+"ideal": 76,
+"ideal_runs": 61
+},
+{
+"frame": 82,
+"full": 53760,
+"bands": 10480,
+"dirty": 9201,
+"ideal": 104,
+"ideal_runs": 91
+},
+{
+"frame": 83,
+"full": 53760,
+"bands": 10784,
+"dirty": 9477,
+"ideal": 274,
+"ideal_runs": 176
+},
+{
+"frame": 84,
+"full": 53760,
+"bands": 10880,
+"dirty": 9646,
+"ideal": 511,
+"ideal_runs": 208
+},
+{
+"frame": 85,
+"full": 53760,
+"bands": 10896,
+"dirty": 9641,
+"ideal": 694,
+"ideal_runs": 251
+},
+{
+"frame": 86,
+"full": 53760,
+"bands": 10736,
+"dirty": 9522,
+"ideal": 745,
+"ideal_runs": 240
+},
+{
+"frame": 87,
+"full": 53760,
+"bands": 10544,
+"dirty": 9348,
+"ideal": 633,
+"ideal_runs": 211
+},
+{
+"frame": 88,
+"full": 53760,
+"bands": 10288,
+"dirty": 9100,
+"ideal": 436,
+"ideal_runs": 158
+},
+{
+"frame": 89,
+"full": 53760,
+"bands": 10176,
+"dirty": 9056,
+"ideal": 337,
+"ideal_runs": 148
+},
+{
+"frame": 90,
+"full": 53760,
+"bands": 10288,
+"dirty": 9065,
+"ideal": 247,
+"ideal_runs": 116
+},
+{
+"frame": 91,
+"full": 53760,
+"bands": 10368,
+"dirty": 9112,
+"ideal": 126,
+"ideal_runs": 81
+},
+{
+"frame": 92,
+"full": 53760,
+"bands": 10576,
+"dirty": 9272,
+"ideal": 82,
+"ideal_runs": 66
+},
+{
+"frame": 93,
+"full": 53760,
+"bands": 10768,
+"dirty": 9513,
+"ideal": 82,
+"ideal_runs": 59
+},
+{
+"frame": 94,
+"full": 53760,
+"bands": 11104,
+"dirty": 9849,
+"ideal": 112,
+"ideal_runs": 68
+},
+{
+"frame": 95,
+"full": 53760,
+"bands": 11520,
+"dirty": 10273,
+"ideal": 107,
+"ideal_runs": 63
+},
+{
+"frame": 96,
+"full": 53760,
+"bands": 11856,
+"dirty": 10618,
+"ideal": 105,
+"ideal_runs": 49
+},
+{
+"frame": 97,
+"full": 53760,
+"bands": 12272,
+"dirty": 11119,
+"ideal": 142,
+"ideal_runs": 77
+},
+{
+"frame": 98,
+"full": 53760,
+"bands": 12608,
+"dirty": 11452,
+"ideal": 161,
+"ideal_runs": 95
+},
+{
+"frame": 99,
+"full": 53760,
+"bands": 12880,
+"dirty": 11777,
+"ideal": 246,
+"ideal_runs": 123
+},
+{
+"frame": 100,
+"full": 53760,
+"bands": 13136,
+"dirty": 11995,
+"ideal": 356,
+"ideal_runs": 169
+},
+{
+"frame": 101,
+"full": 53760,
+"bands": 13296,
+"dirty": 12008,
+"ideal": 400,
+"ideal_runs": 209
+},
+{
+"frame": 102,
+"full": 53760,
+"bands": 13232,
+"dirty": 12002,
+"ideal": 523,
+"ideal_runs": 210
+},
+{
+"frame": 103,
+"full": 53760,
+"bands": 13232,
+"dirty": 11920,
+"ideal": 561,
+"ideal_runs": 230
+},
+{
+"frame": 104,
+"full": 53760,
+"bands": 13104,
+"dirty": 11786,
+"ideal": 529,
+"ideal_runs": 213
+},
+{
+"frame": 105,
+"full": 53760,
+"bands": 12992,
+"dirty": 11764,
+"ideal": 419,
+"ideal_runs": 165
+},
+{
+"frame": 106,
+"full": 53760,
+"bands": 12912,
+"dirty": 11754,
+"ideal": 280,
+"ideal_runs": 128
+},
+{
+"frame": 107,
+"full": 53760,
+"bands": 13120,
+"dirty": 11866,
+"ideal": 196,
+"ideal_runs": 94
+},
+{
+"frame": 108,
+"full": 53760,
+"bands": 13312,
+"dirty": 12096,
+"ideal": 136,
+"ideal_runs": 68
+},
+{
+"frame": 109,
+"full": 53760,
+"bands": 13696,
+"dirty": 12474,
+"ideal": 105,
+"ideal_runs": 57
+},
+{
+"frame": 110,
+"full": 53760,
+"bands": 14176,
+"dirty": 12954,
+"ideal": 87,
+"ideal_runs": 45
+},
+{
+"frame": 111,
+"full": 53760,
+"bands": 14944,
+"dirty": 13694,
+"ideal": 87,
+"ideal_runs": 39
+},
+{
+"frame": 112,
+"full": 53760,
+"bands": 15536,
+"dirty": 14507,
+"ideal": 73,
+"ideal_runs": 35
+},
+{
+"frame": 113,
+"full": 53760,
+"bands": 16096,
+"dirty": 15215,
+"ideal": 85,
+"ideal_runs": 45
+},
+{
+"frame": 114,
+"full": 53760,
+"bands": 16608,
+"dirty": 15744,
+"ideal": 129,
+"ideal_runs": 82
+},
+{
+"frame": 115,
+"full": 53760,
+"bands": 16944,
+"dirty": 16182,
+"ideal": 244,
+"ideal_runs": 118
+},
+{
+"frame": 116,
+"full": 53760,
+"bands": 17344,
+"dirty": 16441,
+"ideal": 440,
+"ideal_runs": 166
+},
+{
+"frame": 117,
+"full": 53760,
+"bands": 17552,
+"dirty": 16574,
+"ideal": 762,
+"ideal_runs": 202
+},
+{
+"frame": 118,
+"full": 53760,
+"bands": 17552,
+"dirty": 16545,
+"ideal": 926,
+"ideal_runs": 190
+},
+{
+"frame": 119,
+"full": 53760,
+"bands": 17472,
+"dirty": 16359,
+"ideal": 800,
+"ideal_runs": 164
+},
+{
+"frame": 120,
+"full": 53760,
+"bands": 17216,
+"dirty": 16183,
+"ideal": 578,
+"ideal_runs": 137
+},
+{
+"frame": 121,
+"full": 53760,
+"bands": 17024,
+"dirty": 16185,
+"ideal": 340,
+"ideal_runs": 98
+},
+{
+"frame": 122,
+"full": 53760,
+"bands": 16960,
+"dirty": 16231,
+"ideal": 136,
+"ideal_runs": 59
+},
+{
+"frame": 123,
+"full": 53760,
+"bands": 17040,
+"dirty": 16295,
+"ideal": 56,
+"ideal_runs": 30
+},
+{
+"frame": 124,
+"full": 53760,
+"bands": 17280,
+"dirty": 16560,
+"ideal": 33,
+"ideal_runs": 22
+},
+{
+"frame": 125,
+"full": 53760,
+"bands": 17696,
+"dirty": 16972,
+"ideal": 29,
+"ideal_runs": 16
+},
+{
+"frame": 126,
+"full": 53760,
+"bands": 18144,
+"dirty": 17457,
+"ideal": 21,
+"ideal_runs": 10
+},
+{
+"frame": 127,
+"full": 53760,
+"bands": 18672,
+"dirty": 18058,
+"ideal": 11,
+"ideal_runs": 6
+},
+{
+"frame": 128,
+"full": 53760,
+"bands": 19392,
+"dirty": 18723,
+"ideal": 4,
+"ideal_runs": 3
+},
+{
+"frame": 129,
+"full": 53760,
+"bands": 19984,
+"dirty": 19329,
+"ideal": 0,
+"ideal_runs": 0
+},
+{
+"frame": 130,
+"full": 53760,
+"bands": 20704,
+"dirty": 20004,
+"ideal": 6,
+"ideal_runs": 6
+},
+{
+"frame": 131,
+"full": 53760,
+"bands": 21376,
+"dirty": 20753,
+"ideal": 13,
+"ideal_runs": 12
+},
+{
+"frame": 132,
+"full": 53760,
+"bands": 21984,
+"dirty": 21344,
+"ideal": 80,
+"ideal_runs": 51
+},
+{
+"frame": 133,
+"full": 53760,
+"bands": 22560,
+"dirty": 21806,
+"ideal": 224,
+"ideal_runs": 100
+},
+{
+"frame": 134,
+"full": 53760,
+"bands": 22736,
+"dirty": 22075,
+"ideal": 382,
+"ideal_runs": 138
+},
+{
+"frame": 135,
+"full": 53760,
+"bands": 22944,
+"dirty": 22199,
+"ideal": 442,
+"ideal_runs": 156
+},
+{
+"frame": 136,
+"full": 53760,
+"bands": 22960,
+"dirty": 22176,
+"ideal": 380,
+"ideal_runs": 106
+},
+{
+"frame": 137,
+"full": 53760,
+"bands": 22944,
+"dirty": 22248,
+"ideal": 259,
+"ideal_runs": 94
+},
+{
+"frame": 138,
+"full": 53760,
+"bands": 23216,
+"dirty": 22458,
+"ideal": 72,
+"ideal_runs": 45
+},
+{
+"frame": 139,
+"full": 53760,
+"bands": 23600,
+"dirty": 22780,
+"ideal": 178,
+"ideal_runs": 31
+},
+{
+"frame": 140,
+"full": 53760,
+"bands": 23808,
+"dirty": 23139,
+"ideal": 367,
+"ideal_runs": 57
+},
+{
+"frame": 141,
+"full": 53760,
+"bands": 24336,
+"dirty": 23521,
+"ideal": 286,
+"ideal_runs": 58
+},
+{
+"frame": 142,
+"full": 53760,
+"bands": 24832,
+"dirty": 24086,
+"ideal": 142,
+"ideal_runs": 79
+},
+{
+"frame": 143,
+"full": 53760,
+"bands": 25168,
+"dirty": 24531,
+"ideal": 65,
+"ideal_runs": 65
+},
+{
+"frame": 144,
+"full": 53760,
+"bands": 25488,
+"dirty": 24900,
+"ideal": 121,
+"ideal_runs": 107
+},
+{
+"frame": 145,
+"full": 53760,
+"bands": 25888,
+"dirty": 25255,
+"ideal": 213,
+"ideal_runs": 154
+},
+{
+"frame": 146,
+"full": 53760,
+"bands": 26112,
+"dirty": 25542,
+"ideal": 212,
+"ideal_runs": 171
+},
+{
+"frame": 147,
+"full": 53760,
+"bands": 26432,
+"dirty": 25767,
+"ideal": 244,
+"ideal_runs": 196
+},
+{
+"frame": 148,
+"full": 53760,
+"bands": 26688,
+"dirty": 25969,
+"ideal": 379,
+"ideal_runs": 188
+},
+{
+"frame": 149,
+"full": 53760,
+"bands": 26864,
+"dirty": 26092,
+"ideal": 389,
+"ideal_runs": 97
+},
+{
+"frame": 150,
+"full": 53760,
+"bands": 26880,
+"dirty": 26086,
+"ideal": 532,
+"ideal_runs": 93
+},
+{
+"frame": 151,
+"full": 53760,
+"bands": 27360,
+"dirty": 26654,
+"ideal": 731,
+"ideal_runs": 109
+},
+{
+"frame": 152,
+"full": 53760,
+"bands": 28752,
+"dirty": 27978,
+"ideal": 678,
+"ideal_runs": 167
+},
+{
+"frame": 153,
+"full": 53760,
+"bands": 30304,
+"dirty": 29349,
+"ideal": 522,
+"ideal_runs": 193
+},
+{
+"frame": 154,
+"full": 53760,
+"bands": 31776,
+"dirty": 30771,
+"ideal": 394,
+"ideal_runs": 145
+},
+{
+"frame": 155,
+"full": 53760,
+"bands": 32736,
+"dirty": 31776,
+"ideal": 761,
+"ideal_runs": 96
+},
+{
+"frame": 156,
+"full": 53760,
+"bands": 33616,
+"dirty": 32458,
+"ideal": 1232,
+"ideal_runs": 93
+},
+{
+"frame": 157,
+"full": 53760,
+"bands": 33840,
+"dirty": 32751,
+"ideal": 1449,
+"ideal_runs": 95
+},
+{
+"frame": 158,
+"full": 53760,
+"bands": 34048,
+"dirty": 32989,
+"ideal": 1519,
+"ideal_runs": 127
+},
+{
+"frame": 159,
+"full": 53760,
+"bands": 33968,
+"dirty": 32858,
+"ideal": 1246,
+"ideal_runs": 208
+},
+{
+"frame": 160,
+"full": 53760,
+"bands": 33504,
+"dirty": 32488,
+"ideal": 750,
+"ideal_runs": 241
+},
+{
+"frame": 161,
+"full": 53760,
+"bands": 33136,
+"dirty": 32251,
+"ideal": 478,
+"ideal_runs": 236
+},
+{
+"frame": 162,
+"full": 53760,
+"bands": 33216,
+"dirty": 32293,
+"ideal": 408,
+"ideal_runs": 235
+},
+{
+"frame": 163,
+"full": 53760,
+"bands": 33200,
+"dirty": 32359,
+"ideal": 559,
+"ideal_runs": 251
+},
+{
+"frame": 164,
+"full": 53760,
+"bands": 33328,
+"dirty": 32512,
+"ideal": 1139,
+"ideal_runs": 309
+},
+{
+"frame": 165,
+"full": 53760,
+"bands": 33536,
+"dirty": 32661,
+"ideal": 1701,
+"ideal_runs": 336
+},
+{
+"frame": 166,
+"full": 53760,
+"bands": 33600,
+"dirty": 32471,
+"ideal": 1817,
+"ideal_runs": 328
+},
+{
+"frame": 167,
+"full": 53760,
+"bands": 33456,
+"dirty": 32288,
+"ideal": 1618,
+"ideal_runs": 323
+},
+{
+"frame": 168,
+"full": 53760,
+"bands": 33392,
+"dirty": 32261,
+"ideal": 1221,
+"ideal_runs": 315
+},
+{
+"frame": 169,
+"full": 53760,
+"bands": 33360,
+"dirty": 32249,
+"ideal": 757,
+"ideal_runs": 273
+},
+{
+"frame": 170,
+"full": 53760,
+"bands": 33296,
+"dirty": 32186,
+"ideal": 536,
+"ideal_runs": 249
+},
+{
+"frame": 171,
+"full": 53760,
+"bands": 33200,
+"dirty": 32138,
+"ideal": 1178,
+"ideal_runs": 189
+},
+{
+"frame": 172,
+"full": 53760,
+"bands": 33232,
+"dirty": 31965,
+"ideal": 1761,
+"ideal_runs": 136
+},
+{
+"frame": 173,
+"full": 53760,
+"bands": 32992,
+"dirty": 31857,
+"ideal": 1918,
+"ideal_runs": 98
+},
+{
+"frame": 174,
+"full": 53760,
+"bands": 33040,
+"dirty": 31878,
+"ideal": 1768,
+"ideal_runs": 88
+},
+{
+"frame": 175,
+"full": 53760,
+"bands": 32832,
+"dirty": 31974,
+"ideal": 1314,
+"ideal_runs": 78
+},
+{
+"frame": 176,
+"full": 53760,
+"bands": 32688,
+"dirty": 31879,
+"ideal": 767,
+"ideal_runs": 64
+},
+{
+"frame": 177,
+"full": 53760,
+"bands": 32432,
+"dirty": 31752,
+"ideal": 352,
+"ideal_runs": 63
+},
+{
+"frame": 178,
+"full": 53760,
+"bands": 32768,
+"dirty": 31922,
+"ideal": 32,
+"ideal_runs": 30
+},
+{
+"frame": 179,
+"full": 53760,
+"bands": 32912,
+"dirty": 32226,
+"ideal": 87,
+"ideal_runs": 63
+},
+{
+"frame": 180,
+"full": 53760,
+"bands": 33712,
+"dirty": 32742,
+"ideal": 289,
+"ideal_runs": 107
+},
+{
+"frame": 181,
+"full": 53760,
+"bands": 34192,
+"dirty": 33449,
+"ideal": 936,
+"ideal_runs": 139
+},
+{
+"frame": 182,
+"full": 53760,
+"bands": 35248,
+"dirty": 34155,
+"ideal": 3654,
+"ideal_runs": 234
+},
+{
+"frame": 183,
+"full": 53760,
+"bands": 35088,
+"dirty": 34021,
+"ideal": 6796,
+"ideal_runs": 268
+},
+{
+"frame": 184,
+"full": 53760,
+"bands": 32496,
+"dirty": 31502,
+"ideal": 6287,
+"ideal_runs": 332
+},
+{
+"frame": 185,
+"full": 53760,
+"bands": 28592,
+"dirty": 27736,
+"ideal": 3185,
+"ideal_runs": 338
+},
+{
+"frame": 186,
+"full": 53760,
+"bands": 26224,
+"dirty": 25430,
+"ideal": 1111,
+"ideal_runs": 231
+},
+{
+"frame": 187,
+"full": 53760,
+"bands": 25600,
+"dirty": 24727,
+"ideal": 489,
+"ideal_runs": 78
+},
+{
+"frame": 188,
+"full": 53760,
+"bands": 25328,
+"dirty": 24515,
+"ideal": 251,
+"ideal_runs": 45
+},
+{
+"frame": 189,
+"full": 53760,
+"bands": 26224,
+"dirty": 25422,
+"ideal": 334,
+"ideal_runs": 29
+},
+{
+"frame": 190,
+"full": 53760,
+"bands": 29024,
+"dirty": 28078,
+"ideal": 456,
+"ideal_runs": 39
+},
+{
+"frame": 191,
+"full": 53760,
+"bands": 31792,
+"dirty": 30720,
+"ideal": 509,
+"ideal_runs": 55
+},
+{
+"frame": 192,
+"full": 53760,
+"bands": 32160,
+"dirty": 31374,
+"ideal": 334,
+"ideal_runs": 47
+},
+{
+"frame": 193,
+"full": 53760,
+"bands": 32672,
+"dirty": 31750,
+"ideal": 165,
+"ideal_runs": 38
+},
+{
+"frame": 194,
+"full": 53760,
+"bands": 32928,
+"dirty": 32198,
+"ideal": 57,
+"ideal_runs": 22
+},
+{
+"frame": 195,
+"full": 53760,
+"bands": 33440,
+"dirty": 32710,
+"ideal": 29,
+"ideal_runs": 22
+},
+{
+"frame": 196,
+"full": 53760,
+"bands": 34096,
+"dirty": 33258,
+"ideal": 118,
+"ideal_runs": 50
+},
+{
+"frame": 197,
+"full": 53760,
+"bands": 35136,
+"dirty": 34140,
+"ideal": 662,
+"ideal_runs": 86
+},
+{
+"frame": 198,
+"full": 53760,
+"bands": 35856,
+"dirty": 34910,
+"ideal": 1422,
+"ideal_runs": 169
+},
+{
+"frame": 199,
+"full": 53760,
+"bands": 36240,
+"dirty": 35312,
+"ideal": 1632,
+"ideal_runs": 246
+},
+{
+"frame": 200,
+"full": 53760,
+"bands": 36544,
+"dirty": 35382,
+"ideal": 1396,
+"ideal_runs": 266
+},
+{
+"frame": 201,
+"full": 53760,
+"bands": 36368,
+"dirty": 35231,
+"ideal": 1102,
+"ideal_runs": 283
+},
+{
+"frame": 202,
+"full": 53760,
+"bands": 36016,
+"dirty": 34928,
+"ideal": 882,
+"ideal_runs": 301
+},
+{
+"frame": 203,
+"full": 53760,
+"bands": 35600,
+"dirty": 34546,
+"ideal": 1538,
+"ideal_runs": 254
+},
+{
+"frame": 204,
+"full": 53760,
+"bands": 35376,
+"dirty": 34175,
+"ideal": 1974,
+"ideal_runs": 205
+},
+{
+"frame": 205,
+"full": 53760,
+"bands": 35024,
+"dirty": 33873,
+"ideal": 2129,
+"ideal_runs": 236
+},
+{
+"frame": 206,
+"full": 53760,
+"bands": 34848,
+"dirty": 33724,
+"ideal": 2249,
+"ideal_runs": 229
+},
+{
+"frame": 207,
+"full": 53760,
+"bands": 34192,
+"dirty": 33449,
+"ideal": 2101,
+"ideal_runs": 213
+},
+{
+"frame": 208,
+"full": 53760,
+"bands": 33376,
+"dirty": 32600,
+"ideal": 2887,
+"ideal_runs": 304
+},
+{
+"frame": 209,
+"full": 53760,
+"bands": 32496,
+"dirty": 31767,
+"ideal": 3976,
+"ideal_runs": 282
+},
+{
+"frame": 210,
+"full": 53760,
+"bands": 30832,
+"dirty": 30012,
+"ideal": 3897,
+"ideal_runs": 278
+},
+{
+"frame": 211,
+"full": 53760,
+"bands": 28688,
+"dirty": 28009,
+"ideal": 2065,
+"ideal_runs": 321
+},
+{
+"frame": 212,
+"full": 53760,
+"bands": 27024,
+"dirty": 26264,
+"ideal": 508,
+"ideal_runs": 250
+},
+{
+"frame": 213,
+"full": 53760,
+"bands": 26848,
+"dirty": 26064,
+"ideal": 520,
+"ideal_runs": 184
+},
+{
+"frame": 214,
+"full": 53760,
+"bands": 26784,
+"dirty": 26030,
+"ideal": 773,
+"ideal_runs": 231
+},
+{
+"frame": 215,
+"full": 53760,
+"bands": 26576,
+"dirty": 25914,
+"ideal": 948,
+"ideal_runs": 237
+},
+{
+"frame": 216,
+"full": 53760,
+"bands": 26240,
+"dirty": 25543,
+"ideal": 847,
+"ideal_runs": 252
+},
+{
+"frame": 217,
+"full": 53760,
+"bands": 25984,
+"dirty": 25266,
+"ideal": 601,
+"ideal_runs": 249
+},
+{
+"frame": 218,
+"full": 53760,
+"bands": 25776,
+"dirty": 25095,
+"ideal": 400,
+"ideal_runs": 177
+},
+{
+"frame": 219,
+"full": 53760,
+"bands": 26128,
+"dirty": 25016,
+"ideal": 473,
+"ideal_runs": 122
+},
+{
+"frame": 220,
+"full": 53760,
+"bands": 25568,
+"dirty": 24850,
+"ideal": 427,
+"ideal_runs": 97
+},
+{
+"frame": 221,
+"full": 53760,
+"bands": 25376,
+"dirty": 24684,
+"ideal": 301,
+"ideal_runs": 65
+},
+{
+"frame": 222,
+"full": 53760,
+"bands": 25376,
+"dirty": 24697,
+"ideal": 124,
+"ideal_runs": 62
+},
+{
+"frame": 223,
+"full": 53760,
+"bands": 25648,
+"dirty": 24861,
+"ideal": 146,
+"ideal_runs": 127
+},
+{
+"frame": 224,
+"full": 53760,
+"bands": 26032,
+"dirty": 25243,
+"ideal": 217,
+"ideal_runs": 171
+},
+{
+"frame": 225,
+"full": 53760,
+"bands": 26400,
+"dirty": 25660,
+"ideal": 280,
+"ideal_runs": 169
+},
+{
+"frame": 226,
+"full": 53760,
+"bands": 26736,
+"dirty": 26050,
+"ideal": 328,
+"ideal_runs": 170
+},
+{
+"frame": 227,
+"full": 53760,
+"bands": 27056,
+"dirty": 26365,
+"ideal": 328,
+"ideal_runs": 180
+},
+{
+"frame": 228,
+"full": 53760,
+"bands": 27248,
+"dirty": 26529,
+"ideal": 502,
+"ideal_runs": 208
+},
+{
+"frame": 229,
+"full": 53760,
+"bands": 27392,
+"dirty": 26648,
+"ideal": 706,
+"ideal_runs": 230
+},
+{
+"frame": 230,
+"full": 53760,
+"bands": 27264,
+"dirty": 26446,
+"ideal": 927,
+"ideal_runs": 289
+},
+{
+"frame": 231,
+"full": 53760,
+"bands": 26960,
+"dirty": 26148,
+"ideal": 1015,
+"ideal_runs": 336
+},
+{
+"frame": 232,
+"full": 53760,
+"bands": 26512,
+"dirty": 25755,
+"ideal": 965,
+"ideal_runs": 318
+},
+{
+"frame": 233,
+"full": 53760,
+"bands": 26224,
+"dirty": 25460,
+"ideal": 841,
+"ideal_runs": 319
+},
+{
+"frame": 234,
+"full": 53760,
+"bands": 25904,
+"dirty": 25215,
+"ideal": 734,
+"ideal_runs": 370
+},
+{
+"frame": 235,
+"full": 53760,
+"bands": 25568,
+"dirty": 24912,
+"ideal": 931,
+"ideal_runs": 307
+},
+{
+"frame": 236,
+"full": 53760,
+"bands": 25344,
+"dirty": 24523,
+"ideal": 940,
+"ideal_runs": 239
+},
+{
+"frame": 237,
+"full": 53760,
+"bands": 25040,
+"dirty": 24288,
+"ideal": 656,
+"ideal_runs": 221
+},
+{
+"frame": 238,
+"full": 53760,
+"bands": 25088,
+"dirty": 24333,
+"ideal": 341,
+"ideal_runs": 180
+},
+{
+"frame": 239,
+"full": 53760,
+"bands": 25168,
+"dirty": 24531,
+"ideal": 145,
+"ideal_runs": 132
+},
+{
+"frame": 240,
+"full": 53760,
+"bands": 25440,
+"dirty": 24780,
+"ideal": 199,
+"ideal_runs": 145
+},
+{
+"frame": 241,
+"full": 53760,
+"bands": 25616,
+"dirty": 25024,
+"ideal": 338,
+"ideal_runs": 179
+},
+{
+"frame": 242,
+"full": 53760,
+"bands": 25776,
+"dirty": 25176,
+"ideal": 595,
+"ideal_runs": 241
+},
+{
+"frame": 243,
+"full": 53760,
+"bands": 25904,
+"dirty": 25168,
+"ideal": 866,
+"ideal_runs": 286
+},
+{
+"frame": 244,
+"full": 53760,
+"bands": 25696,
+"dirty": 24950,
+"ideal": 1093,
+"ideal_runs": 377
+},
+{
+"frame": 245,
+"full": 53760,
+"bands": 25264,
+"dirty": 24520,
+"ideal": 1372,
+"ideal_runs": 444
+},
+{
+"frame": 246,
+"full": 53760,
+"bands": 24704,
+"dirty": 23949,
+"ideal": 1691,
+"ideal_runs": 443
+},
+{
+"frame": 247,
+"full": 53760,
+"bands": 23984,
+"dirty": 23215,
+"ideal": 1920,
+"ideal_runs": 427
+},
+{
+"frame": 248,
+"full": 53760,
+"bands": 23104,
+"dirty": 22309,
+"ideal": 1750,
+"ideal_runs": 413
+},
+{
+"frame": 249,
+"full": 53760,
+"bands": 22048,
+"dirty": 21339,
+"ideal": 1392,
+"ideal_runs": 419
+},
+{
+"frame": 250,
+"full": 53760,
+"bands": 21312,
+"dirty": 20589,
+"ideal": 1249,
+"ideal_runs": 394
+},
+{
+"frame": 251,
+"full": 53760,
+"bands": 20672,
+"dirty": 19947,
+"ideal": 1068,
+"ideal_runs": 368
+},
+{
+"frame": 252,
+"full": 53760,
+"bands": 20064,
+"dirty": 19345,
+"ideal": 737,
+"ideal_runs": 333
+},
+{
+"frame": 253,
+"full": 53760,
+"bands": 19648,
+"dirty": 18970,
+"ideal": 421,
+"ideal_runs": 238
+},
+{
+"frame": 254,
+"full": 53760,
+"bands": 19408,
+"dirty": 18804,
+"ideal": 367,
+"ideal_runs": 200
+},
+{
+"frame": 255,
+"full": 53760,
+"bands": 19520,
+"dirty": 18838,
+"ideal": 381,
+"ideal_runs": 242
+},
+{
+"frame": 256,
+"full": 53760,
+"bands": 19536,
+"dirty": 18878,
+"ideal": 350,
+"ideal_runs": 219
+},
+{
+"frame": 257,
+"full": 53760,
+"bands": 19552,
+"dirty": 18882,
+"ideal": 450,
+"ideal_runs": 233
+},
+{
+"frame": 258,
+"full": 53760,
+"bands": 19584,
+"dirty": 18983,
+"ideal": 591,
+"ideal_runs": 288
+},
+{
+"frame": 259,
+"full": 53760,
+"bands": 19600,
+"dirty": 18904,
+"ideal": 836,
+"ideal_runs": 330
+},
+{
+"frame": 260,
+"full": 53760,
+"bands": 19552,
+"dirty": 18827,
+"ideal": 1262,
+"ideal_runs": 372
+},
+{
+"frame": 261,
+"full": 53760,
+"bands": 19344,
+"dirty": 18516,
+"ideal": 1443,
+"ideal_runs": 322
+},
+{
+"frame": 262,
+"full": 53760,
+"bands": 19120,
+"dirty": 18074,
+"ideal": 1352,
+"ideal_runs": 216
+},
+{
+"frame": 263,
+"full": 53760,
+"bands": 18848,
+"dirty": 17695,
+"ideal": 1265,
+"ideal_runs": 184
+},
+{
+"frame": 264,
+"full": 53760,
+"bands": 18896,
+"dirty": 17722,
+"ideal": 1099,
+"ideal_runs": 194
+}
+]
+}

@@ -631,6 +631,17 @@ trex_m68030_offset_probe: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_offset
 ./TREX/m68030/trex_offset.tos: ./TREX/m68030/build/trex_offset.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
+# Clear-overlap probe (OPTIMIZATION.md 2.5a): appends every frame's screen
+# buffer to fbseq.res for tools/clear_overlap.py.  Diagnostic only, never timed.
+.PHONY: trex_m68030_fbseq
+trex_m68030_fbseq: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_fbseq.tos ./TREX/m68030/trex_dsp.lod
+
+./TREX/m68030/build/trex_fbseq.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_FB_SEQUENCE -o $@ -L ./TREX/m68030/build/trex_fbseq.lst
+
+./TREX/m68030/trex_fbseq.tos: ./TREX/m68030/build/trex_fbseq.o ./TREX/m68030/build/ssi_dma4.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
 ./TREX/m68030/build/trex_framehash.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
 	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_FRAME_HASH -o $@ -L ./TREX/m68030/build/trex_framehash.lst
 

@@ -3690,6 +3690,74 @@ stores in place of the `bsr`) and compute every hull in one tight per-frame
 loop that stays cache-resident, amortising the fetch that costs 14.7 ms
 today.
 
+### 2.5a A coverage-aware clear, bounded: 1.1% of the window (2026-11-18)
+
+2.5's delta clear wipes what a buffer was drawn into last time. A stronger
+scheme would also skip whatever the new frame is about to draw over anyway,
+and clear only what was drawn two frames ago and is **not** drawn now. Before
+building any bookkeeping for that, this section measures how much it could
+ever save, from pixels alone.
+
+**Instrument.** `make trex_m68030_fbseq` builds `trex_fbseq.tos`
+(`-DTREX_FB_SEQUENCE`), the default diagnostic plus one call per frame that
+appends the whole 114,688-byte screen buffer to `fbseq.res` (reopened every
+frame, so a stopped run keeps every completed one). Diagnostic only: its
+GEMDOS traffic costs emulated time, and no timing is taken from it. Over the
+265-frame prefix on the MMU ledger it wrote all 265 frames (30,392,320
+bytes), 9,049,666 pixels and frame 100 `d89958b3...3d16`, the default's
+figures. `tools/clear_overlap.py` compares, for every frame N >= 2, the
+picture the buffer still holds (frame N-2, under the page flip) with frame N,
+inside the 240x224 window. "Drawn" is "non-zero": the background is zero and
+no texture page has a palette word that converts to black (checked: no used
+entry is `$8000`-only, and shading keeps every non-black texel non-black).
+
+**Result**, mean over frames 2-264, pixels per frame:
+
+| Clear scheme | Pixels | Of the window | Worst frame |
+|---|---:|---:|---:|
+| Full window (ships) | 53,760 | 100% | 53,760 |
+| 8-row bands, pixel hull (2.5's shape) | 18,903 | 35.2% | 36,544 |
+| Exactly the pixels drawn two frames ago | 17,941 | 33.4% | 35,382 |
+| **Drawn two frames ago and not drawn now** | **610** | **1.1%** | **6,796** |
+
+**96.6% of what a delta clear wipes is drawn over again by the very next
+picture in that buffer** (median frame 97.4%; 90% of frames leave at most
+1,422 pixels to clear). The ideal set falls into 155 horizontal runs a frame
+on average (444 at most): thin slivers along the silhouette's moving edge.
+The band row is a lower bound on 2.5's real table, which is built from
+triangle extents; it agrees with 2.5's 34.0% for 8-row bands.
+
+**What it bounds.** The clear stage is 16.2 ms cycle-exact (7.4h), 4.4% of
+the frame. A clear that touched only the ideal pixels would cost a fraction
+of a millisecond plus 155 run setups, so **the most any coverage-aware clear
+can save is about 16 ms a frame** (estimate: the whole stage). That is
+roughly twice 2.5's 8-ms band saving, from the same stage, and it stays an
+upper bound: it assumes frame N's coverage is known before frame N is drawn,
+for free.
+
+**What it does not settle.** The coverage has to come from somewhere before
+the clear runs. 2.5 showed that per-triangle bookkeeping on the 68030 costs
+more than the whole saving; a usable version needs the DSP to produce the
+dirty-minus-covered spans (it walks the qualified-opaque triangles' spans
+itself for 160 of every 256, 7.4g), and that adds work to the processor the
+frame currently waits on. Exact span lists are needed, not per-row hulls:
+the ideal set lies inside the silhouette's hull too (gaps between legs),
+and a hull-based skip would leave ghosts there. Not measured: the 640x400
+build (6.6a on its own branch), where the clear is 65 ms and the same
+fraction would be worth far more.
+
+Per-frame areas, run counts and input hashes are in
+[`docs/performance/clear-overlap-2026-11-18.json`](docs/performance/clear-overlap-2026-11-18.json).
+
+**Reproduction.**
+
+```sh
+make trex_m68030_fbseq
+python3 tools/measure_frames.py TREX/m68030/trex_fbseq.tos TREX/dsp/trex_dsp.lod \
+  hatari_runs/fbseq --cpu-core mmu --frames 265 --timeout 3000
+python3 tools/clear_overlap.py hatari_runs/fbseq/fbseq.res
+```
+
 ### 2.6 Frame-rate overlay — implemented, release only
 
 `-DTREX_FPS` draws a five-cell `NN.NN` frames-per-second field into the top-left

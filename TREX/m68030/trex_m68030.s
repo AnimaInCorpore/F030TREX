@@ -1227,6 +1227,9 @@ trex_dummy_frame
 	; empirical-identity question of 2.4e's object-lights variant).
 	bsr	trex_frame_hash_accumulate
 	endc
+	ifd	TREX_FB_SEQUENCE
+	bsr	trex_fb_sequence_append
+	endc
 
 	bsr	lib_psyq_end_frame
 	bsr	lib_psyq_vsync
@@ -1925,6 +1928,45 @@ trex_write_framebuffer_debug
 	Fclose	d7
 .trex_fb_debug_done
 	rts
+
+	ifd	TREX_FB_SEQUENCE
+; Clear-overlap probe (OPTIMIZATION.md 2.5a): appends every rendered frame's
+; whole screen buffer (SCREEN_BUFFER_BYTES, margins included) to fbseq.res,
+; reopening the file each frame so a run the harness stops mid-frame keeps
+; every completed one.  Frame N is drawn into the buffer that showed frame
+; N-2, so tools/clear_overlap.py can read off, offline, what each clear
+; scheme would have to wipe.  Diagnostic only: the GEMDOS traffic costs
+; emulated time, so NO timing figure may be taken from this build.
+FB_SEQUENCE_FRAMES	= 265
+trex_fb_sequence_append
+	movem.l	d0-d7/a0-a6,-(sp)
+	move.l	frame_number,d0
+	cmpi.l	#FB_SEQUENCE_FRAMES-1,d0	; frame_number counts from 0 here
+	bhi	.fb_seq_done
+	tst.l	d0
+	bne	.fb_seq_open
+	Fcreate	fb_sequence_name,#0
+	bra	.fb_seq_have
+.fb_seq_open
+	Fopen	fb_sequence_name,#1
+.fb_seq_have
+	tst.l	d0
+	bmi	.fb_seq_done
+	move.w	d0,d7
+	move.w	#2,-(sp)		; Fseek from the end
+	move.w	d7,-(sp)
+	clr.l	-(sp)
+	move.w	#66,-(sp)
+	trap	#1
+	lea	10(sp),sp
+	move.l	last_rendered_base,a0
+	suba.l	#RENDER_WINDOW_OFFSET,a0
+	Fwrite	d7,#SCREEN_BUFFER_BYTES,(a0)
+	Fclose	d7
+.fb_seq_done
+	movem.l	(sp)+,d0-d7/a0-a6
+	rts
+	endc
 
 	ifd	TREX_FRAME_HASH
 FRAME_HASH_MAX	= 512
@@ -8566,6 +8608,10 @@ phase_stats_path
 
 framebuffer_debug_path
 	dc.b	'fb.res',0
+	ifd	TREX_FB_SEQUENCE
+fb_sequence_name
+	dc.b	'fbseq.res',0
+	endc
 
 	even
 
