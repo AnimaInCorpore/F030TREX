@@ -24,15 +24,22 @@ pixel was written this frame and a zero pixel was not.
 Also reports how many horizontal runs the ideal set falls into, since every
 run costs a clear loop its setup.
 
-Usage: clear_overlap.py fbseq.res [--json out.json]
+With --geometry hires the dump is the 640x400 build's (6.6a): a 640x400
+buffer rendered in full, 512,000 bytes a frame.
+
+Usage: clear_overlap.py fbseq.res [--geometry default|hires] [--json out.json]
 """
 import argparse
 import json
 import struct
 import sys
 
-BUF_W, BUF_H = 256, 224
-WIN_W, WIN_H, WIN_X = 240, 224, 8
+GEOMETRIES = {
+    # buffer width/height, window width/height, window x offset
+    "default": (256, 224, 240, 224, 8),
+    "hires": (640, 400, 640, 400, 0),
+}
+BUF_W, BUF_H, WIN_W, WIN_H, WIN_X = GEOMETRIES["default"]
 BAND = 8
 FRAME_BYTES = BUF_W * BUF_H * 2
 
@@ -62,8 +69,12 @@ def band_area(rows):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("fbseq")
+    ap.add_argument("--geometry", choices=sorted(GEOMETRIES), default="default")
     ap.add_argument("--json")
     args = ap.parse_args()
+    global BUF_W, BUF_H, WIN_W, WIN_H, WIN_X, FRAME_BYTES
+    BUF_W, BUF_H, WIN_W, WIN_H, WIN_X = GEOMETRIES[args.geometry]
+    FRAME_BYTES = BUF_W * BUF_H * 2
     data = open(args.fbseq, "rb").read()
     if len(data) % FRAME_BYTES:
         sys.exit("fbseq.res is not a whole number of %d-byte frames" % FRAME_BYTES)

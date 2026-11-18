@@ -607,6 +607,17 @@ trex_m68030_hires: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires.tos tre
 ./TREX/m68030/trex_hires.tos: ./TREX/m68030/build/trex_hires.o ./TREX/m68030/build/ssi_dma4.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
+# The clear-overlap probe (OPTIMIZATION.md 2.5a) on the 640x400 build.
+# Diagnostic only, never timed; fbseq.res is 512,000 bytes a frame.
+.PHONY: trex_m68030_hires_fbseq
+trex_m68030_hires_fbseq: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires_fbseq.tos trex_dsp_hires
+
+./TREX/m68030/build/trex_hires_fbseq.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_FB_SEQUENCE -o $@ -L ./TREX/m68030/build/trex_hires_fbseq.lst
+
+./TREX/m68030/trex_hires_fbseq.tos: ./TREX/m68030/build/trex_hires_fbseq.o ./TREX/m68030/build/ssi_dma4.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
 ./TREX/m68030/build/trex_plain.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
 	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_PLAIN_ORDER -o $@ -L ./TREX/m68030/build/trex_plain.lst
 

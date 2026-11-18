@@ -3742,12 +3742,35 @@ dirty-minus-covered spans (it walks the qualified-opaque triangles' spans
 itself for 160 of every 256, 7.4g), and that adds work to the processor the
 frame currently waits on. Exact span lists are needed, not per-row hulls:
 the ideal set lies inside the silhouette's hull too (gaps between legs),
-and a hull-based skip would leave ghosts there. Not measured: the 640x400
-build (6.6a on its own branch), where the clear is 65 ms and the same
-fraction would be worth far more.
+and a hull-based skip would leave ghosts there.
+
+**The 640x400 build, same instrument.** `make trex_m68030_hires_fbseq`
+(`-DTREX_HIRES -DTREX_FB_SEQUENCE`) dumps 512,000 bytes a frame; it wrote all
+265 frames (135,680,000 bytes), 42,581,904 pixels and frame 100
+`d6d0c18b...52ca`, the 6.6a build's figures (MMU ledger, 14 MiB).
+`clear_overlap.py --geometry hires` compares the whole 640x400 screen:
+
+| Clear scheme | Pixels | Of the screen | Worst frame |
+|---|---:|---:|---:|
+| Full screen (what the build does) | 256,000 | 100% | 256,000 |
+| 8-row bands, pixel hull | 86,771 | 33.9% | 175,952 |
+| Exactly the pixels drawn two frames ago | 84,202 | 32.9% | 173,396 |
+| **Drawn two frames ago and not drawn now** | **2,756** | **1.1%** | **32,456** |
+
+The fraction is the same as at 240x224: 96.7% of the old picture is drawn
+again (median frame 97.7%; 90% of frames leave at most 6,765 pixels), in
+328 runs a frame on average (800 at most). Here the clear stage is 65.4 ms
+cycle-exact, 9.6% of the 681.7 ms frame, so **the ceiling is about 65 ms a
+frame** (estimate: the whole stage), four times the default build's. Even
+the plain band clear of 2.5 would shrink the stage to about a third here,
+and its bookkeeping is per packet, not per pixel, so it does not grow with
+the resolution; at this size its sign is unmeasured and may well differ
+from the default build's.
 
 Per-frame areas, run counts and input hashes are in
-[`docs/performance/clear-overlap-2026-11-18.json`](docs/performance/clear-overlap-2026-11-18.json).
+[`docs/performance/clear-overlap-2026-11-18.json`](docs/performance/clear-overlap-2026-11-18.json)
+and, for 640x400,
+[`docs/performance/clear-overlap-hires-2026-11-18.json`](docs/performance/clear-overlap-hires-2026-11-18.json).
 
 **Reproduction.**
 
@@ -3756,6 +3779,11 @@ make trex_m68030_fbseq
 python3 tools/measure_frames.py TREX/m68030/trex_fbseq.tos TREX/dsp/trex_dsp.lod \
   hatari_runs/fbseq --cpu-core mmu --frames 265 --timeout 3000
 python3 tools/clear_overlap.py hatari_runs/fbseq/fbseq.res
+make DOSBOX=/path/to/DOSBox trex_m68030_hires_fbseq
+python3 tools/measure_frames.py TREX/m68030/trex_hires_fbseq.tos \
+  TREX/m68030/TREXHIRS.LOD hatari_runs/hires-fbseq --dsp-name TREXHIRS.LOD \
+  --memsize 14 --cpu-core mmu --frames 265 --timeout 6000
+python3 tools/clear_overlap.py hatari_runs/hires-fbseq/fbseq.res --geometry hires
 ```
 
 ### 2.6 Frame-rate overlay — implemented, release only
@@ -7133,8 +7161,9 @@ from 62.3 KB to 263.9 KB a frame, survivors in the last frame from 500 to 522
 (triangles too thin to cover a pixel center at 240x224 now do). **The frame
 costs 1.87x for 4.71x the pixels**: the DSP's per-triangle term does not grow,
 and the 68030 draws most pixels in the four-instruction stream loop. The
-clear quadruples with the screen area; delta clearing still covers only
-the dirty bands.
+clear quadruples with the screen area: this build clears the whole screen
+(`delta_clear_enabled` = 0, as in the default). 2.5a measures that only 1.1%
+of it would need clearing if the new frame's coverage were known.
 
 Two share points, same executable, cycle-exact with contention:
 
