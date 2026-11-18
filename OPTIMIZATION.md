@@ -32,16 +32,21 @@ M68030 model/texture setup, choreography lookup, XYZ16 stream expansion,
         v
 DSP56001: build exact morph pose, transform, project, then cull and
           light every survivor ahead of the chunks (2.4k, inside the
-          host's rasterization window); build packed span-setup records
-          in chunks, reading the lighting table
+          host's rasterization window); send one depth key per survivor
         |
         v
-M68030: packet construction and Ordering Table setup
+M68030: sort the keys with the Ordering Table rule and list the
+        survivors far to near (4.1f)
         |
         v
-M68030: software span rasterizer, PS1-style painter's order
-        |   (far-to-near OT walk, DDA scanline spans -- no Z-buffer,
-        |    no per-pixel coverage test)
+DSP56001: build packed span-setup records for the listed triangles,
+          in chunks, in that order, reading the lighting table
+        |
+        v
+M68030: unpack each chunk and draw it as it arrives -- software span
+        |   rasterizer in PS1-style painter's order (DDA scanline
+        |   spans, no Z-buffer, no per-pixel coverage test), fetching
+        |   the next chunk whenever the DSP has it ready
         v
 16-bit Falcon framebuffer -> Videl display
 ```
@@ -74,15 +79,27 @@ projection. Section 2 has the measured proportions for each choice.
 
 The current implementation uses the Falcon DSP host port through XBIOS
 `Dsp_BlkUnpacked`, except for the animation transactions, which poll the port
-per word for the reason in section 2.1. An opt-in draw-order variant in which
-the host lists survivors far to near and draws records as they arrive is
-built and measured in section 4.1f; it is not the default. The DSP program is in
+per word for the reason in section 2.1. Since 2026-11-18 the default
+is the draw-order pipeline of sections 4.1f and 4.1g; the previous index-order
+pipeline, in which the host links every packet into the Ordering Table before
+it draws the first, is the `TREX_LEGACY_OT` build. The DSP program is in
 [`TREX/dsp/trex_dsp.asm`](TREX/dsp/trex_dsp.asm), and the M68030 front end is
 in [`TREX/m68030/trex_m68030.s`](TREX/m68030/trex_m68030.s).
 
 ## 2. Current measured baseline
 
-**Latest active full-mesh baseline (2026-09-06): section 2.4m.** The
+**Latest active baseline (2026-11-18): section 4.1g.** The draw-order
+pipeline is the default. On Hatari `c5d5bf34` the diagnostic build measures
+**540.9 ms / 1.85 FPS** on the cycle-exact profile with Videl contention and
+**363.1 ms / 2.75 FPS** on the MMU ledger, and the release **543.1 ms /
+1.84 FPS** and **365.1 ms / 2.74 FPS**, over the 265-frame prefix, with all
+512 frame hashes identical to the previous pipeline's. Everything below this
+paragraph in section 2, and every section outside 4.1e-4.1g, was measured on
+the previous index-order pipeline, which `TREX_LEGACY_OT` still builds and
+which measures 599.7 ms and 425.7 ms on the same two profiles. No physical
+Falcon has run the new default.
+
+**Previous baseline of the index-order pipeline (2026-09-06): section 2.4m.** The
 diagnostic measures **433.7 ms / 2.31 FPS**, and the release **431.1 ms /
 2.32 FPS**, on corrected-clock Hatari over the same 265-frame prefix. The
 prelight pass now retains the visibility verdict computed while the CPU
@@ -155,6 +172,8 @@ identical to the tick.
 
 The release now keeps the occlusion implementation compiled in but defaults it
 to disarmed, following 2.4h's measured +3.5 ms net loss at the current yield.
+(Since 4.1g that describes the legacy release only: the default DSP image no
+longer assembles the sweep.)
 With the light cache and that default, the layout-identical two-byte timing
 copy of `TREX.TOS` measures **525.5 ms / 1.90 FPS** over the same 265 frames
 (251.8 ms packet stage, 242.8 ms rasterizer).  The two changes together remove
@@ -5564,6 +5583,11 @@ python3 tools/patch_data_flag.py hatari_runs/stream_naive.tos \
 
 ### 4.1f Draw-order pipeline: built, byte-identical, -58 / -62 ms (2026-11-18)
 
+**Status: the default pipeline since section 4.1g.** The "opt-in" wording, the
+`make trex_m68030_ordered` target and the `TREXORD.LOD` name below describe
+the state in which it was first measured as a variant; 4.1g has the current
+build targets and file names. The mechanism, protocol and measurements stand.
+
 4.1e measured what drawing during the packet stage would be worth if records
 arrived in painter's order. This is that pipeline, built. It is **opt-in**
 (`make trex_m68030_ordered`: `trex_ordered.tos` with `TREXORD.LOD`); the
@@ -5662,9 +5686,7 @@ which is 3.9's rule once more.
 - No physical-Falcon timing. 2.7a predicts the packet stage is a larger share
   of the hardware frame, which would make this worth more there; that is a
   prediction.
-- Whether to make it the default. It replaces a prepass that is disarmed and
-  yields nothing, but the release, the packages and the fallback path would
-  have to follow.
+- Whether to make it the default: **done, section 4.1g.**
 - The key word could carry the record's average-Z key, which would let w1
   leave the record; `make_triangle_zkey` now runs twice per survivor.
 
@@ -5680,6 +5702,105 @@ python3 tools/measure_frames.py TREX/m68030/trex_ordered.tos \
 For the hash gate assemble the host with `-DTREX_ORDERED -DTREX_FRAME_HASH`,
 run it with `--frames 512` against the same image and compare `frmhash.res`
 with the default hash build's.
+
+### 4.1g The draw-order pipeline is the default (2026-11-18)
+
+4.1f's pipeline is now what `make trex_m68030`, `make trex_release` and the
+packages build. This section records what the switch changed and what the
+defaults measure.
+
+**What "default" means now.**
+
+- **Host.** `trex_m68030.s` selects the draw-order pipeline unless
+  `-DTREX_LEGACY_OT` is given or a variant that depends on the old protocol is
+  being built. Those variants select the legacy pipeline themselves:
+  `TREX_SSI_PIPELINE`, `TREX_PREPASS`, `TREX_PHASEPROBE`, `TREX_SSI_DMA`,
+  `TREX_SSI_LOOPBACK`, `TREX_SSI_HATARI`, `TREX_SSI_ROWS`, `TREX_SSI_SHADOW`,
+  `TREX_OCCL` and a command-line `TREX_STREAM_PROBE` (4.1e's wrong-order
+  probe, which is the legacy protocol drawn on arrival).
+- **DSP.** `ORDERED=1` is the default configuration, so the tracked
+  `TREX/dsp/trex_dsp.lod` is the draw-order image (P:`$07EF`) and
+  `trex_dsp_cam.lod` its `OBJLIGHTS=0` counterpart (P:`$07DC`). `ORDERED=0`
+  assembles the previous image, byte-identical to the one tracked until now
+  (SHA256 `14789e0a...5859`, P:`$099E`).
+- **Pairing by file name.** A legacy host loads `TREXLEGA.LOD`, never
+  `trex_dsp.lod` or `TREX.LOD`; neither side can drive the other's protocol,
+  and a wrong pair must fail to load instead of deadlocking on the port.
+  `make trex_dsp_legacy` deploys the `ORDERED=0` image under that name and
+  `make trex_m68030_legacy` builds the reference pair. The name is twelve
+  characters on purpose: the legacy diagnostic executable differs from the
+  previous default in exactly the eleven bytes of that string, so its code and
+  data layout, and therefore every earlier baseline in this file, still
+  describe it.
+- **Release.** `TREX.TOS` no longer assembles with `-DTREX_PREPASS`: the
+  default DSP image has no occlusion sweep to arm. The statement in section 2
+  that the release keeps the occlusion implementation compiled in but disarmed
+  describes the legacy release.
+- **Frames that are not streamed.** The streaming path covers frames whose
+  records unpack straight into the packets, which is every normal frame.
+  `gpu_rasterize_ot` keeps its whole body and selects the per-chunk range
+  resolve by a run-time flag; a frame the host fallback rebuilt
+  (`stream_fallback_frame`) takes the Ordering Table path in `gpu_submit_ot`
+  unchanged, and a validation frame is resolved as one range and drawn in
+  buffer order.
+
+**Measured**, identical 265-frame prefixes, Hatari `2.6.1-devel
+(Nov 18 2026)`, fork source `c5d5bf34`, TOS 4.02, 16 MHz 68030, corrected
+32 MHz DSP, 4 MiB ST RAM. Raw counters and input hashes are in
+[`docs/performance/default-2026-11-18.json`](docs/performance/default-2026-11-18.json).
+These are emulator measurements, not physical-Falcon timings, and the two
+profiles must not be mixed. The release rows are the layout-identical timing
+copy of 2.4e, `stats_flush_enabled` patched to 1.
+
+| Build | Cycle-exact, contention on | MMU ledger |
+|---|---:|---:|
+| Legacy diagnostic (`TREX_LEGACY_OT`) | 599.70 ms / 1.668 FPS | 425.68 ms / 2.349 FPS |
+| **Default diagnostic** | **540.89 ms / 1.849 FPS** | **363.06 ms / 2.754 FPS** |
+| Legacy release (prepass compiled in, disarmed) | 597.47 ms / 1.674 FPS | 423.11 ms / 2.363 FPS |
+| **Default release (`TREX.TOS`)** | **543.08 ms / 1.841 FPS** | **365.09 ms / 2.739 FPS** |
+
+The default diagnostic is **-58.8 ms, +10.9% FPS** cycle-exact and
+**-62.6 ms, +17.2% FPS** on the MMU ledger; the release is -54.4 ms (+10.0%)
+and -58.0 ms (+15.9%). The legacy diagnostic reproduces the previous default
+to the tick on both profiles, as an eleven-byte difference should. As in 4.1f
+the stage timers of the default are not comparable one for one with the
+legacy's: its packet stage contains the drawing done while chunks are fetched.
+
+**Gates.** All **512 frame hashes** match between the default and the legacy
+hash builds, and both match the reference taken before today's work. The
+frame-100 checkpoint is `d89958b3...3d16` for the default and the legacy
+diagnostic on both profiles; every 265-frame run writes 9,049,666 pixels and
+ends with 1,149 packets. Every host variant in the Makefile assembles and
+links, the SSI pipeline executable and image are byte-identical to before, the
+prepass diagnostic host renders the checkpoint with the legacy image, and the
+wrong-order probe still measures (370.8 ms on the MMU ledger).
+
+**Found while checking, not introduced here.** The non-direct record path is
+broken in the legacy build as well: with `direct_unpack_enabled` patched to 0,
+or with `span_validate_enabled` patched to 1, both the legacy and the default
+executable take a bus error before the first frame completes. 2.4m and 2.4n
+already recorded that the span validator produces no completed frame; this is
+the same defect seen from the copy path. It means the default's handling of a
+non-streamed frame could not be exercised, and that the protocol-failure
+fallback, which uses the same copying builder, should be treated as
+unverified in both builds until that is repaired.
+
+**Not measured.** No physical Falcon has run this pipeline. The hardware
+packages (`fps_package`, `prof_package`) now carry it, so the next hardware
+run measures it; `make trex_m68030_legacy` and the legacy release flags
+provide the A/B partner.
+
+**Reproduction.**
+
+```sh
+make DOSBOX=/path/to/DOSBox trex_m68030 trex_m68030_legacy trex_release
+python3 tools/measure_frames.py TREX/m68030/trex_m68030.tos \
+  TREX/dsp/trex_dsp.lod hatari_runs/default-ce \
+  --cpu-core cycle-exact --videl-contention on --frames 265 --timeout 1500
+python3 tools/measure_frames.py TREX/m68030/trex_legacy.tos \
+  TREX/m68030/TREXLEGA.LOD hatari_runs/legacy-ce --dsp-name TREXLEGA.LOD \
+  --cpu-core cycle-exact --videl-contention on --frames 265 --timeout 1500
+```
 
 ### 4.2 DSP memory layout and the Falcon P/X/Y overlay
 
@@ -8912,8 +9033,10 @@ The open roadmap, in recommended order (expected effects from the section
     lists the survivors in every BUILD chunk, and the rasterizer draws
     records as they arrive.  All 512 frame hashes match.  **599.7 -> 541.5 ms
     cycle-exact (+10.8% FPS) and 425.7 -> 364.2 ms on the MMU ledger
-    (+16.9% FPS).**  Opt-in (`make trex_m68030_ordered`); promotion to the
-    default and a physical-Falcon timing are open.
+    (+16.9% FPS).**  **The default since section 4.1g**: 540.9 ms / 1.85 FPS
+    cycle-exact and 363.1 ms / 2.75 FPS on the MMU ledger for the diagnostic
+    build, with the previous pipeline kept as `TREX_LEGACY_OT`.  A
+    physical-Falcon timing is open.
 
 ## 11. References
 

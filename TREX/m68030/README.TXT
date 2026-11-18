@@ -117,11 +117,13 @@ DSP56001
   culling, per corner Gouraud light,
   span setup, plus a frame local cache
   for repeated corner normal lighting.
-  A screen space occlusion prepass is
-  retained but off in this release.
+  It sends one depth key per visible
+  triangle, then builds the triangles
+  in the order the 68030 names them.
 
 68030
-  Packet build, ordering table and a
+  Sorts the depth keys, then draws
+  each batch as it arrives with a
   textured Gouraud span rasterizer in
   painter's order, no Z buffer.
 
@@ -178,11 +180,11 @@ Two phases are worth reporting:
   The continuing walk after it, the
   heavier, steadier load.
 
-The optional occlusion prepass is left
-off: corrected-clock Hatari measured its
-current conservative yield as a net
-loss.  It remains in the source for
-future yield work.
+The occlusion prepass is not in this
+release: corrected-clock Hatari measured
+its conservative yield as a net loss.
+It remains in the source as a legacy
+build option for future yield work.
 
 A stock machine needs nothing special:
 that is what this was written and

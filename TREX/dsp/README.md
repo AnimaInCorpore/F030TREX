@@ -89,6 +89,7 @@ the program.
 | `X:$3C71-$3CF0` | 128 | frame-local normal-light cache tags |
 | `X:$3CF1-$3D70` | 128 | cached red direct-light sums |
 | `X:$3D71-$3DF0` | 128 | cached green direct-light sums |
+| `X:$3DF1-$3E10` | 32 | `ORDERED=1`: global triangle numbers of the chunk being built (`chunk_ids`) |
 | `Y:$0096-$00D5` | 64 | on-chip 64-class prepass counters |
 | `Y:$09C0-$29AB` | 8,172 | packed resident triangle indices |
 | `Y:$29AC-$3FFD` | 5,714 | Y half of the packed corner-normal table (`corner_normals_y`) |
@@ -151,12 +152,15 @@ disarmed captures are byte-identical at frame 100 and at hold frame 291,
 with zero prepass protocol failures or capacity overruns across the hold.
 
 The frontend reserves `X:$0000-$3DFF` and `Y:$0000-$3EF7`. The full-mesh
-program occupies P from `$0040` and ends at `$09A6` in the default build,
-leaving 25 words before the Y indices at `$09C0`. Section 2.4m's cached cull
+program occupies P from `$0040`. The default draw-order image (`ORDERED=1`,
+`OPTIMIZATION.md` 4.1f/4.1g) omits the occlusion prepass and ends at `$07EF`,
+464 words before the Y indices at `$09C0`; the legacy index-order image
+(`ORDERED=0`) ends at `$099E`. The prepass descriptions and the extents in the
+rest of this section are the legacy image's. Section 2.4m's cached cull
 preserves that extent: its marker/test and index skip replace the repeated
 area branches and box call. The optional variant extents below are unchanged.
 
-Seven switches in the generated `dspconf.inc` select what is assembled,
+Besides `ORDERED`, seven switches in the generated `dspconf.inc` select what is assembled,
 because it no longer all fits — `SSIPROBE` (the `CMD_SSI_STREAM` transport
 probe, 103 words), `PRELIGHT` (the FINISH-window lighting pass and BUILD's
 table read, 66), `WINPROBE` (the window burn loop, 44), `PREPASSDIAG` (2.3j's
@@ -254,7 +258,14 @@ LOAD_TRIANGLES:
     cmd, count, count * (i0 | i1<<12, i2 | n0<<12, n1 | n2<<12)
     -> ACK_LOAD_TRIANGLES, count
 
-BUILD_TRIANGLES:
+BUILD_TRIANGLES (ORDERED=1, the default):
+    cmd, count, ignored, count * (global triangle number,
+                                  u0 | v0<<8 | u1<<16,
+                                  v1 | u2<<8 | v2<<16)
+    -> ACK_TRIANGLES, survivor_count
+    builds exactly the listed triangles, in the listed order
+
+BUILD_TRIANGLES (ORDERED=0, legacy):
     cmd, count, first_triangle, count * (u0 | v0<<8 | u1<<16,
                                           v1 | u2<<8 | v2<<16)
     -> ACK_TRIANGLES, survivor_count
@@ -263,7 +274,13 @@ GET_TRIANGLES:
     cmd -> ACK_GET_TRIANGLES, survivor_count,
            survivor_count * 18-word packed span record
 
-PREPASS:
+ORDER KEYS (command 10, ORDERED=1, the default):
+    cmd -> one word per surviving triangle in ascending global order,
+           bucket<<12 | global triangle number, then a word with bit 23 set
+    bucket = min((24-bit average-Z key) >> 8, 2047), the host's
+    Ordering-Table rule; send only after the FINISH acknowledgement
+
+PREPASS (command 10, ORDERED=0, legacy):
     cmd, mode -> ACK_PREPASS, survivor_count       (modes 0-3)
     cmd, 4    -> ACK_PREPASS, stamp_calls, stamped_cells, query_kills,
                  dirty_merges, query_cells_visited, stamp_cells_visited

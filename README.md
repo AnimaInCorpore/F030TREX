@@ -139,9 +139,9 @@ commands you can run here.
 
 Atari Falcon030, 16 MHz, DSP56001. Render target 240x224 inside a 256x224
 Videl mode. The supported release is a single full-mesh package: `TREX.TOS`
-uses the 2,724-triangle model and textured Gouraud shading; the optional DSP
-occlusion implementation is retained but default-disarmed;
-`TREX.LOD` is the matching DSP program. The deprecated reduced-mesh variant
+uses the 2,724-triangle model and textured Gouraud shading; the DSP occlusion
+prepass is no longer part of the release and survives only in the legacy
+build; `TREX.LOD` is the matching DSP program. The deprecated reduced-mesh variant
 and its build assets have been removed. Performance figures in
 OPTIMIZATION.md are identified as Hatari/emulator results.  **The first
 physical Falcon030 measurement (2026-09-02) reads 1.05 FPS on the close-up
@@ -155,8 +155,18 @@ separates them.  Emulator A/B results are unaffected, since they compare two
 builds under the same emulator; the absolute frame times are not Falcon
 figures. Figures predating OPTIMIZATION.md 2.4g were taken
 with the DSP at twice its real clock and are superseded by the re-measurement
-there. Over the 265-frame prefix the current full-mesh **diagnostic** build
-measures **433.7 ms / 2.31 FPS**, and `TREX.TOS` measures **431.1 ms /
+there. **Since 2026-11-18 the default is the draw-order pipeline** (OPTIMIZATION.md
+4.1f and 4.1g): the DSP sends one depth key per surviving triangle, the 68030
+sorts them and names the triangles for the DSP in draw order, and it draws
+each batch as it arrives instead of waiting for all of them. At a
+byte-identical picture over 512 frames the diagnostic build measures
+**540.9 ms / 1.85 FPS** cycle-exact and **363.1 ms / 2.75 FPS** on the MMU
+ledger, and `TREX.TOS` **543.1 ms / 1.84 FPS** and **365.1 ms / 2.74 FPS**,
+against 599.7 and 425.7 ms for the previous pipeline on the same emulator.
+`make trex_m68030_legacy` builds that previous pipeline (`-DTREX_LEGACY_OT`,
+`TREXLEGA.LOD`). The figures in the rest of this paragraph are the previous
+pipeline's. Over the 265-frame prefix its full-mesh **diagnostic** build
+measured **433.7 ms / 2.31 FPS**, and `TREX.TOS` measures **431.1 ms /
 2.32 FPS** with its release-only overlay and default-disarmed prepass
 (2026-09-06, OPTIMIZATION.md 2.4m). The prelight pass now retains its exact
 visibility verdict while the CPU rasterizes the previous frame. BUILD skips
@@ -200,10 +210,14 @@ lighting word per triangle, and the FINISH window -- otherwise idle DSP time
 while the 68030 rasterizes -- lights every survivor of the frame ahead of
 BUILD, which reads the table instead of computing.
 
-The default build ends at `P:$09A6`, 25 words below the resident-index
-ceiling; the camera-lights A/B reference (`make trex_dsp_camlights`) ends at
-`P:$0993`. Seven switches in the generated `dspconf.inc` select what is
-assembled, because it does not all fit: the `CMD_SSI_STREAM` transport probe
+The default draw-order image (`ORDERED=1`) omits the occlusion sweep and ends
+at `P:$07EF`, 464 words below the resident-index ceiling; its camera-lights
+A/B reference (`make trex_dsp_camlights`) ends at `P:$07DC`. The legacy
+index-order image (`ORDERED=0`, `make trex_dsp_legacy`) ends at `P:$099E`, and
+the extents quoted for the probe variants below are those of that image, on
+which they are built. Besides `ORDERED`, seven switches in the generated
+`dspconf.inc` select what is assembled, because in the legacy image it does
+not all fit: the `CMD_SSI_STREAM` transport probe
 of section 7.4b (`SSIPROBE`, 103 words), the prelight pass (`PRELIGHT`, 66),
 the cross-frame window burn loop (`WINPROBE`, 44), section 2.3j's prepass
 diagnostic counters (`PREPASSDIAG`, 30), the host-port calibration burst
@@ -230,10 +244,10 @@ release rather than claiming pixel-for-pixel equivalence with the PS1 demo.
 | Mesh | Original TMD model | Same full mesh: 1,376 vertices and 2,724 triangles |
 | Animation | Authored morph-target choreography | Extracted PS1 morph data rebuilt on the DSP: 46 full gait poses plus sparse targets 5–8; the port adds a post-source hold after frame 273 |
 | Transform and culling | Original console geometry pipeline | DSP56001 handles transform, perspective projection, near-plane, degenerate-area, back-face and screen culling |
-| Occlusion | Reference-scene behavior | Falcon addition: an optional DSP screen-space prepass builds a conservative triangle kill bitmap; retained for yield work, default-disarmed in the release after corrected-clock measurement |
+| Occlusion | Reference-scene behavior | None in the release. A DSP screen-space prepass that builds a conservative triangle kill bitmap survives in the legacy build for yield work; it measured as a net loss |
 | Lighting | Original PS1 lighting | Textured Gouraud shading with three coloured lights and reddish ambient light; documented as not yet an exact PS1 lighting reproduction |
 | Textures | PS1 TIM pages and CLUT metadata | Extracted PS1 texture pages and CLUTs, sampled by the M68030 software rasterizer |
-| Rasterization | PS1 hardware GPU path | M68030 software rasterizer; the DSP supplies projected vertices and span setup, and the host links the Ordering Table |
+| Rasterization | PS1 hardware GPU path | M68030 software rasterizer; the DSP supplies depth keys and span setup; the host sorts the keys with its Ordering Table rule, names the triangles for the DSP in draw order and draws each batch as it arrives |
 | Display | Original PS1 display mode | 240×224 render surface inside a 256×224 Falcon Videl mode |
 
 The release therefore matches the PS1 source data most closely in geometry,

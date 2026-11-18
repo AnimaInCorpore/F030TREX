@@ -41,11 +41,13 @@ PRELIGHT=1
 # packet stage of the image that carries them, so no timing figure of THAT
 # stage may be quoted from a PHASEPROBE build, only the ladder's own bracket.
 PHASEPROBE=0
-# Assemble the draw-order image (OPTIMIZATION.md 4.1f): command 10 returns one
-# depth-bucket key per survivor and BUILD builds the triangles the host lists,
-# in that order.  The occlusion sweep is not assembled.  Pairs only with a
-# -DTREX_ORDERED host; the default host cannot drive it and vice versa.
-ORDERED=0
+# The draw-order image (OPTIMIZATION.md 4.1f), the default since 2026-11-18:
+# command 10 returns one depth-bucket key per survivor and BUILD builds the
+# triangles the host lists, in that order.  The occlusion sweep is not
+# assembled.  ORDERED=0 is the legacy index-order image, which pairs only with
+# a -DTREX_LEGACY_OT host (or one of the variants that select it) and is
+# deployed as TREXLEGA.LOD so the two can never be confused.
+ORDERED=1
 
 # One generator for the assembler-visible build switches, used by every DSP
 # rule so a variant can never assemble against a stale or missing config.
@@ -74,7 +76,7 @@ PHASE_LOD=./TREX/dsp/build/trex_dsp-00001110-$(DSPSRC_ID).lod
 # The identity of the default: only this configuration may write the tracked
 # ./TREX/dsp/trex_dsp.lod, so a variant build can never leave the wrong image
 # in the tree for `make measure` or a release to pick up.
-DSPCONF_DEFAULT_ID=00001100
+DSPCONF_DEFAULT_ID=00001101
 DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\nPRELIGHT\tequ\t%s\nPHASEPROBE\tequ\t%s\nORDERED\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' '$(PRELIGHT)' '$(PHASEPROBE)' '$(ORDERED)' > ./TREX/dsp/build/dspconf.inc
 # Extra flags for the DSP assembly run.  Plain DOSBox needs none.  DOSBox-X
 # opens a working-folder prompt and a menu on macOS and then never reaches
@@ -118,11 +120,11 @@ trex_m68030: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_m68030.tos ./TREX/m
 trex_m68030_run: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_run.tos ./TREX/m68030/trex_dsp.lod
 
 # DSP occlusion-culling campaign binary for the one supported full mesh.
-trex_m68030_prepass: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_prepass.tos ./TREX/m68030/trex_dsp.lod
+trex_m68030_prepass: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_prepass.tos trex_dsp_legacy
 
 # DSP occlusion-culling viewing binary.  TREX_RUN suppresses diagnostic GEMDOS
 # writes so the Hatari disk indicator is not hit once per frame.
-trex_m68030_prepass_run: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_prepass_run.tos ./TREX/m68030/trex_dsp.lod
+trex_m68030_prepass_run: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_prepass_run.tos trex_dsp_legacy
 
 # Per-phase BUILD timing ladder (OPTIMIZATION.md 2.4l).  The host binary is
 # arm-patchable and the same for both arms; the DSP image is NOT -- arm 1
@@ -139,16 +141,16 @@ trex_m68030_phase: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_phase.tos
 
 # Optional host-shadow diagnostic: links the compact frame builder and the
 # stopped ownership/read-back probe into a separate binary.
-trex_m68030_ssi_shadow: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_shadow.tos
+trex_m68030_ssi_shadow: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_shadow.tos trex_dsp_legacy
 
 # Optional full-row shadow diagnostic.  It serializes the exact host packet
 # setup into ROW_ABS/SET_SHADE records, but still does not start DMA.
-trex_m68030_ssi_rows: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_rows.tos
+trex_m68030_ssi_rows: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_rows.tos trex_dsp_legacy
 
 # Hatari-only SSI loopback.  It consumes the completed full-row stream in
 # memory and validates the same envelope/CRC/row accounting a DMA completion
 # gate would publish; it does not touch Falcon SSI or Crossbar registers.
-trex_m68030_ssi_hatari: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_hatari.tos
+trex_m68030_ssi_hatari: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_hatari.tos trex_dsp_legacy
 
 # Falcon-runnable SSI loopback package.  It exercises the complete-row
 # consumer and rasterizer feed on the 68030, but deliberately does not touch
@@ -239,7 +241,7 @@ SSI_DMA_PKG=./TREX/m68030/ssi_dma_package
 
 ssi_dma_package: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_dma.tos
 	@$(MAKE) --no-print-directory SSIPROBE=1 WINPROBE=0 PIOBURST=0 \
-	  PREPASSDIAG=0 OBJLIGHTS=0 PRELIGHT=0 trex_dsp
+	  PREPASSDIAG=0 OBJLIGHTS=0 PRELIGHT=0 ORDERED=0 trex_dsp
 	@test -f $(SSI_DMA_LOD) || { echo "no SSI bring-up image at $(SSI_DMA_LOD) -- it needs DOSBOX=/path/to/DOSBox"; exit 1; }
 	@rm -rf $(SSI_DMA_PKG) && mkdir -p $(SSI_DMA_PKG)
 	@cp ./TREX/m68030/trex_ssi_dma.tos $(SSI_DMA_PKG)/TREXDMA.TOS
@@ -360,8 +362,8 @@ MEASURE_PHASE_CONTROL_VBLS=8672
 measure_phase: trex_m68030_phase
 	@test -x "$(HATARI)" || { echo "no Hatari at $(HATARI) -- build it in F030Arcade (see its hatari.md) or pass HATARI=..."; exit 1; }
 	@test -f "$(TOS402)" || { echo "no TOS 4.02 image at $(TOS402) -- pass TOS402=..."; exit 1; }
-	@$(MAKE) --no-print-directory PHASEPROBE=1 trex_dsp
-	@test -f $(PHASE_LOD) || { echo "no ladder image at $(PHASE_LOD) -- build it with: make DOSBOX=... PHASEPROBE=1 trex_dsp"; exit 1; }
+	@$(MAKE) --no-print-directory PHASEPROBE=1 ORDERED=0 trex_dsp
+	@test -f $(PHASE_LOD) || { echo "no ladder image at $(PHASE_LOD) -- build it with: make DOSBOX=... PHASEPROBE=1 ORDERED=0 trex_dsp"; exit 1; }
 	@mkdir -p $(MEASURE_DIR)
 	@python3 ./tools/patch_phase_arm.py ./TREX/m68030/trex_phase.tos $(MEASURE_DIR)/TREX_PHA.TOS 1
 	@rm -f $(MEASURE_DIR)/TREXPHAS.LOD
@@ -389,7 +391,8 @@ measure_phase_control: trex_m68030_phase
 	@mkdir -p $(MEASURE_DIR)
 	@python3 ./tools/patch_phase_arm.py ./TREX/m68030/trex_phase.tos $(MEASURE_DIR)/TREX_PHA.TOS 2
 	@rm -f $(MEASURE_DIR)/TREXPHAS.LOD
-	@cp ./TREX/dsp/trex_dsp.lod $(MEASURE_DIR)/TREXPHAS.LOD
+	@$(MAKE) --no-print-directory trex_dsp_legacy
+	@cp $(LEGACY_LOD) $(MEASURE_DIR)/TREXPHAS.LOD
 	@rm -f $(MEASURE_DIR)/phas_sta.res $(MEASURE_DIR)/render_stats.res $(MEASURE_DIR)/fb.res
 	cd $(MEASURE_DIR) && "$(abspath $(HATARI))" \
 	  --machine falcon --cpulevel 3 --cpuclock 16 --mmu true \
@@ -531,7 +534,7 @@ trex_m68030_prestep: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_prestep.tos
 # Draw-on-arrival TIMING PROBE (OPTIMIZATION.md 4.1e): packets are drawn in
 # arrival order, so the picture is wrong on purpose.  Never ships.
 .PHONY: trex_m68030_stream_probe
-trex_m68030_stream_probe: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_stream.tos ./TREX/m68030/trex_dsp.lod
+trex_m68030_stream_probe: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_stream.tos trex_dsp_legacy
 
 ./TREX/m68030/build/trex_stream.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
 	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_STREAM_PROBE -o $@ -L ./TREX/m68030/build/trex_stream.lst
@@ -539,20 +542,22 @@ trex_m68030_stream_probe: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_stream
 ./TREX/m68030/trex_stream.tos: ./TREX/m68030/build/trex_stream.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
-# Draw-order pipeline (OPTIMIZATION.md 4.1f): the DSP returns depth keys, the
-# host sorts and lists survivors far to near, and the rasterizer draws records
-# as they arrive.  Opt-in; trex_ordered.tos loads TREXORD.LOD and no other
-# image, and the default pair is untouched.
-ORDERED_LOD=./TREX/dsp/build/trex_dsp-00001101-$(DSPSRC_ID).lod
-.PHONY: trex_m68030_ordered
-trex_m68030_ordered: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ordered.tos
-	@$(MAKE) --no-print-directory SSIPROBE=0 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=1 PRELIGHT=1 PHASEPROBE=0 ORDERED=1 trex_dsp
-	cp $(ORDERED_LOD) ./TREX/m68030/TREXORD.LOD
+# Legacy index-order pipeline (OPTIMIZATION.md 4.1f): the pre-draw-order host
+# and DSP image, kept as the A/B reference and for the variants that need the
+# Ordering Table walk or the occlusion prepass.  trex_legacy.tos loads
+# TREXLEGA.LOD and no other image.
+LEGACY_LOD=./TREX/dsp/build/trex_dsp-00001100-$(DSPSRC_ID).lod
+.PHONY: trex_dsp_legacy trex_m68030_legacy
+trex_dsp_legacy: create_dirs
+	@$(MAKE) --no-print-directory SSIPROBE=0 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=1 PRELIGHT=1 PHASEPROBE=0 ORDERED=0 trex_dsp
+	cp $(LEGACY_LOD) ./TREX/m68030/TREXLEGA.LOD
 
-./TREX/m68030/build/trex_ordered.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_ORDERED -o $@ -L ./TREX/m68030/build/trex_ordered.lst
+trex_m68030_legacy: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_legacy.tos trex_dsp_legacy
 
-./TREX/m68030/trex_ordered.tos: ./TREX/m68030/build/trex_ordered.o
+./TREX/m68030/build/trex_legacy.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_LEGACY_OT -o $@ -L ./TREX/m68030/build/trex_legacy.lst
+
+./TREX/m68030/trex_legacy.tos: ./TREX/m68030/build/trex_legacy.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 ./TREX/m68030/build/trex_framehash.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
@@ -641,7 +646,7 @@ trex_m68030_ordered: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ordered.tos
 # binary whose output is compared or dumped (trex_prepass*, the fb.res capture
 # path, the span validator) must stay without it.
 ./TREX/m68030/build/TREX.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) $< -quiet -Felf -m68030 -DTREX_RUN -DTREX_PREPASS -DTREX_RELEASE -DTREX_FPS -o $@ -L ./TREX/m68030/build/TREX.lst
+	$(VASM) $< -quiet -Felf -m68030 -DTREX_RUN -DTREX_RELEASE -DTREX_FPS -o $@ -L ./TREX/m68030/build/TREX.lst
 
 ./TREX/m68030/TREX.TOS: ./TREX/m68030/build/TREX.o ./TREX/m68030/TREX.LOD
 	$(VLINK) ./TREX/m68030/build/TREX.o -tos-fastload -b ataritos -s -e start -o $@
@@ -708,7 +713,7 @@ $(DSPVARIANT): ./TREX/dsp/trex_dsp.asm ./TREX/dsp/ssi_pkt.asm ./TREX/dsp/ssi_crc
 # from that file by the build.
 clean:
 	rm -f ./TREX/m68030/trex_pipe.tos ./TREX/m68030/trex_pipe_hash.tos
-	rm -f ./TREX/m68030/trex_ordered.tos ./TREX/m68030/TREXORD.LOD ./TREX/m68030/build/trex_ordered.o ./TREX/m68030/build/trex_ordered.lst
+	rm -f ./TREX/m68030/trex_legacy.tos ./TREX/m68030/TREXLEGA.LOD ./TREX/m68030/build/trex_legacy.o ./TREX/m68030/build/trex_legacy.lst
 	rm -f ./TREX/m68030/trex_stream.tos ./TREX/m68030/build/trex_stream.o ./TREX/m68030/build/trex_stream.lst
 	rm -f ./TREX/m68030/trex_prestep.tos ./TREX/m68030/build/trex_prestep.o ./TREX/m68030/build/trex_prestep.lst
 	rm -f ./TREX/m68030/trex_pipe_nocrc.tos ./TREX/m68030/build/trex_pipe_nocrc.o ./TREX/m68030/build/trex_pipe_nocrc.lst
@@ -778,7 +783,7 @@ clean:
 SSI_PIPE_LOD=./TREX/dsp/build/trex_dsp-20001100-$(DSPSRC_ID).lod
 .PHONY: trex_ssi_pipeline
 trex_ssi_pipeline: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_pipe.tos
-	@$(MAKE) --no-print-directory SSIPROBE=2 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=1 PRELIGHT=1 PHASEPROBE=0 trex_dsp
+	@$(MAKE) --no-print-directory SSIPROBE=2 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=1 PRELIGHT=1 PHASEPROBE=0 ORDERED=0 trex_dsp
 	cp $(SSI_PIPE_LOD) ./TREX/m68030/TREXPIPE.LOD
 
 ./TREX/m68030/build/trex_pipe.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_packets.s ./TREX/m68030/ssi_crc_table.i ./TREX/m68030/ssi_crc_table.bin ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin

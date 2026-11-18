@@ -120,20 +120,73 @@ TREX_PRIMITIVES		= 2724
 ; Saturation degrades silently -- it just stops sorting -- so the table is
 ; sized for a camera that can move well past the opening shot.
 OT_LENGTH		= 2048
-	ifd	TREX_ORDERED
-; Draw-order pipeline (OPTIMIZATION.md 4.1f).  The ORDERED DSP image returns
-; one depth-bucket key per survivor; order_fetch_and_sort applies this file's
-; own Ordering-Table rule to them and lists the survivors far to near; BUILD
-; chunks then name their triangles from that list, so records arrive in
-; painter's order.  Everything downstream is the 4.1e stream machinery, which
-; draws packets in arrival order -- here the correct one.
-TREX_STREAM_PROBE = 1
+; Draw-order pipeline (OPTIMIZATION.md 4.1f), the default since 2026-11-18.
+; The DSP image returns one depth-bucket key per survivor; order_fetch_and_sort
+; applies this file's own Ordering-Table rule to them and lists the survivors
+; far to near; BUILD chunks then name their triangles from that list, so
+; records arrive in painter's order and are drawn as they arrive.
+;
+; TREX_LEGACY_OT restores the index-order protocol and the Ordering Table
+; walk, and pairs with the ORDERED=0 DSP image under its own file name.  The
+; variants below depend on that protocol, on the Ordering Table walk or on the
+; occlusion prepass the default DSP image no longer carries, so they select it
+; themselves.  TREX_STREAM_PROBE given on the command line is 4.1e's
+; wrong-order timing probe, which is the legacy protocol drawn on arrival.
+	ifnd	TREX_LEGACY_OT
 	ifd	TREX_SSI_PIPELINE
-	fail	"TREX_ORDERED is a host-port pipeline; do not combine it with the SSI pipeline"
+TREX_LEGACY_OT set 1
 	endc
+	endc
+	ifnd	TREX_LEGACY_OT
 	ifd	TREX_PREPASS
-	fail	"The ORDERED DSP image has no occlusion prepass"
+TREX_LEGACY_OT set 1
 	endc
+	endc
+	ifnd	TREX_LEGACY_OT
+	ifd	TREX_PHASEPROBE
+TREX_LEGACY_OT set 1
+	endc
+	endc
+	ifnd	TREX_LEGACY_OT
+	ifd	TREX_SSI_DMA
+TREX_LEGACY_OT set 1
+	endc
+	endc
+	ifnd	TREX_LEGACY_OT
+	ifd	TREX_SSI_LOOPBACK
+TREX_LEGACY_OT set 1
+	endc
+	endc
+	ifnd	TREX_LEGACY_OT
+	ifd	TREX_SSI_HATARI
+TREX_LEGACY_OT set 1
+	endc
+	endc
+	ifnd	TREX_LEGACY_OT
+	ifd	TREX_SSI_ROWS
+TREX_LEGACY_OT set 1
+	endc
+	endc
+	ifnd	TREX_LEGACY_OT
+	ifd	TREX_SSI_SHADOW
+TREX_LEGACY_OT set 1
+	endc
+	endc
+	ifnd	TREX_LEGACY_OT
+	ifd	TREX_OCCL
+TREX_LEGACY_OT set 1
+	endc
+	endc
+	ifnd	TREX_LEGACY_OT
+	ifd	TREX_STREAM_PROBE
+TREX_LEGACY_OT set 1
+	endc
+	endc
+	ifnd	TREX_LEGACY_OT
+	ifnd	TREX_ORDERED
+TREX_ORDERED set 1
+	endc
+TREX_STREAM_PROBE set 1
 	endc
 ; Bucket = average-Z key >> OT_KEY_SHIFT.  The key is the sum of three
 ; camera-space z values, so it scales with the object distance.  The shift has
@@ -3549,6 +3602,9 @@ dsp_packets_finish
 .finish_pio
 	endc
 	addq.l	#1,dsp_call_count
+	ifd	TREX_STREAM_PROBE
+	clr.l	stream_fallback_frame
+	endc
 	tst.l	dsp_triangle_stream_ready
 	beq	.finish_shadow
 	tst.l	dsp_pipeline_active
@@ -3574,6 +3630,11 @@ dsp_packets_finish
 	; contiguous 25-longword records in dsp_triangle_rx_buffer, so this arm
 	; keeps the copying builder.  Only the DSP path unpacks in place.
 	bsr	build_host_triangle_stream
+	ifd	TREX_STREAM_PROBE
+	; Host-built records come in index order with nothing culled, so this
+	; frame takes the Ordering Table path in gpu_submit_ot.
+	move.l	#1,stream_fallback_frame
+	endc
 	; The fallback just rebuilt the frame as rx_buffer records, so the
 	; copying builder must consume it whatever the frame flag said.
 	clr.l	dsp_direct_frame
@@ -3599,6 +3660,22 @@ dsp_packets_finish
 	bra	.finish_built
 .finish_copy_builder
 	bsr	build_gpu_shadow_packets
+	ifd	TREX_STREAM_PROBE
+	; This frame was not streamed.  A validation frame still arrived in
+	; draw order: resolve it as one range and let gpu_submit_ot draw it
+	; front to back of the buffer.  The host fallback is sorted there.
+	clr.l	stream_drawn
+	tst.l	stream_fallback_frame
+	bne	.finish_built
+	move.l	dsp_packet_count_shadow,d0
+	beq	.finish_built
+	move.l	d0,stream_probe_count
+	lea	gpu_packet_buffer,a1
+	move.l	a1,stream_probe_base
+	move.l	#1,stream_resolve_range
+	bsr	gpu_rasterize_ot
+	clr.l	stream_resolve_range
+	endc
 .finish_built
 	ifd	TREX_SSI_ROWS
 	bsr	ssi_row_shadow_write_frame
@@ -3751,7 +3828,11 @@ build_host_triangle_stream
 	move.l	(a2)+,d1			; w0: slots | mid | shade | local
 	move.l	d1,d2
 	andi.l	#$1f,d2
+	ifd	TREX_ORDERED
+	move.w	(0,a4,d2.l*2),d2		; chunk-local index -> global triangle number
+	else
 	add.l	d6,d2
+	endc
 	move.l	d2,GPU_PACKET_RESOLVE(a1)	; global source index -> slot 0
 	move.l	(a2)+,8(a1)			; w1: average-z key -> packet word 2
 	move.l	d1,d2
@@ -3886,6 +3967,11 @@ build_host_triangle_stream
 	move.l	#$800,d7
 	move.l	#$800000,d5
 	lea	gpu_texture_meta_buffer,a0
+	ifd	TREX_ORDERED
+	lea	order_list,a4
+	adda.l	dsp_triangle_unpack_base,a4
+	adda.l	dsp_triangle_unpack_base,a4
+	endc
 	bra	.dsp_cull_no_validate
 
 	; The direct body (8.2b): identical unpack arithmetic, but the 22
@@ -4072,6 +4158,11 @@ dsp_drain_chunk_pipeline
 .dsp_cull_unpack
 	DspUnpackChunk .dsp_cull_chunk_next
 	ifd	TREX_STREAM_PROBE
+	; Only a frame that unpacks straight into the packets is streamed.  A
+	; validation frame fills rx_buffer instead and is finished as a whole
+	; in dsp_packets_finish.
+	tst.l	dsp_direct_frame
+	beq	.dsp_cull_chunk_next
 	; This chunk's packets are final: build their heads and resolve them
 	; now, so stream_probe_draw_one can draw them in arrival order.
 	move.l	dsp_triangle_chunk_survivors,d0
@@ -4082,7 +4173,9 @@ dsp_drain_chunk_pipeline
 	suba.l	d0,a1
 	move.l	a1,stream_probe_base
 	bsr	build_gpu_packet_heads
-	bsr	gpu_rasterize_ot		; resolve sweep only in this build
+	move.l	#1,stream_resolve_range
+	bsr	gpu_rasterize_ot
+	clr.l	stream_resolve_range
 	endc
 
 .dsp_cull_chunk_next
@@ -4106,8 +4199,10 @@ dsp_drain_chunk_pipeline
 	ifd	TREX_SSI_PIPELINE
 	fail	"TREX_STREAM_PROBE is a host-port probe; do not combine it with the SSI pipeline"
 	endc
-; Draw-on-arrival TIMING PROBE (OPTIMIZATION.md 4.1e).  It draws packets in
-; ARRIVAL order, which is not painter's order: the picture is wrong on
+; Draw on arrival (OPTIMIZATION.md 4.1e/4.1f).  Packets are drawn in ARRIVAL
+; order.  In the default build the DSP builds the triangles the host lists,
+; so that is painter's order.  With TREX_STREAM_PROBE given on the command
+; line it is the legacy index order: a TIMING PROBE whose picture is wrong on
 ; purpose.  Every triangle is still drawn in full, so the pixel and packet
 ; counts -- the workload -- equal the default build's.  It answers what the
 ; frame would cost if the DSP emitted survivors in draw order.
@@ -4123,6 +4218,17 @@ dsp_drain_chunk_pipeline
 stream_probe_drain
 	clr.l	stream_drawn
 	move.l	#1,dsp_chunk_inflight		; dsp_packets_begin launched chunk 0
+	tst.l	dsp_direct_frame
+	bne	.stream_loop
+.stream_plain
+	bsr	dsp_drain_chunk_pipeline
+	tst.l	d0
+	beq	.stream_plain_done
+	tst.l	dsp_chunk_inflight
+	bne	.stream_plain
+	moveq	#1,d0
+.stream_plain_done
+	rts
 .stream_loop
 	tst.l	dsp_chunk_inflight
 	beq	.stream_fetched
@@ -5296,8 +5402,10 @@ gpu_submit_ot
 	addq.l	#1,gpu_call_count
 	TimeMark	stat_mark_otinsert
 	ifd	TREX_STREAM_PROBE
-	; Phase B of the probe: the next frame's animation has been sent, so the
-	; DSP's FINISH work hides behind whatever is still undrawn.
+	tst.l	stream_fallback_frame
+	bne	.stream_legacy_ot
+	; Phase B: the next frame's animation has been sent, so the DSP's
+	; FINISH work hides behind whatever is still undrawn.
 	TimeAdd	stat_mark_otinsert,stat_t_otinsert
 	TimeMark	stat_mark_raster
 	move.l	dsp_packet_count_shadow,gpu_ot_node_count
@@ -5307,6 +5415,7 @@ gpu_submit_ot
 	bcc	.gpu_submit_raster_done
 	bsr	stream_probe_draw_one
 	bra	.stream_probe_tail
+.stream_legacy_ot
 	endc
 	move.l	#OT_LENGTH,ot_length_shadow
 	lea	ordering_table,a0
@@ -5456,9 +5565,18 @@ gpu_rasterize_ot
 	; Only the touched bucket interval can contain nodes.  The table is still
 	; fully cleared for simple correctness, but the far-to-near walk skips the
 	; hundreds or thousands of guaranteed-empty buckets outside that interval.
-	ifnd	TREX_STREAM_PROBE
+	ifd	TREX_STREAM_PROBE
+	; stream_resolve_range: resolve stream_probe_count packets from
+	; stream_probe_base and return.  Clear, this is the whole routine --
+	; the resolve sweep and the Ordering Table walk -- which the host
+	; fallback still uses.
+	tst.l	stream_resolve_range
+	bne	.gpu_resolve_entry
+	endc
 	tst.l	gpu_ot_node_count
 	beq	.gpu_raster_ot_done
+	ifd	TREX_STREAM_PROBE
+.gpu_resolve_entry
 	endc
 	; The bucket cursor walks in a2: rasterize_packet preserves a2/a3/d7
 	; for its caller, so the node loop needs no per-packet save of its
@@ -5483,9 +5601,12 @@ gpu_rasterize_ot
 	move.l	dsp_packet_count_shadow,d7
 	subq.l	#1,d7
 	ifd	TREX_STREAM_PROBE
+	tst.l	stream_resolve_range
+	beq	.gpu_resolve_whole
 	move.l	stream_probe_base,a1
 	move.l	stream_probe_count,d7
 	subq.l	#1,d7
+.gpu_resolve_whole
 	endc
 	ifd TREX_SSI_HATARI
 	clr.l	ssi_hatari_resolve_progress
@@ -5577,8 +5698,11 @@ gpu_rasterize_ot
 	bra	.gpu_resolve_store
 .gpu_resolve_done
 	ifd	TREX_STREAM_PROBE
+	tst.l	stream_resolve_range
+	beq	.gpu_resolve_walk
 	move.l	(sp)+,a2
 	rts
+.gpu_resolve_walk
 	endc
 	ifd TREX_SSI_HATARI
 	tst.l	ssi_hatari_feed_pending
@@ -7522,13 +7646,6 @@ banner_text
 ; Dsp_LoadProg reads the LOD from the current GEMDOS directory.  The Makefile
 ; copies the runtime LOD next to this executable.
 trex_dsp_lod_path
-	ifd	TREX_ORDERED
-	; Its own name: this host sends command 10 as the key request and lists
-	; triangles in every BUILD chunk, which only the ORDERED image decodes.
-	; The default name still follows as dead bytes.
-	dc.b	'TREXORD.LOD',0
-	even
-	endc
 	ifd TREX_SSI_PIPELINE
 	dc.b	'TREXPIPE.LOD',0
 	else
@@ -7536,7 +7653,14 @@ trex_dsp_lod_path
 	dc.b	'TREXSSI.LOD',0
 	else
 	ifd TREX_RELEASE
+	ifd	TREX_LEGACY_OT
+	; A legacy host must never load the draw-order image, and the reverse:
+	; neither side can drive the other's protocol.  Twelve characters, like
+	; the default name, so a legacy build keeps the old data layout.
+	dc.b	'TREXLEGA.LOD',0
+	else
 	dc.b	'TREX.LOD',0
+	endc
 	else
 	ifd TREX_PHASEPROBE
 	; Its own name on purpose.  This binary sends a CMD_PREPASS mode word
@@ -7563,7 +7687,11 @@ trex_dsp_lod_path
 	; image under this name.
 	dc.b	'TREXDMA.LOD',0
 	else
+	ifd	TREX_LEGACY_OT
+	dc.b	'TREXLEGA.LOD',0
+	else
 	dc.b	'trex_dsp.lod',0
+	endc
 	endc
 	endc
 	endc
@@ -8813,6 +8941,13 @@ stream_drawn
 stream_probe_base
 	ds.l	1
 stream_probe_count
+	ds.l	1
+; Nonzero while gpu_rasterize_ot is to resolve one packet range and return.
+stream_resolve_range
+	ds.l	1
+; Nonzero for a frame the host fallback rebuilt, which keeps the Ordering
+; Table path.
+stream_fallback_frame
 	ds.l	1
 	ifd	TREX_ORDERED
 ; Survivors' global triangle numbers in draw order, far to near.
