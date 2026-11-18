@@ -3503,7 +3503,11 @@ dsp_packets_finish
 	beq	.finish_shadow
 	tst.l	dsp_pipeline_active
 	beq	.finish_fallback
+	ifd	TREX_STREAM_PROBE
+	bsr	stream_probe_drain
+	else
 	bsr	dsp_drain_chunk_pipeline
+	endc
 	tst.l	d0
 	bne	.finish_build
 .finish_fallback
@@ -3535,7 +3539,13 @@ dsp_packets_finish
 	move.l	a1,gpu_packet_ptr
 	tst.l	dsp_direct_frame
 	beq	.finish_copy_builder
+	ifd	TREX_STREAM_PROBE
+	move.l	dsp_triangle_output_count,d0
+	move.l	d0,dsp_packet_count_shadow
+	move.l	d0,ot_primitive_count
+	else
 	bsr	build_gpu_packet_heads
+	endc
 	bra	.finish_built
 .finish_copy_builder
 	bsr	build_gpu_shadow_packets
@@ -4000,18 +4010,98 @@ dsp_drain_chunk_pipeline
 	move.l	#1,dsp_chunk_inflight
 .dsp_cull_unpack
 	DspUnpackChunk .dsp_cull_chunk_next
+	ifd	TREX_STREAM_PROBE
+	; This chunk's packets are final: build their heads and resolve them
+	; now, so stream_probe_draw_one can draw them in arrival order.
+	move.l	dsp_triangle_chunk_survivors,d0
+	move.l	d0,stream_probe_count
+	lsl.l	#7,d0		; GPU_PACKET_BYTES = 128
+	move.l	dsp_triangle_output_ptr,a1
+	lea	-GPU_PACKET_SPAN(a1),a1		; cursor rests on the next packet's w4
+	suba.l	d0,a1
+	move.l	a1,stream_probe_base
+	bsr	build_gpu_packet_heads
+	bsr	gpu_rasterize_ot		; resolve sweep only in this build
+	endc
 
 .dsp_cull_chunk_next
 	; The pool bookkeeping advanced at launch time; loop while a chunk is
 	; still computing on the DSP.
+	ifd	TREX_STREAM_PROBE
+	moveq	#1,d0
+	rts
+	else
 	tst.l	dsp_chunk_inflight
 	bne	.dsp_cull_chunk
 	moveq	#1,d0
 	rts
+	endc
 
 .dsp_cull_failed
 	moveq	#0,d0
 	rts
+
+	ifd	TREX_STREAM_PROBE
+	ifd	TREX_SSI_PIPELINE
+	fail	"TREX_STREAM_PROBE is a host-port probe; do not combine it with the SSI pipeline"
+	endc
+; Draw-on-arrival TIMING PROBE (OPTIMIZATION.md 4.1e).  It draws packets in
+; ARRIVAL order, which is not painter's order: the picture is wrong on
+; purpose.  Every triangle is still drawn in full, so the pixel and packet
+; counts -- the workload -- equal the default build's.  It answers what the
+; frame would cost if the DSP emitted survivors in draw order.
+;
+; Phase A (here, inside the packet stage): fetch every chunk.  With
+; stream_probe_ahead set, an already unpacked packet is drawn whenever the
+; chunk in flight is not ready yet, and a ready chunk is fetched at the next
+; packet boundary, so the DSP is never left waiting and neither is the CPU.
+; With it clear, each chunk is drawn completely before the next is fetched
+; and nothing is left for phase B.  Phase B (gpu_submit_ot) draws the rest
+; after the next frame's animation has been sent.
+; Returns D0 = 1 on success, 0 after a protocol failure.
+stream_probe_drain
+	clr.l	stream_drawn
+	move.l	#1,dsp_chunk_inflight		; dsp_packets_begin launched chunk 0
+.stream_loop
+	tst.l	dsp_chunk_inflight
+	beq	.stream_fetched
+	move.l	stream_drawn,d0
+	cmp.l	dsp_triangle_output_count,d0
+	bcc	.stream_fetch		; nothing undrawn: block on the DSP
+	tst.l	stream_probe_ahead
+	beq	.stream_draw
+	btst.b	#DSP_HOST_ISR_RXDF,DSP_HOST_ISR
+	bne	.stream_fetch		; the chunk in flight is ready
+.stream_draw
+	bsr	stream_probe_draw_one
+	bra	.stream_loop
+.stream_fetch
+	bsr	dsp_drain_chunk_pipeline		; one chunk per call in this build
+	tst.l	d0
+	bne	.stream_loop
+	rts
+.stream_fetched
+	tst.l	stream_probe_ahead
+	bne	.stream_done
+.stream_naive_tail
+	move.l	stream_drawn,d0
+	cmp.l	dsp_triangle_output_count,d0
+	bcc	.stream_done
+	bsr	stream_probe_draw_one
+	bra	.stream_naive_tail
+.stream_done
+	moveq	#1,d0
+	rts
+
+; Draw the next undrawn packet.  rasterize_packet preserves D7/A2/A3 only.
+stream_probe_draw_one
+	move.l	stream_drawn,d0
+	addq.l	#1,stream_drawn
+	lsl.l	#7,d0		; GPU_PACKET_BYTES = 128
+	lea	gpu_packet_buffer,a0
+	adda.l	d0,a0
+	bra	rasterize_packet
+	endc
 
 	ifd TREX_SSI_PIPELINE
 	include "TREX/m68030/ssi_packets.s"
@@ -4029,8 +4119,13 @@ build_gpu_packet_heads
 	else
 	lea	gpu_packet_buffer,a1
 	endc
+	ifd	TREX_STREAM_PROBE
+	move.l	stream_probe_base,a1
+	move.l	stream_probe_count,d7
+	else
 	move.l	dsp_triangle_output_count,d7
 	move.l	d7,dsp_packet_count_shadow
+	endc
 	beq	.build_heads_count
 	subq.l	#1,d7
 .build_heads_loop
@@ -5071,6 +5166,19 @@ shade_falcon_color
 gpu_submit_ot
 	addq.l	#1,gpu_call_count
 	TimeMark	stat_mark_otinsert
+	ifd	TREX_STREAM_PROBE
+	; Phase B of the probe: the next frame's animation has been sent, so the
+	; DSP's FINISH work hides behind whatever is still undrawn.
+	TimeAdd	stat_mark_otinsert,stat_t_otinsert
+	TimeMark	stat_mark_raster
+	move.l	dsp_packet_count_shadow,gpu_ot_node_count
+.stream_probe_tail
+	move.l	stream_drawn,d0
+	cmp.l	dsp_packet_count_shadow,d0
+	bcc	.gpu_submit_raster_done
+	bsr	stream_probe_draw_one
+	bra	.stream_probe_tail
+	endc
 	move.l	#OT_LENGTH,ot_length_shadow
 	lea	ordering_table,a0
 	move.l	a0,gpu_submit_ptr_shadow
@@ -5219,8 +5327,10 @@ gpu_rasterize_ot
 	; Only the touched bucket interval can contain nodes.  The table is still
 	; fully cleared for simple correctness, but the far-to-near walk skips the
 	; hundreds or thousands of guaranteed-empty buckets outside that interval.
+	ifnd	TREX_STREAM_PROBE
 	tst.l	gpu_ot_node_count
 	beq	.gpu_raster_ot_done
+	endc
 	; The bucket cursor walks in a2: rasterize_packet preserves a2/a3/d7
 	; for its caller, so the node loop needs no per-packet save of its
 	; own state.  a2 is otherwise dead here; one save per frame keeps the
@@ -5243,6 +5353,11 @@ gpu_rasterize_ot
 	endc
 	move.l	dsp_packet_count_shadow,d7
 	subq.l	#1,d7
+	ifd	TREX_STREAM_PROBE
+	move.l	stream_probe_base,a1
+	move.l	stream_probe_count,d7
+	subq.l	#1,d7
+	endc
 	ifd TREX_SSI_HATARI
 	clr.l	ssi_hatari_resolve_progress
 	endc
@@ -5332,6 +5447,10 @@ gpu_rasterize_ot
 	moveq	#RASTER_LVL_SHIFT_LONG,d4
 	bra	.gpu_resolve_store
 .gpu_resolve_done
+	ifd	TREX_STREAM_PROBE
+	move.l	(sp)+,a2
+	rts
+	endc
 	ifd TREX_SSI_HATARI
 	tst.l	ssi_hatari_feed_pending
 	beq	.gpu_raster_ot_continue
@@ -7373,6 +7492,13 @@ val_stats_path
 ; GET_VERTICES again, which the record pipeline otherwise never needs.
 span_validate_enabled
 	dc.l	0
+	ifd	TREX_STREAM_PROBE
+; 1 = fetch ahead and draw while the DSP computes; 0 = draw each chunk
+; completely before fetching the next.  A data longword so
+; tools/patch_data_flag.py compares both at one linked layout.
+stream_probe_ahead
+	dc.l	1
+	endc
 
 ; 1 = the record unpack writes span/level fields straight into the packets'
 ; own slots and the builder only fills the four head words (8.2b); 0 = the
@@ -8545,6 +8671,14 @@ dsp_pipeline_active
 	ds.l	1
 dsp_chunk_inflight
 	ds.l	1
+	ifd	TREX_STREAM_PROBE
+stream_drawn
+	ds.l	1
+stream_probe_base
+	ds.l	1
+stream_probe_count
+	ds.l	1
+	endc
 dsp_animation_inflight
 	ds.l	1
 

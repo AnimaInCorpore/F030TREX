@@ -523,6 +523,17 @@ trex_m68030_prestep: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_prestep.tos
 ./TREX/m68030/trex_prestep.tos: ./TREX/m68030/build/trex_prestep.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
+# Draw-on-arrival TIMING PROBE (OPTIMIZATION.md 4.1e): packets are drawn in
+# arrival order, so the picture is wrong on purpose.  Never ships.
+.PHONY: trex_m68030_stream_probe
+trex_m68030_stream_probe: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_stream.tos ./TREX/m68030/trex_dsp.lod
+
+./TREX/m68030/build/trex_stream.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_STREAM_PROBE -o $@ -L ./TREX/m68030/build/trex_stream.lst
+
+./TREX/m68030/trex_stream.tos: ./TREX/m68030/build/trex_stream.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
 ./TREX/m68030/build/trex_framehash.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
 	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_FRAME_HASH -o $@ -L ./TREX/m68030/build/trex_framehash.lst
 
@@ -676,6 +687,7 @@ $(DSPVARIANT): ./TREX/dsp/trex_dsp.asm ./TREX/dsp/ssi_pkt.asm ./TREX/dsp/ssi_crc
 # from that file by the build.
 clean:
 	rm -f ./TREX/m68030/trex_pipe.tos ./TREX/m68030/trex_pipe_hash.tos
+	rm -f ./TREX/m68030/trex_stream.tos ./TREX/m68030/build/trex_stream.o ./TREX/m68030/build/trex_stream.lst
 	rm -f ./TREX/m68030/trex_prestep.tos ./TREX/m68030/build/trex_prestep.o ./TREX/m68030/build/trex_prestep.lst
 	rm -f ./TREX/m68030/trex_pipe_nocrc.tos ./TREX/m68030/build/trex_pipe_nocrc.o ./TREX/m68030/build/trex_pipe_nocrc.lst
 	rm -f ./TREX/m68030/build/trex_pipe.o ./TREX/m68030/build/trex_pipe.lst

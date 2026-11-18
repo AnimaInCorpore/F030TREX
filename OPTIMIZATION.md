@@ -5451,6 +5451,115 @@ calibration); the rest is DSP compute hidden behind the clear and the
 per-chunk unpack.  The clear stage still reports its own ~17 ms of host
 time — the saving appears as vanished *waiting* inside the readback stage.
 
+### 4.1e Draw-on-arrival ceiling probe: 46-52 ms if the DSP emitted draw order (2026-11-18)
+
+The chunk pipeline above hides DSP compute behind the host's unpack, and the
+unpack runs out first: the M68030 still spends most of the packet stage
+waiting, because painter's visibility needs the complete Ordering Table before
+the first packet may be drawn (9.3, 7.4c). If the DSP emitted survivors
+already in far-to-near order, the host could draw while it waits. This probe
+sizes that before any DSP work is spent on producing the order.
+
+**Instrument.** `-DTREX_STREAM_PROBE` (`make trex_m68030_stream_probe`,
+`trex_stream.tos`, unchanged `trex_dsp.lod`) draws packets in **arrival
+order**. That is mesh index order, not painter's order, so **the picture is
+wrong on purpose** and this build is a timing probe only. Every triangle is
+still drawn in full, so the workload is the default's: each arm writes
+9,049,666 pixels and ends with 1,149 packets over the 265-frame prefix. The
+Ordering Table is neither filled nor walked. Each fetched chunk gets its
+packet heads and its resolve sweep at once, over its own range.
+
+- **Phase A, inside the packet stage.** `stream_probe_drain` fetches every
+  chunk through the unchanged host-port transactions. With
+  `stream_probe_ahead` set, an already unpacked packet is drawn whenever the
+  chunk in flight is not ready, and a ready chunk (RXDF) is fetched at the next
+  packet boundary, so neither processor waits on the other.
+- **Phase B, in `gpu_submit_ot`.** After the next frame's animation has been
+  sent, the packets still undrawn are drawn, so the DSP's frame-ahead work
+  hides behind them exactly as it hides behind rasterization today.
+- **Naive arm.** `stream_probe_ahead` patched to 0 by
+  `tools/patch_data_flag.py`, same linked layout: each chunk is drawn
+  completely before the next is fetched, and nothing is left for phase B.
+
+No packet field, DSP word or protocol transaction changes, and the build
+without the define is byte-identical to the 2.4n diagnostic executable
+(SHA256 `d002e5c6...9b40`).
+
+**Measured**, identical 265-frame diagnostic prefixes, Hatari `2.6.1-devel
+(Nov 18 2026)`, fork source `c5d5bf34`, TOS 4.02, 16 MHz 68030, corrected
+32 MHz DSP, 4 MiB ST RAM. Raw counters and input hashes are in
+[`docs/performance/stream-probe-2026-11-18.json`](docs/performance/stream-probe-2026-11-18.json).
+These are emulator measurements, not physical-Falcon timings, and the two
+profiles must not be mixed.
+
+| Cycle-exact, contention on | ms/frame | FPS | packet stage | OT insert | raster stage |
+|---|---:|---:|---:|---:|---:|
+| Default | 599.70 | 1.668 | 162.42 | 4.47 | 402.72 |
+| Probe, fetch ahead | **553.40** | **1.807** | 189.51 | 0.02 | 333.64 |
+| Probe, naive | 665.83 | 1.502 | 635.53 | 0.00 | 0.02 |
+
+| MMU ledger, contention off | ms/frame | FPS | packet stage | OT insert | raster stage |
+|---|---:|---:|---:|---:|---:|
+| Default | 425.68 | 2.349 | 154.66 | 2.55 | 240.51 |
+| Probe, fetch ahead | **373.47** | **2.678** | 167.53 | 0.00 | 178.02 |
+| Probe, naive | 487.11 | 2.053 | 458.87 | 0.00 | 0.02 |
+
+In the probe the packet stage contains the drawing done in phase A and the
+raster stage only phase B, so the stage columns are not comparable with the
+default's one for one; the frame column is. The frame-100 dump hashes to
+`3d75e262...` in all four probe runs and to `d89958b3...3d16` in both default
+runs: the probe arms agree with each other and differ from the checkpoint, as
+a wrong draw order must.
+
+**What it says.**
+
+- **The ceiling is 46.3 ms on the cycle-exact profile and 52.2 ms on the MMU
+  ledger: +8.4% and +14.0% FPS.** That is what converting the packet-stage
+  wait into drawing is worth, with the Ordering Table's insertion and walk
+  gone as well, at today's chunking of 85 index-order chunks per frame.
+- **It does not recover the whole wait.** The stage's waiting is not all
+  recoverable: the transport itself (the ~46 ms port floor of 8.2a) still
+  occupies the M68030 word by word, and heads, resolve and the unpack now run
+  once per chunk between draws.
+- **Fetch-ahead is the whole result.** The naive arm is **66.1 and 61.4 ms
+  slower than the default**. Drawing each chunk before fetching the next paces
+  the DSP by the rasterizer, so the last chunk leaves the DSP only when the
+  frame is nearly drawn, and the next frame's morph, projection, lighting and
+  visibility pass -- today hidden behind rasterization -- land on the critical
+  path. Any real design must fetch ahead and send the next animation as soon
+  as the last chunk is in host memory.
+
+**What a real implementation would still need, none of it built.**
+
+- The DSP must sort survivors far to near in the frame-ahead window and
+  reproduce the host's within-bucket order (LIFO of index-order submission)
+  for byte identity. 2.3b's exact radix ordering ran hidden at 15.2 ms on the
+  reduced mesh with 744 entries; the full mesh needs about 1,200 and the
+  program words of the occlusion prepass.
+- UV pairs are host-supplied per chunk in index order. The host would need
+  the sorted survivor list first and would then send UVs for survivors only.
+- The 512-frame hash gate, not this probe, decides correctness.
+
+**Estimate, not measurement.** Chunks of 32 sorted survivors would be about
+36 per frame instead of 85, which removes transactions the probe still pays
+for, and the sorted list adds about 1,150 words of wire. Neither is priced
+here; the measured figures are the probe's, not a prediction of the product.
+No physical-Falcon figure exists; 2.7a predicts the packet stage carries more
+of the hardware frame than of the emulated one, which would make this worth
+more there, not less.
+
+**Reproduction.**
+
+```sh
+make trex_m68030 trex_m68030_stream_probe
+python3 tools/measure_frames.py TREX/m68030/trex_stream.tos \
+  TREX/dsp/trex_dsp.lod hatari_runs/stream-ahead-ce \
+  --cpu-core cycle-exact --videl-contention on --frames 265 --timeout 1500
+cp TREX/m68030/trex_stream.tos hatari_runs/stream_naive.tos
+python3 tools/patch_data_flag.py hatari_runs/stream_naive.tos \
+  TREX/m68030/build/trex_stream.lst stream_probe_ahead 0 1
+```
+
 ### 4.2 DSP memory layout and the Falcon P/X/Y overlay
 
 The current X layout has two mutually exclusive owners above the resident
@@ -8665,6 +8774,18 @@ The open roadmap, in recommended order (expected effects from the section
     **`make_triangle_span` is now the largest measured item left inside
     BUILD** and is where the next DSP-side lever has to look; nothing in this
     item changes the shipping image, which assembles without it.
+
+25. DSP-ordered emission with fetch-ahead drawing. **Ceiling measured, not
+    built -- see section 4.1e.**  A host-only probe that draws packets in
+    arrival order, at an identical pixel and packet workload, measures
+    **599.7 -> 553.4 ms cycle-exact and 425.7 -> 373.5 ms on the MMU ledger
+    (+8.4% / +14.0% FPS)** when it fetches ahead and draws while the DSP
+    computes, and **+66 / +61 ms** when it draws each chunk before fetching
+    the next, because that exposes the frame-ahead DSP work.  Realizing it
+    needs an exact far-to-near sort on the DSP that reproduces the host's
+    within-bucket order, the sorted list on the host before the UV sends,
+    and the 512-frame hash gate.  It needs neither SSI/DMA nor a frame of
+    latency, and it competes with item 15 for the same wait.
 
 ## 11. References
 
