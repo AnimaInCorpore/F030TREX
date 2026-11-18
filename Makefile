@@ -664,6 +664,7 @@ $(DSPVARIANT): ./TREX/dsp/trex_dsp.asm ./TREX/dsp/ssi_pkt.asm ./TREX/dsp/ssi_crc
 # from that file by the build.
 clean:
 	rm -f ./TREX/m68030/trex_pipe.tos ./TREX/m68030/trex_pipe_hash.tos
+	rm -f ./TREX/m68030/trex_pipe_nocrc.tos ./TREX/m68030/build/trex_pipe_nocrc.o ./TREX/m68030/build/trex_pipe_nocrc.lst
 	rm -f ./TREX/m68030/build/trex_pipe.o ./TREX/m68030/build/trex_pipe.lst
 	rm -f ./TREX/m68030/build/trex_pipe_hash.o ./TREX/m68030/build/trex_pipe_hash.lst
 	rm -f ./TREX/m68030/build/TREXPIPE.o ./TREX/m68030/build/TREXPIPE.lst
@@ -737,6 +738,18 @@ trex_ssi_pipeline: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_pipe.tos
 	$(VASM) $< -quiet -Felf -m68030 -DTREX_SSI_PIPELINE -o $@ -L ./TREX/m68030/build/trex_pipe.lst
 
 ./TREX/m68030/trex_pipe.tos: ./TREX/m68030/build/trex_pipe.o ./TREX/m68030/build/ssi_dma.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
+# Timing instrument only (OPTIMIZATION.md 7.4e): the live pipeline without the
+# CPU payload CRC, at the same linked layout outside the unit loop. Pair it
+# with trex_pipe.tos and TREXPIPE.LOD; it never ships.
+.PHONY: trex_ssi_pipeline_crcprobe
+trex_ssi_pipeline_crcprobe: trex_ssi_pipeline ./TREX/m68030/trex_pipe_nocrc.tos
+
+./TREX/m68030/build/trex_pipe_nocrc.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_packets.s ./TREX/m68030/ssi_crc_table.i ./TREX/m68030/ssi_crc_table.bin ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) $< -quiet -Felf -m68030 -DTREX_SSI_PIPELINE -DTREX_SSI_CRC_PROBE -o $@ -L ./TREX/m68030/build/trex_pipe_nocrc.lst
+
+./TREX/m68030/trex_pipe_nocrc.tos: ./TREX/m68030/build/trex_pipe_nocrc.o ./TREX/m68030/build/ssi_dma.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 # Hash gate uses the actual DMA path; its timings include hashing.

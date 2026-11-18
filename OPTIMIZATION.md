@@ -7223,6 +7223,111 @@ coherency, sound-state restoration and record equivalence testable on the
 Falcon. Promotion requires a physical result and an end-to-end gain; full DSP
 pixel rendering/texture residency remains a separate investigation in 6.7a.
 
+### 7.4e The CPU-side CRC, priced: 11.7 ms -- it is not what the pipeline loses to (2026-11-18)
+
+**Question.** 7.4d's raster bracket grows about 128 ms when the live pipeline
+replaces PIO. The table-driven CRC was the obvious suspect: one lookup per
+16-bit unit into a 131,072-byte table, behind a 256-byte data cache. It is
+sized here by removing it, not by estimating it.
+
+**Instrument.** `-DTREX_SSI_CRC_PROBE` (`make trex_ssi_pipeline_crcprobe`,
+`trex_pipe_nocrc.tos`, paired with the unchanged `TREXPIPE.LOD`) empties the
+`SsiPacketCrcUnit` macro and drops the final compare and branch. Twelve NOPs
+after the DBRA of `.payload_crc`, executed once per chunk, and four at the
+compare site keep every address outside the unit loop where it was: the
+listings put `ssi_packets_shutdown` at `$1D08` in both builds, and the two
+linked files differ in 60 text bytes, all inside `$1CAE-$1CFF`, plus the
+relocation table (one absolute reference fewer, one byte shorter). Header and
+footer lookups (15 units per chunk) and the envelope, identity, count and
+length checks stay live. The DSP still computes and transmits its CRC. The
+build without the define is byte-identical to the `trex_pipe.tos` of 7.4d
+(SHA256 `2e853024...515c`); the PIO control is that same executable with
+`ssi_force_pio` patched to 1 by `tools/patch_data_flag.py`. **This is a timing
+instrument and never a shipping option**: it removes the only payload-integrity
+check, and its failure-injection modes are meaningless.
+
+**Measured**, identical 265-frame diagnostic prefixes, Hatari `2.6.1-devel
+(Nov 18 2026)`, fork source `c5d5bf34`, TOS 4.02, 16 MHz 68030, corrected
+32 MHz DSP, 4 MiB ST RAM. This emulator is newer than the `639fadf6` of 7.4d,
+so all three arms were re-taken on it rather than compared with the recorded
+figures; it reproduces the PIO and SSI frames of 7.4d to 0.7 and 1.3 ms. Raw
+counters and input hashes are in
+[`docs/performance/ssi-crc-probe-2026-11-18.json`](docs/performance/ssi-crc-probe-2026-11-18.json).
+These are emulator measurements, not physical-Falcon timings.
+
+| Cycle-exact, MMU off, contention on | ms/frame | FPS | exposed packet stage | raster bracket |
+|---|---:|---:|---:|---:|
+| forced PIO | 601.21 | 1.663 | 162.77 ms | 403.89 ms |
+| live SSI/DMA, CRC | 631.11 | 1.585 | 64.98 ms | 531.55 ms |
+| live SSI/DMA, CRC probe | **619.38** | 1.615 | 68.89 ms | 516.09 ms |
+
+| MMU ledger, contention off | ms/frame | FPS | exposed packet stage | raster bracket |
+|---|---:|---:|---:|---:|
+| forced PIO | 426.64 | 2.344 | 155.75 ms | 240.34 ms |
+| live SSI/DMA, CRC | 539.42 | 1.854 | 200.13 ms | 308.57 ms |
+| live SSI/DMA, CRC probe | **535.79** | 1.866 | 205.02 ms | 299.77 ms |
+
+As in 7.4d the SSI raster bracket includes cooperative service, expansion and
+UV submission. All six arms reproduce the frame-100 checkpoint
+`d89958b3...3d16`. Both SSI arms of each profile write 9,051,663 pixels and
+end with 1,150 packets, and their `ssi_pipe.res` reports the route enabled
+with zero failures; the PIO arms write 9,049,666 / 1,149 with an all-zero
+status file, i.e. the route was never claimed.
+
+**What the CRC costs.** Removing it takes 15.46 ms out of the cycle-exact
+raster bracket and **11.74 ms off the frame (1.9%)**; on the MMU ledger 8.80 ms
+and 3.62 ms. The cycle-exact run received 7,619,990 units in 20,702 nonempty
+chunks (both counters include a partly produced next frame), about 27,500
+payload units and 57.5 KB per frame, so the lookup costs about **0.56 us, or
+nine CPU clocks, per unit** on that profile. The CRC is therefore 12% of the
+127.7 ms the bracket grows by, not the bulk of it.
+
+**What this rules out.**
+
+- **No cheaper integrity check can make the live pipeline win in the
+  emulator.** With the CRC gone entirely it is still **18.2 ms slower than
+  PIO** on the cycle-exact profile and **109.2 ms slower** on the MMU ledger.
+  The remaining ~112 ms of bracket growth is the unpack and UV submission that
+  PIO performs inside its packet stage, plus new service work; that split is
+  not attributed here.
+- **Saved CPU time partly returns as waiting.** The exposed packet stage
+  *grows* when the CRC is removed: +3.91 ms of the 15.46 saved on cycle-exact,
+  +4.89 of 8.80 on the MMU ledger. On the MMU ledger the exposed stage of the
+  live path (200.1 ms) exceeds that of PIO (155.8 ms) although the transfer is
+  supposed to hide it. Both say the live frame is bound by the DSP-side chunk
+  cycle and not by CPU service, most strongly where the rasterization window
+  is short.
+- **This is the first MMU-ledger measurement of the live pipeline**:
+  539.4 against 426.6 ms. 7.4d measured the cycle-exact profile only.
+
+**Inference, not measurement.** 57.5 KB per frame at the emulated 250 KB/s
+structural rate of 7.4b is about 230 ms of wire per frame, and the transmit
+of each chunk is serial with its BUILD and with the host launching the next
+one. That makes the emulated wire the largest single term of the chunk cycle,
+and it is an emulator property: the rate of a real Falcon is unmeasured. If
+so, the emulator can neither rank this pipeline against PIO nor reward cheaper
+CPU service, and only the `TREXPIPE` hardware package can. A direct test would
+be a wire-rate sweep in the emulator fork; it has not been run.
+
+**Disposition.** The CRC stays. The default stays on PIO. No shipping code
+path changes; the default and live executables are byte-identical to those of
+7.4d.
+
+**Reproduction.**
+
+```sh
+make DOSBOX=/path/to/DOSBox trex_ssi_pipeline trex_ssi_pipeline_crcprobe
+cp TREX/m68030/trex_pipe.tos hatari_runs/pio.tos
+python3 tools/patch_data_flag.py hatari_runs/pio.tos \
+  TREX/m68030/build/trex_pipe.lst ssi_force_pio 1 0
+python3 tools/measure_frames.py TREX/m68030/trex_pipe_nocrc.tos \
+  TREX/m68030/TREXPIPE.LOD hatari_runs/crcprobe-ce --dsp-name TREXPIPE.LOD \
+  --cpu-core cycle-exact --videl-contention on --frames 265 --timeout 1500
+```
+
+Repeat the last command for `trex_pipe.tos` and `pio.tos`, and without the
+two profile options for the MMU ledger.
+
 ## 8. When SSI/crossbar streaming is worthwhile
 
 This section originally deferred SSI because the host still performed the
@@ -8139,6 +8244,15 @@ The open roadmap, in recommended order (expected effects from the section
    completion, and cache coherency without an ad-hoc CACR write.  Only then
    may cross-frame span consumption replace the CPU row walker.  U/V-only is
    explicitly insufficient for three FPS.
+
+   **The CPU-side CRC is priced and cleared (7.4e, 2026-11-18).**  A
+   same-layout probe without it measures 631.1 -> 619.4 ms on the cycle-exact
+   profile: 11.7 ms, 1.9% of the frame, about nine CPU clocks per unit.  The
+   live pipeline without any CRC is still 18.2 ms behind PIO there and
+   109.2 ms behind on the MMU ledger, and part of the CPU time saved comes
+   back as packet-stage waiting, so in the emulator the live frame is bound by
+   the DSP-side chunk cycle rather than by CPU service.  Cheapening the
+   integrity check is not a lever; the physical result is still the gate.
 16. **Closed to a measured mechanism.**  Three findings, each by scan:
    the Gouraud buffer growth moved the unpinned preshaded CLUT banks and
    cost 80 ms at an unchanged instruction stream — they are pinned now.

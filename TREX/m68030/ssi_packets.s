@@ -1,8 +1,19 @@
+; TREX_SSI_CRC_PROBE is a timing instrument, never a shipping option: it
+; drops the three payload CRC instructions per unit and the final compare,
+; and pads both sites with same-size NOPs outside the unit loop, so every
+; address beyond .payload_crc's body is unchanged. Header/footer units keep
+; their lookups (15 per chunk). Envelope, identity, count and length checks
+; stay live.
+	ifd TREX_SSI_CRC_PROBE
+	macro SsiPacketCrcUnit
+	endm
+	else
 	macro SsiPacketCrcUnit
 	move.w \1,d6
 	eor.w d0,d6
 	move.w (a3,d6.l*2),d0
 	endm
+	endc
 
 ; SSIPROBE=2 / TREX_SSI_PIPELINE. All callers run in supervisor mode.
 ; phase 0 idle, 1 FINISH pending, 2 BUILD pending, 3 DMA owns chunk,
@@ -366,6 +377,9 @@ ssi_packet_validate
 	SsiPacketCrcUnit d1
 	move.l d1,(a1)+
 	dbra d4,.payload_crc
+	ifd TREX_SSI_CRC_PROBE
+	dcb.w 12,$4e71		; three 8-byte CRC units, run once per chunk
+	endc
 	moveq #6,d4
 .footer_crc
 	moveq #0,d1
@@ -374,8 +388,12 @@ ssi_packet_validate
 	move.w (a3,d1.l*2),d0
 	dbra d4,.footer_crc
 	move.w d0,ssi_packet_actual_crc
+	ifd TREX_SSI_CRC_PROBE
+	dcb.w 4,$4e71		; same size as the compare and branch
+	else
 	cmp.w ssi_packet_expected_crc,d0
 	bne .bad
+	endc
 	moveq #1,d0
 	rts
 .bad
