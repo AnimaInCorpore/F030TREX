@@ -120,6 +120,21 @@ TREX_PRIMITIVES		= 2724
 ; Saturation degrades silently -- it just stops sorting -- so the table is
 ; sized for a camera that can move well past the opening shot.
 OT_LENGTH		= 2048
+	ifd	TREX_ORDERED
+; Draw-order pipeline (OPTIMIZATION.md 4.1f).  The ORDERED DSP image returns
+; one depth-bucket key per survivor; order_fetch_and_sort applies this file's
+; own Ordering-Table rule to them and lists the survivors far to near; BUILD
+; chunks then name their triangles from that list, so records arrive in
+; painter's order.  Everything downstream is the 4.1e stream machinery, which
+; draws packets in arrival order -- here the correct one.
+TREX_STREAM_PROBE = 1
+	ifd	TREX_SSI_PIPELINE
+	fail	"TREX_ORDERED is a host-port pipeline; do not combine it with the SSI pipeline"
+	endc
+	ifd	TREX_PREPASS
+	fail	"The ORDERED DSP image has no occlusion prepass"
+	endc
+	endc
 ; Bucket = average-Z key >> OT_KEY_SHIFT.  The key is the sum of three
 ; camera-space z values, so it scales with the object distance.  The shift has
 ; to cover the whole choreography, which opens at z=62000 and ends at z=3100:
@@ -598,7 +613,11 @@ DSP_TRIANGLE_LOAD_WORDS	= 2+(TREX_PRIMITIVES*3)
 ; Chunk command buffer capacity: three command words plus the chunk's two
 ; packed UV words per triangle.  The actual send length is computed per call
 ; from the chunk's real count.
+	ifd	TREX_ORDERED
+DSP_TRIANGLE_CHUNK_TX_WORDS = 3+(DSP_TRIANGLE_CHUNK*3)
+	else
 DSP_TRIANGLE_CHUNK_TX_WORDS	= 3+(DSP_TRIANGLE_CHUNK*2)
+	endc
 ; The one-off static UV upload: command, count, two packed words per triangle.
 ; Host-resident packed UV pairs, two longs per triangle: since Gouraud they
 ; are no longer uploaded in one block but shipped per BUILD chunk.
@@ -2808,7 +2827,12 @@ dsp_packets_begin
 	move.l	a1,dsp_triangle_output_ptr
 .begin_path_done
 	clr.l	dsp_triangle_output_count
+	ifd	TREX_ORDERED
+	bsr	order_fetch_and_sort
+	move.l	d0,dsp_triangles_remaining
+	else
 	move.l	#TREX_PRIMITIVES,dsp_triangles_remaining
+	endc
 	clr.l	dsp_triangle_input_count
 	bsr	dsp_send_build_chunk
 	move.l	#1,dsp_pipeline_active
@@ -2835,6 +2859,31 @@ dsp_send_build_chunk
 	move.l	dsp_triangles_remaining,d5
 	sub.l	d4,d5
 	move.l	d5,dsp_triangles_remaining
+	ifd	TREX_ORDERED
+	; D4 = triangles in this chunk, D6 = the chunk's position in the draw
+	; list.  Each triangle travels as its global number and its two UV
+	; words, picked from the host-resident pack by that number.
+	lea	dsp_triangle_chunk_tx+12,a1
+	lea	dsp_uv_tx_buffer,a0
+	lea	order_list,a2
+	adda.l	d6,a2
+	adda.l	d6,a2
+	move.l	d4,d5
+	beq	.chunk_list_done
+	subq.l	#1,d5
+.chunk_list_copy
+	moveq	#0,d0
+	move.w	(a2)+,d0
+	move.l	d0,(a1)+
+	move.l	(0,a0,d0.l*8),(a1)+
+	move.l	(4,a0,d0.l*8),(a1)+
+	dbra	d5,.chunk_list_copy
+.chunk_list_done
+	move.l	d4,d5
+	add.l	d4,d5
+	add.l	d4,d5
+	addq.l	#3,d5		; total words: 3 + 3*count
+	else
 	lea	dsp_triangle_chunk_tx+12,a1
 	lea	dsp_uv_tx_buffer,a0
 	move.l	d6,d5
@@ -2849,6 +2898,7 @@ dsp_send_build_chunk
 	move.l	d4,d5
 	add.l	d5,d5
 	addq.l	#3,d5				; total words: 3 + 2*count
+	endc
 	Dsp_BlkUnpacked	dsp_triangle_chunk_tx,d5,dsp_rx_buffer,#0
 	rts
 
@@ -3661,6 +3711,11 @@ build_host_triangle_stream
 	move.l	dsp_triangle_unpack_base,d6
 	move.l	dsp_triangle_output_ptr,a1
 	lea	dsp_triangle_chunk_rx+8,a2
+	ifd	TREX_ORDERED
+	lea	order_list,a4
+	adda.l	d6,a4
+	adda.l	d6,a4		; this chunk's first draw-list entry
+	endc
 	move.l	d5,d0
 	subq.l	#1,d0
 	; Sign-extension constants, held for the whole chunk.  x ^ m - m with
@@ -3848,7 +3903,13 @@ build_host_triangle_stream
 	move.l	(a2)+,d1			; w0: slots | mid | shade | local
 	move.l	d1,d2
 	andi.l	#$1f,d2
+	ifd	TREX_ORDERED
+	; A4 already carries the chunk's draw-list position, so the lookup
+	; replaces the base add and the body stays at 256 bytes.
+	move.w	(0,a4,d2.l*2),d2		; chunk-local index -> global triangle number
+	else
 	add.l	d6,d2
+	endc
 	move.l	d2,88(a1)			; global source index -> w26
 	move.l	(a2)+,92(a1)			; w1: average-z key -> w27
 	move.l	d1,d2
@@ -4093,6 +4154,74 @@ stream_probe_drain
 	moveq	#1,d0
 	rts
 
+	ifd	TREX_ORDERED
+; Ask the ORDERED DSP image for its draw-order keys and sort them.  Each key
+; word is bucket<<12 | global triangle number for one survivor, in ascending
+; triangle order; a word with bit 23 set ends the list.  The bucket is this
+; file's own rule (gpu_submit_ot), computed by the DSP from the same average-Z
+; key its records carry.  Linking each survivor at its bucket's head and then
+; walking the buckets from far to near reproduces gpu_rasterize_ot's order
+; exactly, LIFO within a bucket included.  The table is empty on entry:
+; gpu_clear_ot clears it every frame and nothing else fills it in this build.
+; Out: D0 = survivors, order_list = their global numbers in draw order.
+; Clobbers D0-D4/D7/A0-A2/A4.
+order_fetch_and_sort
+.order_cmd_wait
+	btst.b	#DSP_HOST_ISR_TXDE,DSP_HOST_ISR
+	beq	.order_cmd_wait
+	move.l	#DSP_CMD_PREPASS,DSP_HOST_DATA
+	lea	ordering_table,a0
+	lea	gpu_ot_node_buffer,a2
+	move.l	#OT_LENGTH-1,d2		; nearest bucket touched
+	moveq	#0,d3		; farthest bucket touched
+	moveq	#0,d7
+.order_key_wait
+	btst.b	#DSP_HOST_ISR_RXDF,DSP_HOST_ISR
+	beq	.order_key_wait
+	move.l	DSP_HOST_DATA,d0
+	btst	#23,d0
+	bne	.order_keys_done
+	move.l	d0,d1
+	andi.l	#$fff,d1		; global triangle number
+	lsr.l	#8,d0
+	lsr.l	#4,d0		; bucket
+	cmp.l	d2,d0
+	bge	.order_min_ready
+	move.l	d0,d2
+.order_min_ready
+	cmp.l	d3,d0
+	ble	.order_max_ready
+	move.l	d0,d3
+.order_max_ready
+	lea	(0,a0,d0.l*4),a4
+	move.l	(a4),d4		; previous head
+	move.l	d1,(a2)
+	move.l	d4,4(a2)
+	move.l	a2,(a4)
+	addq.l	#GPU_OT_NODE_BYTES,a2
+	addq.l	#1,d7
+	bra	.order_key_wait
+.order_keys_done
+	tst.l	d7
+	beq	.order_sorted
+	lea	order_list,a1
+	lea	(4,a0,d3.l*4),a4		; one past the farthest bucket
+	sub.l	d2,d3		; DBRA count = range length - 1
+.order_bucket
+	move.l	-(a4),d0
+	beq	.order_next_bucket
+	clr.l	(a4)
+.order_node
+	move.l	d0,a2
+	move.w	2(a2),(a1)+		; global triangle number
+	move.l	4(a2),d0
+	bne	.order_node
+.order_next_bucket
+	dbra	d3,.order_bucket
+.order_sorted
+	move.l	d7,d0
+	rts
+	endc
 ; Draw the next undrawn packet.  rasterize_packet preserves D7/A2/A3 only.
 stream_probe_draw_one
 	move.l	stream_drawn,d0
@@ -7393,6 +7522,13 @@ banner_text
 ; Dsp_LoadProg reads the LOD from the current GEMDOS directory.  The Makefile
 ; copies the runtime LOD next to this executable.
 trex_dsp_lod_path
+	ifd	TREX_ORDERED
+	; Its own name: this host sends command 10 as the key request and lists
+	; triangles in every BUILD chunk, which only the ORDERED image decodes.
+	; The default name still follows as dead bytes.
+	dc.b	'TREXORD.LOD',0
+	even
+	endc
 	ifd TREX_SSI_PIPELINE
 	dc.b	'TREXPIPE.LOD',0
 	else
@@ -8678,6 +8814,12 @@ stream_probe_base
 	ds.l	1
 stream_probe_count
 	ds.l	1
+	ifd	TREX_ORDERED
+; Survivors' global triangle numbers in draw order, far to near.
+order_list
+	ds.w	TREX_PRIMITIVES
+	even
+	endc
 	endc
 dsp_animation_inflight
 	ds.l	1

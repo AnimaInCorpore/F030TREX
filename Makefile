@@ -41,6 +41,11 @@ PRELIGHT=1
 # packet stage of the image that carries them, so no timing figure of THAT
 # stage may be quoted from a PHASEPROBE build, only the ladder's own bracket.
 PHASEPROBE=0
+# Assemble the draw-order image (OPTIMIZATION.md 4.1f): command 10 returns one
+# depth-bucket key per survivor and BUILD builds the triangles the host lists,
+# in that order.  The occlusion sweep is not assembled.  Pairs only with a
+# -DTREX_ORDERED host; the default host cannot drive it and vice versa.
+ORDERED=0
 
 # One generator for the assembler-visible build switches, used by every DSP
 # rule so a variant can never assemble against a stale or missing config.
@@ -52,7 +57,7 @@ PHASEPROBE=0
 # lands in the same second as its own source is otherwise skipped -- and before
 # the stamp existed nothing tied the image to its configuration at all, so
 # asking for one variant could silently leave you the previous one.
-DSPCONF_ID=$(SSIPROBE)$(WINPROBE)$(PIOBURST)$(PREPASSDIAG)$(OBJLIGHTS)$(PRELIGHT)$(PHASEPROBE)
+DSPCONF_ID=$(SSIPROBE)$(WINPROBE)$(PIOBURST)$(PREPASSDIAG)$(OBJLIGHTS)$(PRELIGHT)$(PHASEPROBE)$(ORDERED)
 DSPCONF_STAMP=./TREX/dsp/build/dspconf-$(DSPCONF_ID).stamp
 # Each configuration assembles to its own image, so asking for one names a file
 # that either exists (and is current) or does not (and is built).  Existence is
@@ -65,12 +70,12 @@ DSPSRC_ID=$(shell cat ./TREX/dsp/trex_dsp.asm ./TREX/dsp/ssi_pkt.asm ./TREX/dsp/
 DSPVARIANT=./TREX/dsp/build/trex_dsp-$(DSPCONF_ID)-$(DSPSRC_ID).lod
 # The ladder image's own name, so measure_phase can never pick up the tracked
 # default by accident: it is the default configuration with PHASEPROBE=1.
-PHASE_LOD=./TREX/dsp/build/trex_dsp-0000111-$(DSPSRC_ID).lod
+PHASE_LOD=./TREX/dsp/build/trex_dsp-00001110-$(DSPSRC_ID).lod
 # The identity of the default: only this configuration may write the tracked
 # ./TREX/dsp/trex_dsp.lod, so a variant build can never leave the wrong image
 # in the tree for `make measure` or a release to pick up.
-DSPCONF_DEFAULT_ID=0000110
-DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\nPRELIGHT\tequ\t%s\nPHASEPROBE\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' '$(PRELIGHT)' '$(PHASEPROBE)' > ./TREX/dsp/build/dspconf.inc
+DSPCONF_DEFAULT_ID=00001100
+DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\nPRELIGHT\tequ\t%s\nPHASEPROBE\tequ\t%s\nORDERED\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' '$(PRELIGHT)' '$(PHASEPROBE)' '$(ORDERED)' > ./TREX/dsp/build/dspconf.inc
 # Extra flags for the DSP assembly run.  Plain DOSBox needs none.  DOSBox-X
 # opens a working-folder prompt and a menu on macOS and then never reaches
 # BUILD.BAT, so it needs:
@@ -229,7 +234,7 @@ trex_m68030_ssi_dma: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_dma.tos
 # real disk access on a Falcon.  It is a data longword, so the patch is
 # layout-identical to the build that was validated in emulation, and
 # trex_shutdown still writes the file once on a clean keypress exit.
-SSI_DMA_LOD=./TREX/dsp/build/trex_dsp-1000000-$(DSPSRC_ID).lod
+SSI_DMA_LOD=./TREX/dsp/build/trex_dsp-10000000-$(DSPSRC_ID).lod
 SSI_DMA_PKG=./TREX/m68030/ssi_dma_package
 
 ssi_dma_package: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ssi_dma.tos
@@ -534,6 +539,22 @@ trex_m68030_stream_probe: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_stream
 ./TREX/m68030/trex_stream.tos: ./TREX/m68030/build/trex_stream.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
+# Draw-order pipeline (OPTIMIZATION.md 4.1f): the DSP returns depth keys, the
+# host sorts and lists survivors far to near, and the rasterizer draws records
+# as they arrive.  Opt-in; trex_ordered.tos loads TREXORD.LOD and no other
+# image, and the default pair is untouched.
+ORDERED_LOD=./TREX/dsp/build/trex_dsp-00001101-$(DSPSRC_ID).lod
+.PHONY: trex_m68030_ordered
+trex_m68030_ordered: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_ordered.tos
+	@$(MAKE) --no-print-directory SSIPROBE=0 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=1 PRELIGHT=1 PHASEPROBE=0 ORDERED=1 trex_dsp
+	cp $(ORDERED_LOD) ./TREX/m68030/TREXORD.LOD
+
+./TREX/m68030/build/trex_ordered.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_ORDERED -o $@ -L ./TREX/m68030/build/trex_ordered.lst
+
+./TREX/m68030/trex_ordered.tos: ./TREX/m68030/build/trex_ordered.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
 ./TREX/m68030/build/trex_framehash.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
 	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_FRAME_HASH -o $@ -L ./TREX/m68030/build/trex_framehash.lst
 
@@ -687,6 +708,7 @@ $(DSPVARIANT): ./TREX/dsp/trex_dsp.asm ./TREX/dsp/ssi_pkt.asm ./TREX/dsp/ssi_crc
 # from that file by the build.
 clean:
 	rm -f ./TREX/m68030/trex_pipe.tos ./TREX/m68030/trex_pipe_hash.tos
+	rm -f ./TREX/m68030/trex_ordered.tos ./TREX/m68030/TREXORD.LOD ./TREX/m68030/build/trex_ordered.o ./TREX/m68030/build/trex_ordered.lst
 	rm -f ./TREX/m68030/trex_stream.tos ./TREX/m68030/build/trex_stream.o ./TREX/m68030/build/trex_stream.lst
 	rm -f ./TREX/m68030/trex_prestep.tos ./TREX/m68030/build/trex_prestep.o ./TREX/m68030/build/trex_prestep.lst
 	rm -f ./TREX/m68030/trex_pipe_nocrc.tos ./TREX/m68030/build/trex_pipe_nocrc.o ./TREX/m68030/build/trex_pipe_nocrc.lst
@@ -753,7 +775,7 @@ clean:
 
 # Live packet DMA with cooperative DSP/CPU overlap; does not replace the
 # host-port default before physical-Falcon validation.
-SSI_PIPE_LOD=./TREX/dsp/build/trex_dsp-2000110-$(DSPSRC_ID).lod
+SSI_PIPE_LOD=./TREX/dsp/build/trex_dsp-20001100-$(DSPSRC_ID).lod
 .PHONY: trex_ssi_pipeline
 trex_ssi_pipeline: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_pipe.tos
 	@$(MAKE) --no-print-directory SSIPROBE=2 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=1 PRELIGHT=1 PHASEPROBE=0 trex_dsp

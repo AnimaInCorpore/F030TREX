@@ -74,7 +74,9 @@ projection. Section 2 has the measured proportions for each choice.
 
 The current implementation uses the Falcon DSP host port through XBIOS
 `Dsp_BlkUnpacked`, except for the animation transactions, which poll the port
-per word for the reason in section 2.1. The DSP program is in
+per word for the reason in section 2.1. An opt-in draw-order variant in which
+the host lists survivors far to near and draws records as they arrive is
+built and measured in section 4.1f; it is not the default. The DSP program is in
 [`TREX/dsp/trex_dsp.asm`](TREX/dsp/trex_dsp.asm), and the M68030 front end is
 in [`TREX/m68030/trex_m68030.s`](TREX/m68030/trex_m68030.s).
 
@@ -5560,6 +5562,125 @@ python3 tools/patch_data_flag.py hatari_runs/stream_naive.tos \
   TREX/m68030/build/trex_stream.lst stream_probe_ahead 0 1
 ```
 
+### 4.1f Draw-order pipeline: built, byte-identical, -58 / -62 ms (2026-11-18)
+
+4.1e measured what drawing during the packet stage would be worth if records
+arrived in painter's order. This is that pipeline, built. It is **opt-in**
+(`make trex_m68030_ordered`: `trex_ordered.tos` with `TREXORD.LOD`); the
+default executable and the default DSP image are byte-identical to before
+(SHA256 `d002e5c6...9b40` and `14789e0a...5859`), as are the SSI pipeline,
+incremental-prestep and stream-probe builds.
+
+**The split of work.** The DSP does not sort. Sorting needs a list the DSP has
+no room for, and the host already owns an exact, cheap sort: its Ordering
+Table. So the order is produced in three steps.
+
+1. **Keys.** Command 10 of the `ORDERED=1` image walks the prelight table the
+   FINISH window just produced and sends, for every surviving triangle in
+   ascending global order, one word `bucket<<12 | global number`. The bucket
+   is `gpu_submit_ot`'s rule applied to the average-Z key the records carry:
+   the 24-bit key as unsigned, shifted right by `OT_KEY_SHIFT`, saturated at
+   `OT_LENGTH-1`. A word with bit 23 set ends the list. The host port paces
+   the loop, so the walk hides behind the transfer.
+2. **Sort.** `order_fetch_and_sort` links each survivor at the head of its
+   bucket and then walks the buckets far to near into `order_list`. That is
+   `gpu_submit_ot` followed by `gpu_rasterize_ot`'s walk, on the same keys in
+   the same submission order, so the within-bucket LIFO order is reproduced
+   by construction.
+3. **Listed build.** Each `BUILD_TRIANGLES` chunk names its triangles: after
+   the unchanged count and position words come three words per triangle --
+   its global number, then its two packed UV words. The DSP reloads the
+   resident index triple by that number (`prepass_load_triangle`), reads the
+   prelight word by that number, and builds the unchanged eighteen-word
+   record. Records therefore arrive in draw order, and 4.1e's stream
+   machinery draws them as they arrive, fetching ahead while the DSP works.
+
+**Protocol and buffer ownership.**
+
+- Command 10 has no mode word in this image and no fixed reply length. It
+  must be sent after the FINISH acknowledgement, which is when the prelight
+  table is final; it does not modify the table or the projected vertices.
+- A chunk is `3 + 3*count` words out instead of `3 + 2*count`. The second
+  header word is the chunk's position in the draw list; the DSP ignores it.
+  Chunks carry survivors only, so a frame is about 36 chunks instead of 85
+  and no chunk is empty.
+- The record keeps its chunk-local index in w0. The host turns it into the
+  global triangle number through `order_list` at the chunk's position; A4
+  carries that base through the unpack, which keeps the direct unpack body at
+  exactly 256 bytes.
+- DSP: `chunk_ids`, 32 words at `shade_cache_end`, holds the chunk's global
+  numbers; it lies in the words between the normal-light cache and the
+  retired prepass masks and is live only during BUILD. R3 is the cursor over
+  it, stepped by `triangle_advance`; R2 is reloaded per triangle; R0 is
+  scratch for the prelight read. The occlusion prepass is not assembled
+  (`NOPREPASS`), the image ends at **P:`$07EF`**, 464 words below `$09BF`.
+- Host: `order_list` is 2,724 words. The Ordering Table and its node buffer
+  are reused for the sort; the walk clears the buckets it visits and
+  `gpu_clear_ot` clears the table every frame as before.
+- The host image loads `TREXORD.LOD` and no other name, because neither side
+  can drive the other's default counterpart.
+
+**Not available in this build:** the span validator's copy path, the
+occlusion prepass, the SSI pipeline (assembly errors for the last two) and the
+no-DSP host fallback, which still expects the Ordering Table walk.
+
+**Validation.** All **512 frame hashes** of the choreography and the moving
+hold match the default build's, the frame-100 checkpoint is
+`d89958b3...3d16` on both profiles, and every 265-frame run writes
+9,049,666 pixels and ends with 1,149 packets. The hash run ends at 1,222
+survivors. The DOS assembler reports 0 errors and 0 warnings for both
+configurations.
+
+**Measured**, identical 265-frame diagnostic prefixes, Hatari `2.6.1-devel
+(Nov 18 2026)`, fork source `c5d5bf34`, TOS 4.02, 16 MHz 68030, corrected
+32 MHz DSP, 4 MiB ST RAM. Raw counters and input hashes are in
+[`docs/performance/ordered-2026-11-18.json`](docs/performance/ordered-2026-11-18.json).
+These are emulator measurements, not physical-Falcon timings, and the two
+profiles must not be mixed.
+
+| Build | Cycle-exact, contention on | MMU ledger |
+|---|---:|---:|
+| Default | 599.70 ms / 1.668 FPS | 425.68 ms / 2.349 FPS |
+| 4.1e probe, fetch ahead (wrong order) | 553.40 ms / 1.807 FPS | 373.47 ms / 2.678 FPS |
+| Draw-order pipeline, 258-byte unpack body | 543.76 ms / 1.839 FPS | 366.09 ms / 2.732 FPS |
+| **Draw-order pipeline** | **541.45 ms / 1.847 FPS** | **364.17 ms / 2.746 FPS** |
+
+That is **-58.2 ms and +10.8% FPS** on the cycle-exact profile and
+**-61.5 ms and +16.9% FPS** on the MMU ledger, at a byte-identical picture.
+As in 4.1e the stage timers are not comparable one for one: the packet stage
+contains the drawing done while chunks are fetched (160.7 / 155.9 ms) and the
+raster stage only what is drawn after the next animation is sent
+(350.3 / 180.0 ms); Ordering Table insertion is gone.
+
+It beats its own ceiling probe by 11.9 and 9.3 ms, because the probe still
+paid for 85 index-order chunks and the UV words of culled triangles. Bringing
+the unpack body back from 258 to 256 bytes is worth 2.3 and 1.9 ms on its own,
+which is 3.9's rule once more.
+
+**Open.**
+
+- No physical-Falcon timing. 2.7a predicts the packet stage is a larger share
+  of the hardware frame, which would make this worth more there; that is a
+  prediction.
+- Whether to make it the default. It replaces a prepass that is disarmed and
+  yields nothing, but the release, the packages and the fallback path would
+  have to follow.
+- The key word could carry the record's average-Z key, which would let w1
+  leave the record; `make_triangle_zkey` now runs twice per survivor.
+
+**Reproduction.**
+
+```sh
+make DOSBOX=/path/to/DOSBox trex_m68030 trex_m68030_ordered
+python3 tools/measure_frames.py TREX/m68030/trex_ordered.tos \
+  TREX/m68030/TREXORD.LOD hatari_runs/ordered-ce --dsp-name TREXORD.LOD \
+  --cpu-core cycle-exact --videl-contention on --frames 265 --timeout 1500
+```
+
+For the hash gate assemble the host with `-DTREX_ORDERED -DTREX_FRAME_HASH`,
+run it with `--frames 512` against the same image and compare `frmhash.res`
+with the default hash build's.
+
 ### 4.2 DSP memory layout and the Falcon P/X/Y overlay
 
 The current X layout has two mutually exclusive owners above the resident
@@ -8786,6 +8907,13 @@ The open roadmap, in recommended order (expected effects from the section
     within-bucket order, the sorted list on the host before the UV sends,
     and the 512-frame hash gate.  It needs neither SSI/DMA nor a frame of
     latency, and it competes with item 15 for the same wait.
+    **Built and measured -- see section 4.1f.**  The DSP sends one depth key
+    per survivor, the host sorts them with its own Ordering-Table rule and
+    lists the survivors in every BUILD chunk, and the rasterizer draws
+    records as they arrive.  All 512 frame hashes match.  **599.7 -> 541.5 ms
+    cycle-exact (+10.8% FPS) and 425.7 -> 364.2 ms on the MMU ledger
+    (+16.9% FPS).**  Opt-in (`make trex_m68030_ordered`); promotion to the
+    default and a physical-Falcon timing are open.
 
 ## 11. References
 

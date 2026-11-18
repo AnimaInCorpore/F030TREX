@@ -31,7 +31,8 @@ def main():
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--dsp-name", choices=("trex_dsp.lod", "TREX.LOD",
                                               "TREXSSI.LOD", "TREXPHAS.LOD",
-                                              "TREXDMA.LOD", "TREXPIPE.LOD"),
+                                              "TREXDMA.LOD", "TREXPIPE.LOD",
+                                              "TREXORD.LOD"),
                         default="trex_dsp.lod", help="binary-specific DSP loader name")
     parser.add_argument("--cpu-core", choices=("mmu", "cycle-exact"),
                         default="mmu", help="MMU ledger or cycle-exact CPU model")

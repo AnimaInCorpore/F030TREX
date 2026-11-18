@@ -68,6 +68,14 @@
 ;       seven bits of the mode word become phase_mask and the reply keeps the
 ;       two-word shape.  See "Per-phase BUILD timing ladder" below.
 ;
+;   ORDERED=1 image (OPTIMIZATION.md 4.1f):
+;       CMD_PREPASS (10) takes no mode word.  It returns one word per
+;       surviving triangle, bucket<<12 | global number in ascending global
+;       order, then a terminator with bit 23 set.  CMD_BUILD_TRIANGLES
+;       receives count and one ignored word, followed by count *
+;       (global number, UV word A, UV word B), and builds exactly those
+;       triangles in that order; its reply is unchanged.
+;
 ;   CMD_GET_TRIANGLES:
 ;       returns ACK_GET_TRIANGLES, survivor count, and survivor count *
 ;       SPAN_RECORD_WORDS.  Rejected triangles send nothing.  Each record is
@@ -82,6 +90,24 @@
 
 ; SSIPROBE=2 selects live packet DMA; 1 is the ramp probe.
 SSIRECORD	equ	SSIPROBE/2
+
+; ORDERED=1 is the draw-order image (OPTIMIZATION.md 4.1f).  Command 10
+; returns one depth-bucket key per surviving triangle instead of running the
+; occlusion prepass, and BUILD_TRIANGLES builds the triangles the host LISTS,
+; in the listed order, instead of a contiguous index range.  The host sorts
+; the keys with its own Ordering-Table rule and lists survivors far to near,
+; so records arrive in draw order and can be drawn as they arrive.  The
+; occlusion sweep is not assembled, which is where the program words come
+; from.  ASM56000 conditionals are kept flat here on purpose: PRELIGHT_SEQ is
+; "prelight without ORDERED", NOPREPASS is "no occlusion sweep".
+NOPREPASS	equ	SSIRECORD+ORDERED
+PRELIGHT_SEQ	equ	PRELIGHT-ORDERED
+	IF	ORDERED*SSIRECORD
+	FAIL	'ORDERED and the SSI record transport are separate images'
+	ENDIF
+	IF	ORDERED*(1-PRELIGHT)
+	FAIL	'ORDERED needs the prelight table'
+	ENDIF
 
 TREX_VERTICES	= 1376
 TREX_PRIMITIVES	= 2724
@@ -869,7 +895,7 @@ command_finish_animated_frame
 	move	y:prepass_armed,a
 	tst	a
 	jeq	<finish_no_prepass
-	IF	!SSIRECORD
+	IF	!NOPREPASS
 	jsr	<prepass_run
 	ENDIF
 finish_no_prepass
@@ -1050,10 +1076,22 @@ build_no_kill_cursor_reset
 	tst	a
 	jeq	<build_no_uvs
 	move	a1,x0
+	IF	!ORDERED
 	add	x0,a
 	move	a1,x0
+	ENDIF
 	move	#chunk_uvs,r0
+	IF	ORDERED
+	; Three words per listed triangle: its global number, then its UV pair.
+	move	#chunk_ids,r5
+	ENDIF
 	do	x0,build_uv_loop
+	IF	ORDERED
+	jsr	<receive_word
+	move	x0,x:(r5)+
+	jsr	<receive_word
+	move	x0,x:(r0)+
+	ENDIF
 	jsr	<receive_word
 	move	x0,x:(r0)+
 build_uv_loop
@@ -1083,6 +1121,11 @@ build_no_uvs
 	; BUILD's callees leave N2 alone.  A rejected entry can skip the
 	; three resident index words with one AGU update instead of unpacking.
 	move	#3,n2
+	ENDIF
+	IF	ORDERED
+	; R3 survives every callee and triangle_advance steps it once per
+	; triangle, so it serves as the cursor over the listed global numbers.
+	move	#chunk_ids,r3
 	ENDIF
 
 	move	y:triangle_count,x0
@@ -1143,7 +1186,13 @@ build_prepass_kill_advance_store
 	jne	<triangle_culled
 	ENDIF
 build_triangle_not_killed
-	IF	PRELIGHT
+	IF	ORDERED
+	; The host lists survivors only, so there is no reject test: reload R2
+	; from the listed global number and unpack through the shared routine.
+	move	x:(r3),x0
+	jsr	<prepass_load_triangle
+	ENDIF
+	IF	PRELIGHT_SEQ
 	; FINISH already ran the exact area/near/box tests while the CPU drew
 	; the previous frame.  Bit 23 marks a rejected triangle; zero lighting
 	; remains a valid survivor.  Test AFTER advancing the armed kill cursor
@@ -1198,8 +1247,20 @@ build_triangle_not_killed
 	; the make_triangle_shade call the exposed packet stage used to pay
 	; for.  Each TFR's parallel slot stores the PREVIOUS nibble -- the
 	; read-at-start rule, as in the index unpack.
+	ENDIF
+	IF	ORDERED
+	move	x:(r3),a
+	move	#prelight_table,x0
+	add	x0,a
+	move	a1,r0
+	move	#>$f,x0
+	move	x:(r0),a
+	ENDIF
+	IF	PRELIGHT_SEQ
 	move	x:(r3),a
 	move	#>$f,x0
+	ENDIF
+	IF	PRELIGHT
 	tfr	a,b
 	and	x0,b
 	rep	#4
@@ -2886,7 +2947,63 @@ command_prepass
 	move	a1,x0
 	jsr	<send_word
 	jmp	<main_loop
-	ELSE
+	ENDIF
+
+	IF	ORDERED
+; Command 10 in the ORDERED image: draw-order keys.  Walks the prelight table
+; the FINISH window just produced and sends, for every surviving triangle in
+; ascending global order, bucket<<12 | global number, where bucket is the
+; host's Ordering-Table rule applied to the same average-Z key BUILD returns:
+; the 24-bit key taken as unsigned, shifted right by OT_KEY_SHIFT, saturated
+; at OT_LENGTH-1.  Bit 23 is never set in a key word; the terminator has it.
+; The host port paces the loop, so the walk hides behind the transfer.
+command_prepass
+	move	y:<triangles_processed,x0
+	move	x0,y:<project_temp_x
+	move	#triangle_indices,r2
+	move	#prelight_table,r3
+	move	#3,n2
+	clr	a
+	move	a1,y:triangle_base
+	move	y:<triangle_list_count,a
+	tst	a
+	jeq	<order_keys_done
+	move	a1,x0
+	do	x0,order_keys_end
+	jset	#23,x:(r3),order_keys_skip
+	jsr	<prepass_unpack_indices
+	jsr	<make_triangle_zkey
+	clr	a
+	move	y:triangle_zkey,a1
+	rep	#OT_KEY_SHIFT
+	lsr	a
+	move	#>OT_LENGTH-1,x0
+	cmp	x0,a
+	tgt	x0,a
+	rep	#12
+	asl	a
+	move	y:triangle_base,x0
+	add	x0,a
+	move	a1,x0
+	jsr	<send_word
+	jmp	<order_keys_next
+order_keys_skip
+	move	(r2)+n2
+order_keys_next
+	move	y:triangle_base,a
+	move	#>1,x0
+	add	x0,a	(r3)+
+	move	a1,y:triangle_base
+order_keys_end
+order_keys_done
+	move	y:<project_temp_x,x0
+	move	x0,y:<triangles_processed
+	move	#$800000,x0
+	jsr	<send_word
+	jmp	<main_loop
+	ENDIF
+
+	IF	!NOPREPASS
 command_prepass
 	jsr	<receive_word
 
@@ -3529,7 +3646,7 @@ prepass_load_done
 ; and start bit.  Y0 is deliberately untouched -- that caller keeps its row
 ; coordinate there across the call -- while Y1 is clobbered now; neither
 ; caller holds a live value in Y1.
-	IF	!SSIRECORD
+	IF	!NOPREPASS
 prepass_kill_address
 	move	#>prepass_kill,b
 prepass_bit_address
@@ -4058,6 +4175,9 @@ shade_cache_tags	=	phase_light_directions_x+18
 shade_cache_r		=	shade_cache_tags+SHADE_CACHE_ENTRIES
 shade_cache_g		=	shade_cache_r+SHADE_CACHE_ENTRIES
 shade_cache_end		=	shade_cache_g+SHADE_CACHE_ENTRIES
+; ORDERED only: the global triangle numbers of the chunk being built, one
+; per listed triangle, in the words between the cache and prepass_scratch.
+chunk_ids		=	shade_cache_end
 
 ; -----------------------------------------------------------------------------
 ; Occlusion prepass working set
