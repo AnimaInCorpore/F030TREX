@@ -99,8 +99,9 @@ prefix, with all 512 frame hashes identical to the reference. The plain
 draw-order pipeline (`TREX_PLAIN_ORDER`, section 4.1g) measured 540.9 ms and
 363.1 ms on the same two profiles. An opt-in 640x400 interlaced pair (TOS's
 own true-colour RGB mode, rendered in full, 14 MiB of ST-RAM; section 6.6a)
-measures **681.7 ms / 1.47 FPS** and **613.1 ms / 1.63 FPS**; it is not the
-default. Everything below this paragraph in
+measured **681.7 ms / 1.47 FPS** and **613.1 ms / 1.63 FPS**, and with the
+band delta clear armed (section 2.5b) **668.5 ms / 1.50 FPS** and
+**574.2 ms / 1.74 FPS**; it is not the default. Everything below this paragraph in
 section 2, and every section outside 4.1e-4.1g and 7.4g-7.4h, was measured on
 the previous index-order pipeline, which `TREX_LEGACY_OT` still builds and
 which measures 599.7 ms and 425.7 ms. No physical Falcon has run either
@@ -3786,6 +3787,90 @@ python3 tools/measure_frames.py TREX/m68030/trex_hires_fbseq.tos \
 python3 tools/clear_overlap.py hatari_runs/hires-fbseq/fbseq.res --geometry hires
 ```
 
+### 2.5b The band delta clear at 640x400: faster, and now armed there (2026-11-18)
+
+2.5's band clear lost at 240x224 because its per-packet bookkeeping costs
+more than the 8 ms it saves. That bookkeeping does not grow with the
+resolution and the clear does, so it was re-taken on the 640x400 build of
+6.6a, where 2.5a measured the band shape at 33.9% of a 65.4 ms clear.
+
+**A gap first.** Only `rasterize_packet` marks bands (`delta_mark_packet`).
+Since the span stream became the default (7.4h), 160 of every 256
+qualified-opaque triangles never pass through it: `span_stream_draw` draws
+them from the DSP's stream, so with the flag armed their pixels would never
+be cleared. The default build has the same latent gap; it ships with the
+flag off, and nothing here changes it (its executables are byte-identical).
+For `TREX_HIRES`, `span_stream_draw` now tests `delta_clear_enabled` once
+per triangle and, when armed, runs `span_stream_draw_marked`: the same draw
+loop plus the span's first and last pixel compared into a per-triangle x
+range (four instructions and two branches per span); the rows are the first
+and the last span's, since spans arrive in row order. After the terminator
+the bands are widened once, as `delta_mark_packet` widens them.
+
+**Picture gate: every frame.** The 2.5a probe built for 640x400
+(`trex_hires_fbseq.tos`), run with the flag at 0 and patched to 1 (one byte
+by `cmp -l`), wrote **byte-identical `fbseq.res` files for all 265 frames**
+(135,680,000 bytes each), so the bands cover every pixel any triangle --
+streamed or not -- leaves behind. The armed run cleared 12,385,168 longwords
+(46,736 a frame, 36.5% of the screen, just above 2.5a's pixel-hull lower
+bound of 33.9%); the unarmed run cleared none through the delta path.
+
+**Measured**, one linked executable, `delta_clear_enabled` 0 against a
+one-byte patch to 1, identical 265-frame prefixes, Hatari `2.6.1-devel`,
+fork source `c5d5bf34`, TOS 4.02, 14 MiB, `--monitor rgb`. Emulator
+measurements, not physical-Falcon timings; the profiles must not be mixed.
+
+| 640x400, same layout | Cycle-exact, contention on | MMU ledger |
+|---|---:|---:|
+| Band clear off | 685.9 ms / 1.458 FPS | 613.5 ms / 1.630 FPS |
+| **Band clear on** | **668.5 ms / 1.496 FPS** | **574.2 ms / 1.742 FPS** |
+
+| Stage, cycle-exact | Off | On | Delta |
+|---|---:|---:|---:|
+| Packet (DSP readback, build) | 453.3 ms | 446.7 ms | -6.6 ms |
+| Clear | 65.4 ms | 24.9 ms | **-40.5 ms** |
+| Raster | 153.6 ms | 183.4 ms | **+29.8 ms** |
+| **Frame** | **685.9 ms** | **668.5 ms** | **-17.4 ms (+2.6% FPS)** |
+
+On the MMU ledger the frame gains 39.3 ms (+6.8%): the clear saves the same
+40.7 ms and the bookkeeping costs only 7.4 ms there, because that profile
+charges no instruction execution time -- the cycle-exact profile is the one
+that sees 2.5's instruction-fetch cost. **The sign is the opposite of
+240x224's on both profiles**, for the reason the section opened with: the
+saving scaled with the screen (four times the area) and the bookkeeping did
+not. The packet stage moving by 6.6 ms is the frame's balance shifting, not
+work removed from it.
+
+**Armed in the 640x400 build.** `make trex_m68030_hires` now assembles with
+`-DTREX_DELTA_ON`, and the resulting `trex_hires.tos` is byte-identical to
+the patched executable measured above, so its figures are the "on" row.
+The default and release builds keep the flag at 0 and are unchanged.
+
+**Layout note.** Adding `span_stream_draw_marked` moved the unarmed
+640x400 build from 6.6a's 681.7 to 685.9 ms cycle-exact (+4.1 ms in the
+raster stage, 2.1's layout sensitivity), at an unchanged picture.
+
+**What is left.** 2.5a's ideal clear would wipe 1.1% of the screen instead
+of these bands' 36.5%, so up to another ~24 ms of clear remains, and the
+bookkeeping (+29.8 ms) is now the larger term. The DSP-side marking route
+of 2.5 would remove the bookkeeping from the 68030; unbuilt.
+
+Raw counters, commands and input hashes are in
+[`docs/performance/hires-deltaclear-2026-11-18.json`](docs/performance/hires-deltaclear-2026-11-18.json).
+
+**Reproduction.**
+
+```sh
+make DOSBOX=/path/to/DOSBox trex_m68030_hires trex_m68030_hires_fbseq
+python3 tools/measure_frames.py TREX/m68030/trex_hires.tos \
+  TREX/m68030/TREXHIRS.LOD hatari_runs/hires-dc1-ce --dsp-name TREXHIRS.LOD \
+  --memsize 14 --cpu-core cycle-exact --videl-contention on --frames 265 \
+  --timeout 6000
+cp TREX/m68030/trex_hires.tos hatari_runs/hires_dc0.tos
+python3 tools/patch_data_flag.py hatari_runs/hires_dc0.tos \
+  TREX/m68030/build/trex_hires.lst delta_clear_enabled 0 1
+```
+
 ### 2.6 Frame-rate overlay — implemented, release only
 
 `-DTREX_FPS` draws a five-cell `NN.NN` frames-per-second field into the top-left
@@ -7075,6 +7160,11 @@ both squeezed by 0.8 against a real Falcon.
 
 ### 6.6a 640x400 interlaced: opt-in, 681.7 ms (2026-11-18)
 
+**Update (2.5b):** this build now arms the band delta clear and measures
+**668.5 ms / 1.50 FPS** cycle-exact and **574.2 ms / 1.74 FPS** on the MMU
+ledger. The figures below are the unarmed state in which it was first
+measured.
+
 `make DOSBOX=/path/to/DOSBox trex_m68030_hires` builds an opt-in pair that
 renders the whole of a **640x400 interlaced true-colour** RGB/TV mode:
 `trex_hires.tos` (`-DTREX_HIRES`) and the `HIRES=1` DSP image (configuration
@@ -7161,9 +7251,10 @@ from 62.3 KB to 263.9 KB a frame, survivors in the last frame from 500 to 522
 (triangles too thin to cover a pixel center at 240x224 now do). **The frame
 costs 1.87x for 4.71x the pixels**: the DSP's per-triangle term does not grow,
 and the 68030 draws most pixels in the four-instruction stream loop. The
-clear quadruples with the screen area: this build clears the whole screen
-(`delta_clear_enabled` = 0, as in the default). 2.5a measures that only 1.1%
-of it would need clearing if the new frame's coverage were known.
+clear quadruples with the screen area: as first measured, this build cleared
+the whole screen (`delta_clear_enabled` = 0, as in the default). 2.5a
+measures that only 1.1% of it would need clearing if the new frame's
+coverage were known, and 2.5b arms the band clear here.
 
 Two share points, same executable, cycle-exact with contention:
 

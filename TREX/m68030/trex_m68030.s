@@ -6097,6 +6097,14 @@ offset_draw_packet
 ; Out: A1 = first unit after the terminator; the pixels are added to
 ;      raster_pixel_count.  Clobbers D0-D5/A4/A6.
 span_stream_draw
+	ifd	TREX_HIRES
+	; With the band delta clear armed (2.5b), a streamed triangle must
+	; widen the band table like rasterize_packet's delta_mark_packet does,
+	; or its pixels would never be cleared.  One test per triangle; the
+	; marking loop is a separate copy, so the unarmed loop is unchanged.
+	tst.l	delta_clear_enabled
+	bne	span_stream_draw_marked
+	endc
 	moveq	#0,d0
 	moveq	#0,d1
 	moveq	#0,d2
@@ -6138,6 +6146,86 @@ span_stream_draw
 .draw_done
 	add.l	d5,raster_pixel_count
 	rts
+
+	ifd	TREX_HIRES
+; span_stream_draw with band marking (OPTIMIZATION.md 2.5b).  The same draw
+; loop plus, per span, the triangle's leftmost and rightmost pixel; its rows
+; are the first span's and the last span's, since spans arrive in row order.
+; Once per triangle the bands those rows touch are widened exactly as
+; delta_mark_packet widens them.  Also clobbers A2 (last row), D6/D7 (x
+; range), which are saved.
+span_stream_draw_marked
+	movem.l	d6-d7/a2,-(sp)
+	moveq	#0,d0
+	moveq	#0,d1
+	moveq	#0,d2
+	moveq	#0,d5
+	move.w	#$7fff,d6		; leftmost pixel
+	moveq	#-1,d7			; rightmost pixel; negative = no span
+	tst.w	(a1)
+	bmi	.mark_span		; a terminator alone: nothing drawn
+	move.w	2(a1),d3
+	andi.w	#$1ff,d3
+	move.w	d3,dc_stream_ymin	; the first span's row
+.mark_span
+	moveq	#0,d4
+	move.w	(a1)+,d4		; length - 1
+	bmi	.mark_done
+	move.w	(a1)+,d3
+	move.w	d3,d2
+	andi.w	#$fe00,d3		; bank * 512 bytes
+	lea	(0,a0,d3.w),a6		; this span's CLUT bank
+	andi.l	#$1ff,d2		; y
+	move.l	d2,a2			; the last span's row, once the loop ends
+	mulu.w	#FRAMEBUFFER_STRIDE,d2
+	lea	(0,a3,d2.l),a4
+	move.w	(a1)+,d2		; x
+	lea	(0,a4,d2.w*2),a4		; first pixel
+	cmp.w	d2,d6
+	ble	.mark_lo
+	move.w	d2,d6
+.mark_lo
+	add.w	d4,d2			; last pixel
+	cmp.w	d2,d7
+	bge	.mark_hi
+	move.w	d2,d7
+.mark_hi
+	moveq	#0,d2
+	addq.l	#1,d5
+	add.l	d4,d5
+.mark_pixel
+	move.w	(a1)+,d1		; texel offset, V << 8 | U
+	move.b	(0,a5,d1.l),d0		; texel -> palette index
+	move.w	(0,a6,d0.l*2),(a4)+		; shaded colour -> framebuffer
+	dbra	d4,.mark_pixel
+	bra	.mark_span
+.mark_done
+	add.l	d5,raster_pixel_count
+	tst.w	d7
+	bmi	.mark_out		; no span, no band
+	moveq	#0,d2
+	move.w	dc_stream_ymin,d2
+	move.l	a2,d3
+	lsr.l	#DC_BAND_SHIFT,d2		; first band
+	lsr.l	#DC_BAND_SHIFT,d3		; last band
+	sub.l	d2,d3			; band count - 1
+	move.l	dc_table_base,a4
+	lea	(0,a4,d2.l*4),a4		; DC_ENTRY = 4 bytes per band
+.mark_band
+	cmp.w	(a4),d6
+	bge	.mark_band_lo
+	move.w	d6,(a4)
+.mark_band_lo
+	cmp.w	2(a4),d7
+	ble	.mark_band_hi
+	move.w	d7,2(a4)
+.mark_band_hi
+	addq.l	#4,a4
+	dbra	d3,.mark_band
+.mark_out
+	movem.l	(sp)+,d6-d7/a2
+	rts
+	endc
 	endc
 ; Walk the OT from far to near and invoke the software triangle backend for
 ; every linked packet.  The packet/node format is deliberately independent of
@@ -9095,6 +9183,11 @@ dc_band_table
 ; they cannot end up on different pages.
 dc_table_base
 	dc.l	0
+	ifd	TREX_HIRES
+dc_stream_ymin
+	dc.w	0
+	even
+	endc
 
 ; The packet pointer rasterize_packet saves on entry, because A0 no longer
 ; holds it when the bookkeeping runs.
