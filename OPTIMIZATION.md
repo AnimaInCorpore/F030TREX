@@ -100,8 +100,8 @@ draw-order pipeline (`TREX_PLAIN_ORDER`, section 4.1g) measured 540.9 ms and
 363.1 ms on the same two profiles. An opt-in 640x400 interlaced pair (TOS's
 own true-colour RGB mode, rendered in full, 14 MiB of ST-RAM; section 6.6a)
 measured **681.7 ms / 1.47 FPS** and **613.1 ms / 1.63 FPS**, and with the
-band delta clear armed (section 2.5b) **668.5 ms / 1.50 FPS** and
-**574.2 ms / 1.74 FPS**; it is not the default. Everything below this paragraph in
+band delta clear marked by the DSP (sections 2.5b and 2.5c) **648.3 ms /
+1.54 FPS** and **583.5 ms / 1.71 FPS**; it is not the default. Everything below this paragraph in
 section 2, and every section outside 4.1e-4.1g and 7.4g-7.4h, was measured on
 the previous index-order pipeline, which `TREX_LEGACY_OT` still builds and
 which measures 599.7 ms and 425.7 ms. No physical Falcon has run either
@@ -3841,10 +3841,11 @@ saving scaled with the screen (four times the area) and the bookkeeping did
 not. The packet stage moving by 6.6 ms is the frame's balance shifting, not
 work removed from it.
 
-**Armed in the 640x400 build.** `make trex_m68030_hires` now assembles with
-`-DTREX_DELTA_ON`, and the resulting `trex_hires.tos` is byte-identical to
-the patched executable measured above, so its figures are the "on" row.
-The default and release builds keep the flag at 0 and are unchanged.
+**Armed in the 640x400 build.** `make trex_m68030_hires` assembled with
+`-DTREX_DELTA_ON`, byte-identical to the patched executable measured above.
+**Superseded by 2.5c**: the build now lets the DSP mark the bands
+(`delta_clear_enabled` = 2). The default and release builds keep the flag
+at 0 and are unchanged.
 
 **Layout note.** Adding `span_stream_draw_marked` moved the unarmed
 640x400 build from 6.6a's 681.7 to 685.9 ms cycle-exact (+4.1 ms in the
@@ -3869,6 +3870,107 @@ python3 tools/measure_frames.py TREX/m68030/trex_hires.tos \
 cp TREX/m68030/trex_hires.tos hatari_runs/hires_dc0.tos
 python3 tools/patch_data_flag.py hatari_runs/hires_dc0.tos \
   TREX/m68030/build/trex_hires.lst delta_clear_enabled 0 1
+```
+
+### 2.5c The bands marked by the DSP: 668.8 -> 648.3 ms at 640x400 (2026-11-18)
+
+2.5b's band clear saved 40.5 ms of clear at 640x400 and paid 29.8 ms of
+68030 bookkeeping for it (cycle-exact). 2.5 named the way out: let the DSP,
+which already holds every built triangle's geometry, mark the bands. This
+is that route, built for `TREX_HIRES` only.
+
+**DSP (`HIRES=1` image).** A 50-band table, one (xmin, xmax) word pair per
+8-row band, lives in the spare X words after `prelight_table`
+(`band_table`, assembled empty: xmin `$FFF`, xmax 0). BUILD calls
+`band_mark` for every triangle it builds -- record and stream alike --
+just before `make_triangle_span`: `make_triangle_bbox` clamps the three
+projected corners, and the bands from `ymin >> 3` to `ymax >> 3` are widened
+to the box. A new control command, `CMD_GET_BANDS` = `$44` (decoded only in
+this image, where neither SSI probe occupies the `$4x` range), answers
+`ACK_BANDS` = `$700012` and the 100 words, then empties the table. The
+image ends at P:`$09B4` (11 words below the ceiling).
+
+**Host.** `delta_clear_enabled` now has three values in this build: 0 full
+clear, 1 the 68030 marks (2.5b), **2 the DSP marks**. In mode 2,
+`rasterize_packet` and `span_stream_draw` skip their marking, and right
+after `dsp_packets_finish` -- every chunk of the frame acknowledged,
+nothing in flight -- `dsp_fetch_bands` reads the table with
+`dsp_block_handshake` (one word out, 101 in) into the band page of the
+buffer this frame is drawn into. A wrong acknowledgement fills every band
+with the full width (over-clearing, never a ghost) and counts in
+`dsp_bands_errors`.
+
+**One defect, caught by the gate.** The first image shifted the band index
+with `rep #3 / asr`, which leaves the shifted-out bits in A0/B0; the
+following `sub a,b` then borrowed across them and dropped a band at band
+boundaries, and `asl a` carried one into the table address. The frame-
+sequence gate failed (frame 100 `bfd0753d...` instead of `d6d0c18b...`,
+1,293,568 longwords cleared instead of ~12.4 million). A `move a1,a` /
+`move b1,b` after the shifts clears the fractions; everything below is the
+repaired image.
+
+**Picture gate: every frame.** The 640x400 frame-sequence probe with the
+flag at 0 and patched to 2 wrote **byte-identical `fbseq.res` files for all
+265 frames**. Mode 2 clears 12,496,232 longwords over the prefix, slightly
+more than mode 1's 12,385,168: a triangle's clamped box encloses its
+vertices, the 68030's hull only its chain ends.
+
+**Measured**, one linked executable with the flag patched to 0, 1 and 2
+(one byte each by `cmp -l`), one DSP image, identical 265-frame prefixes,
+Hatari `2.6.1-devel`, fork source `c5d5bf34`, TOS 4.02, 14 MiB,
+`--monitor rgb`. Emulator measurements, not physical-Falcon timings; the
+profiles must not be mixed.
+
+| 640x400, one layout | Cycle-exact, contention on | MMU ledger |
+|---|---:|---:|
+| 0: full clear | 688.4 ms / 1.453 FPS | 623.8 ms / 1.603 FPS |
+| 1: bands, 68030 marks | 668.8 ms / 1.495 FPS | 584.3 ms / 1.711 FPS |
+| **2: bands, DSP marks** | **648.3 ms / 1.542 FPS** | **583.5 ms / 1.714 FPS** |
+
+| Stage, cycle-exact | 0 | 1 | 2 |
+|---|---:|---:|---:|
+| Packet (DSP readback, build) | 467.1 ms | 458.8 ms | 467.2 ms |
+| Clear | 65.5 ms | 25.0 ms | 25.2 ms |
+| Raster | 142.1 ms | 171.5 ms | **142.5 ms** |
+
+- **Cycle-exact: -20.5 ms against 68030 marking, -40.1 ms against the full
+  clear** (+3.1% / +6.2% FPS). The raster stage is back to the unmarked
+  142 ms: the 68030's bookkeeping is gone entirely.
+- **MMU ledger: a tie with 68030 marking** (-0.8 ms). That profile charges
+  the 68030 no instruction time, so its bookkeeping cost only ~6 ms there,
+  and the DSP's marking costs about as much in the packet stage.
+- **What the DSP marking costs.** Every arm of this image marks on the DSP
+  (only mode 2 fetches), and the unarmed arm's packet stage rose from
+  2.5b's 453.3 to 467.1 ms cycle-exact and from 513.4 to 526.9 ms on the
+  ledger: **about 13.5 ms of BUILD, on the stage the frame waits on**.
+  Those pairs span two layouts and two DSP images, so the figure is an
+  estimate. It is the next lever here: the box is recomputed per triangle
+  although prelight_run already computed it in the FINISH window, and the
+  marking could move there, off the exposed stage.
+
+**The build ships mode 2.** `make trex_m68030_hires` assembles with
+`-DTREX_DELTA_DSP` (the longword is 2, and the assembler refuses it without
+`TREX_HIRES`); the result is byte-identical to the mode-2 executable
+measured above. Against the previously committed 640x400 build (2.5b, mode
+1 without DSP marking: 668.5 / 574.2 ms) it is -20.2 ms cycle-exact and
++9.3 ms on the MMU ledger -- the two profiles disagree, and this project's
+balance points follow the cycle-exact one (7.4h). The default and release
+builds and the tracked `trex_dsp.lod` are byte-identical to before.
+
+Raw counters, commands and input hashes are in
+[`docs/performance/hires-dspbands-2026-11-18.json`](docs/performance/hires-dspbands-2026-11-18.json).
+
+**Reproduction.**
+
+```sh
+make DOSBOX=/path/to/DOSBox trex_m68030_hires trex_m68030_hires_fbseq
+for m in 0 1; do cp TREX/m68030/trex_hires.tos hatari_runs/hires_m$m.tos
+  python3 tools/patch_data_flag.py hatari_runs/hires_m$m.tos \
+    TREX/m68030/build/trex_hires.lst delta_clear_enabled $m 2; done
+python3 tools/measure_frames.py TREX/m68030/trex_hires.tos \
+  TREX/m68030/TREXHIRS.LOD hatari_runs/m2-ce --dsp-name TREXHIRS.LOD \
+  --memsize 14 --cpu-core cycle-exact --videl-contention on --frames 265 \
+  --timeout 6000
 ```
 
 ### 2.6 Frame-rate overlay — implemented, release only
@@ -6295,8 +6397,17 @@ triangle indices instead of failing to assemble. Check the first free P
 address in the LOD after adding DSP code:
 
 ```bash
-awk '/^_DATA P 0040/{f=1;next} /^_DATA/{f=0} f{n+=NF} END{printf "first free P address: $%X\n", 0x40+n}' TREX/dsp/trex_dsp.lod
+tr -d '\r' < TREX/dsp/trex_dsp.lod | awk '/^_DATA P 0040/{f=1;next} /^_/{f=0} f{n+=NF} END{printf "first free P address: $%X\n", 64+n}'
 ```
+
+**Corrected 2026-11-18.** The form documented until then, `awk ...
+f{n+=NF} END{... 0x40+n}`, is wrong twice on macOS awk: the LOD has CRLF
+line endings, so every line's trailing CR counted as one more word (295
+phantom words in the tracked image), and BSD awk reads `0x40` in program
+text as 0, so the `$40` start was never added. On the tracked image it
+printed `$A5D`, past the ceiling, for a program that ends at `P:$0975`
+(listing and an exact parse agree: first free `$976`). The form above gives
+`$976`; the listing's last `P:` address is the cross-check.
 
 The current program ends at `P:$099E`, leaving 33 words `$099F-$09BF` before
 `triangle_indices`: the normal-cache build ended at `P:$091E`, section
@@ -7160,10 +7271,10 @@ both squeezed by 0.8 against a real Falcon.
 
 ### 6.6a 640x400 interlaced: opt-in, 681.7 ms (2026-11-18)
 
-**Update (2.5b):** this build now arms the band delta clear and measures
-**668.5 ms / 1.50 FPS** cycle-exact and **574.2 ms / 1.74 FPS** on the MMU
-ledger. The figures below are the unarmed state in which it was first
-measured.
+**Update (2.5b, 2.5c):** this build now arms the band delta clear with the
+DSP marking the bands and measures **648.3 ms / 1.54 FPS** cycle-exact and
+**583.5 ms / 1.71 FPS** on the MMU ledger. The figures below are the
+unarmed state in which it was first measured.
 
 `make DOSBOX=/path/to/DOSBox trex_m68030_hires` builds an opt-in pair that
 renders the whole of a **640x400 interlaced true-colour** RGB/TV mode:

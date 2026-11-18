@@ -592,8 +592,9 @@ trex_m68030_plain: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_plain.tos tre
 # 640x400 interlaced pair (OPTIMIZATION.md 6.6a): TOS's own true-colour
 # 640x400 RGB/TV mode, rendered in full.  Two 512,000-byte screens and a
 # 2 MiB stream window need more than 4 MiB: run it with 14 MiB of ST-RAM.
-# It ships the band delta clear armed (-DTREX_DELTA_ON, OPTIMIZATION.md 2.5b),
-# which is faster here on both emulator profiles, unlike at 240x224.
+# It ships the band delta clear armed with the DSP marking the bands
+# (-DTREX_DELTA_DSP, delta_clear_enabled = 2, OPTIMIZATION.md 2.5b/2.5c);
+# patch the longword to 1 for 68030 marking or 0 for the full clear.
 # trex_hires.tos loads TREXHIRS.LOD and no other image.
 HIRES_LOD=./TREX/dsp/build/trex_dsp-00001101si-$(DSPSRC_ID).lod
 .PHONY: trex_dsp_hires trex_m68030_hires
@@ -604,7 +605,7 @@ trex_dsp_hires: create_dirs
 trex_m68030_hires: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires.tos trex_dsp_hires
 
 ./TREX/m68030/build/trex_hires.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_DELTA_ON -o $@ -L ./TREX/m68030/build/trex_hires.lst
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_DELTA_DSP -o $@ -L ./TREX/m68030/build/trex_hires.lst
 
 ./TREX/m68030/trex_hires.tos: ./TREX/m68030/build/trex_hires.o ./TREX/m68030/build/ssi_dma4.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@

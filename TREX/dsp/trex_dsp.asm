@@ -142,6 +142,12 @@ SCREEN_HEIGHT	= 224
 	IF	HIRES*(1-SPANSTREAM)
 	FAIL	'HIRES is built on the span-stream image'
 	ENDIF
+; HIRES keeps a band table for the host's delta clear (OPTIMIZATION.md 2.5c):
+; per 8-row band, the lowest and highest column any triangle BUILD built
+; this frame can have touched.  CMD_GET_BANDS returns and empties it.
+	IF	HIRES
+DC_BANDS	= SCREEN_HEIGHT/8
+	ENDIF
 ; Largest triangle chunk one BUILD_TRIANGLES call may carry.  32 since the
 ; span-setup record: at seventeen result words per survivor the output buffer
 ; is the largest X allocation after the resident arrays, and 64-triangle
@@ -298,6 +304,7 @@ CMD_FINISH_ANIMATED_FRAME	= 15
 ; burst joins the even side with bit 1 set; one more JCLR splits $40/$42.
 CMD_SSI_STREAM		= $40
 CMD_PIO_BURST		= $42
+CMD_GET_BANDS		= $44		; HIRES only
 CMD_RESET		= $7f
 
 ; -----------------------------------------------------------------------------
@@ -374,6 +381,7 @@ ACK_ANIMATION_TARGET	= $70000e
 ACK_PREPASS		= $70000f
 ACK_SSI_STREAM		= $700010
 ACK_PIO_BURST		= $700011
+ACK_BANDS		= $700012
 
 ; Object-space lighting.  1 (shipping since 2026-08-29) rotates the six
 ; light vectors through the frame matrix TRANSPOSE once per frame and the
@@ -525,6 +533,12 @@ dispatch_control_even
 	; them.  Other even control values alias one of the two, all undefined.
 	; With SSIPROBE=0 the stream arm is not assembled and $40 aliases the
 	; burst, which is undefined in exactly the same way.
+	IF	HIRES
+	; $44 = GET_BANDS.  The HIRES image assembles neither probe, so bit 2
+	; is free to tell it from the two above.
+	jset	#2,x0,command_get_bands
+	nop
+	ENDIF
 	IF	SSIRECORD
 	jmp	<command_ssi_records
 	ELSE
@@ -1333,6 +1347,9 @@ build_triangle_not_killed
 	ENDIF
 	IF	PHASEPROBE
 	jclr	#PHASE_BIT_SPAN,y:<phase_mask,triangle_advance
+	ENDIF
+	IF	HIRES
+	jsr	<band_mark		; every built triangle, record or stream
 	ENDIF
 	jsr	<make_triangle_span
 	IF	SPANSTREAM
@@ -2502,6 +2519,67 @@ make_triangle_bbox
 make_bbox_reject
 	clr	a
 	rts
+
+	IF	HIRES
+; Widen band_table by the current triangle's clipped box (2.5c).  The box
+; encloses every pixel the triangle draws, so the host's clear, which wipes
+; band by band from xmin to xmax + 1, can leave nothing behind.  Uses
+; make_triangle_bbox (A, X1) and A, B, X0, X1, Y0, R0; BUILD's R1-R3/N2 and
+; the walker's registers are untouched.
+band_mark
+	jsr	<make_triangle_bbox
+	tst	a
+	jeq	<band_mark_out		; nothing on screen
+	move	y:tri_ymin,a
+	rep	#3
+	asr	a			; first band
+	move	a1,a			; drop the bits ASR shifted into A0
+	move	y:tri_ymax,b
+	rep	#3
+	asr	b			; last band
+	move	b1,b			; ...and into B0, or SUB borrows across them
+	sub	a,b			; bands - 1
+	asl	a			; two words per band
+	move	#band_table,x0
+	add	x0,a
+	move	a1,r0
+	move	y:tri_xmin,x0
+	move	y:tri_xmax,x1
+	move	#>1,y0
+band_mark_loop
+	move	x:(r0),a
+	cmp	x0,a
+	tgt	x0,a			; xmin = min(xmin, box)
+	move	a1,x:(r0)+
+	move	x:(r0),a
+	cmp	x1,a
+	tlt	x1,a			; xmax = max(xmax, box)
+	move	a1,x:(r0)+
+	sub	y0,b
+	jge	<band_mark_loop
+band_mark_out
+	rts
+
+; CMD_GET_BANDS: ACK_BANDS, then DC_BANDS (xmin, xmax) pairs, and the table
+; is empty again (xmin $FFF, xmax 0: the host's clamp rejects that pair).
+command_get_bands
+	move	#ACK_BANDS,x0
+	jsr	<send_word
+	move	#band_table,r0
+	do	#DC_BANDS*2,get_bands_send
+	move	x:(r0)+,x0
+	jsr	<send_word
+	nop
+get_bands_send
+	move	#band_table,r0
+	move	#>$fff,x0
+	clr	a
+	do	#DC_BANDS,get_bands_reset
+	move	x0,x:(r0)+
+	move	a1,x:(r0)+
+get_bands_reset
+	jmp	<main_loop
+	ENDIF
 
 make_triangle_span
 	; Build the seventeen span-setup fields for the current survivor: the
@@ -4619,7 +4697,17 @@ prelight_table
 	include "ssi_crc.i"
 	ds	CHUNK_UVS_BASE-prelight_table-TREX_PRIMITIVES-512
 	ELSE
+	IF	HIRES
+; The band table of 2.5c, in the spare words after prelight_table; it is
+; assembled empty, so the program's first frame starts from a clean table.
+band_table
+	DUP	DC_BANDS
+	dc	$fff,0
+	ENDM
+	ds	CHUNK_UVS_BASE-prelight_table-TREX_PRIMITIVES-DC_BANDS*2
+	ELSE
 	ds	CHUNK_UVS_BASE-prelight_table-TREX_PRIMITIVES
+	ENDIF
 	ENDIF
 
 ; One BUILD chunk's UV pairs, received with the command in chunk order and

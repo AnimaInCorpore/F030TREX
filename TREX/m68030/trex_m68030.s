@@ -225,6 +225,11 @@ TREX_SPAN_STREAM set 1
 	fail	"TREX_PLAIN_ORDER is the draw-order pipeline without the span stream"
 	endc
 	endc
+	ifd	TREX_DELTA_DSP
+	ifnd	TREX_HIRES
+	fail	"TREX_DELTA_DSP needs the HIRES DSP image's band table"
+	endc
+	endc
 	ifd	TREX_HIRES
 	ifnd	TREX_SPAN_STREAM
 	fail	"TREX_HIRES is built on the default span-stream pipeline"
@@ -574,6 +579,8 @@ DSP_CMD_SET_ANIMATED_FRAME	= 12
 DSP_CMD_LOAD_ANIMATION_GAIT	= 13
 DSP_CMD_APPLY_ANIMATION_TARGET	= 14
 DSP_CMD_FINISH_ANIMATED_FRAME	= 15
+DSP_CMD_GET_BANDS	= $44		; TREX_HIRES only (2.5c)
+DSP_ACK_BANDS		= $00700012
 ; The DSP's control range: bit 6 set, bit 0 clear. SSI mode 1 uses $40
 ; for its ramp probe; the live packet mode 2 uses $44.
 CMD_SSI_STREAM		= $40
@@ -1085,6 +1092,14 @@ trex_dummy_frame
 
 	TimeMark	stat_mark_packets
 	bsr	dsp_packets_finish
+	ifd	TREX_HIRES
+	; 2.5c: every BUILD chunk of this frame is acknowledged and nothing is
+	; in flight, so the DSP's band table for this frame is complete.
+	cmpi.l	#2,delta_clear_enabled
+	bne	.no_dsp_bands
+	bsr	dsp_fetch_bands
+.no_dsp_bands
+	endc
 	TimeAdd	stat_mark_packets,stat_t_packets
 	ifd	TREX_SSI_SHADOW
 	cmpi.l	#SSI_SHADOW_DUMP_FRAME,frame_number
@@ -2630,6 +2645,47 @@ animation_expand_delta_stream
 	move.l	d1,(a0)+
 	dbra	d7,animation_expand_delta_stream
 	rts
+
+	ifd	TREX_HIRES
+; Delta clear with DSP-side marking (OPTIMIZATION.md 2.5c).  CMD_GET_BANDS
+; returns ACK_BANDS and DC_BANDS (xmin, xmax) pairs: the columns the frame
+; just built can have touched in each 8-row band, from each triangle's
+; clipped box.  They go into the band page of the buffer this frame is
+; drawn into -- delta_clear_bands already pointed dc_table_base at it and
+; emptied it -- so the clear of that buffer two frames on wipes them.  An
+; empty band arrives as (4095, 0), which the clear's clamp rejects.  A wrong
+; acknowledgement leaves every band at full width: over-clearing, never a
+; ghost.
+dsp_fetch_bands
+	movem.l	d0-d2/a0-a1,-(sp)
+	move.l	#DSP_CMD_GET_BANDS,dsp_bands_tx
+	lea	dsp_bands_tx,a0
+	lea	dsp_bands_rx,a1
+	moveq	#1,d0
+	move.l	#1+DC_BANDS*2,d1
+	bsr	dsp_block_handshake
+	lea	dsp_bands_rx,a0
+	move.l	dc_table_base,a1
+	moveq	#DC_BANDS-1,d2
+	cmpi.l	#DSP_ACK_BANDS,(a0)+
+	bne	.bands_bad
+.bands_copy
+	move.l	(a0)+,d0
+	move.w	d0,(a1)+		; xmin
+	move.l	(a0)+,d0
+	move.w	d0,(a1)+		; xmax
+	dbra	d2,.bands_copy
+	bra	.bands_done
+.bands_bad
+	addq.l	#1,dsp_bands_errors
+.bands_full
+	clr.w	(a1)+
+	move.w	#SCREEN_WIDTH-1,(a1)+
+	dbra	d2,.bands_full
+.bands_done
+	movem.l	(sp)+,d0-d2/a0-a1
+	rts
+	endc
 
 dsp_upload_mesh
 	addq.l	#1,dsp_call_count
@@ -6102,8 +6158,8 @@ span_stream_draw
 	; widen the band table like rasterize_packet's delta_mark_packet does,
 	; or its pixels would never be cleared.  One test per triangle; the
 	; marking loop is a separate copy, so the unarmed loop is unchanged.
-	tst.l	delta_clear_enabled
-	bne	span_stream_draw_marked
+	cmpi.l	#1,delta_clear_enabled		; mode 2: the DSP marks (2.5c)
+	beq	span_stream_draw_marked
 	endc
 	moveq	#0,d0
 	moveq	#0,d1
@@ -6782,8 +6838,14 @@ rasterize_packet
 	; as much as the whole clear saves.
 	; d7/a2/a3 are already on the stack and a5/a6 are finished with, so the
 	; call may clobber d0-d7 and a0-a4 freely.
+	ifd	TREX_HIRES
+	; 2.5c: mode 2 lets the DSP mark the bands; only mode 1 marks here.
+	cmpi.l	#1,delta_clear_enabled
+	bne	.raster_no_delta
+	else
 	tst.l	delta_clear_enabled
 	beq	.raster_no_delta
+	endc
 	bsr	delta_mark_packet
 .raster_no_delta
 	move.l	(sp)+,a2
@@ -9154,10 +9216,14 @@ raster_force_flat
 ; the buffer was not, and the leftovers of a frame nobody recorded would show
 ; through as ghosts.  The switch is a byte patch on the file, before the run.
 delta_clear_enabled
+	ifd	TREX_DELTA_DSP
+	dc.l	2		; TREX_HIRES: the DSP marks the bands (2.5c)
+	else
 	ifd	TREX_DELTA_ON
 	dc.l	1
 	else
 	dc.l	0
+	endc
 	endc
 
 ; Per-buffer dirty-band tables, two pages of DC_BANDS entries.  In data rather
@@ -9187,6 +9253,12 @@ dc_table_base
 dc_stream_ymin
 	dc.w	0
 	even
+dsp_bands_errors
+	dc.l	0
+dsp_bands_tx
+	dc.l	0
+dsp_bands_rx
+	ds.l	1+DC_BANDS*2
 	endc
 
 ; The packet pointer rasterize_packet saves on entry, because A0 no longer
