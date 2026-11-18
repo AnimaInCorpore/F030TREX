@@ -5575,15 +5575,15 @@ still drawn in full, so the workload is the default's: each arm writes
 Ordering Table is neither filled nor walked. Each fetched chunk gets its
 packet heads and its resolve sweep at once, over its own range.
 
-- **Phase A, inside the packet stage.** `stream_probe_drain` fetches every
+- **Phase A, inside the packet stage.** `stream_drain_chunks` fetches every
   chunk through the unchanged host-port transactions. With
-  `stream_probe_ahead` set, an already unpacked packet is drawn whenever the
+  `stream_fetch_ahead` set, an already unpacked packet is drawn whenever the
   chunk in flight is not ready, and a ready chunk (RXDF) is fetched at the next
   packet boundary, so neither processor waits on the other.
 - **Phase B, in `gpu_submit_ot`.** After the next frame's animation has been
   sent, the packets still undrawn are drawn, so the DSP's frame-ahead work
   hides behind them exactly as it hides behind rasterization today.
-- **Naive arm.** `stream_probe_ahead` patched to 0 by
+- **Naive arm.** `stream_fetch_ahead` patched to 0 by
   `tools/patch_data_flag.py`, same linked layout: each chunk is drawn
   completely before the next is fetched, and nothing is left for phase B.
 
@@ -5663,7 +5663,7 @@ python3 tools/measure_frames.py TREX/m68030/trex_stream.tos \
   --cpu-core cycle-exact --videl-contention on --frames 265 --timeout 1500
 cp TREX/m68030/trex_stream.tos hatari_runs/stream_naive.tos
 python3 tools/patch_data_flag.py hatari_runs/stream_naive.tos \
-  TREX/m68030/build/trex_stream.lst stream_probe_ahead 0 1
+  TREX/m68030/build/trex_stream.lst stream_fetch_ahead 0 1
 ```
 
 ### 4.1f Draw-order pipeline: built, byte-identical, -58 / -62 ms (2026-11-18)
@@ -5817,6 +5817,13 @@ defaults measure.
   previous default in exactly the eleven bytes of that string, so its code and
   data layout, and therefore every earlier baseline in this file, still
   describe it.
+- **Names.** The draw path began as 4.1e's probe and carried its names. Since
+  the same day its routines and cells are named for what they do --
+  `stream_drain_chunks`, `stream_draw_packet`, `stream_fetch_ahead`,
+  `stream_range_base`/`stream_range_count` -- and the code is assembled under
+  `TREX_STREAM_DRAW`. `TREX_STREAM_PROBE` remains only as the command-line
+  selector of the wrong-order probe. The rename changes no byte of any
+  executable; sections 4.1e and 4.1f use the new names.
 - **Release.** `TREX.TOS` no longer assembles with `-DTREX_PREPASS`: the
   default DSP image has no occlusion sweep to arm. The statement in section 2
   that the release keeps the occlusion implementation compiled in but disarmed
