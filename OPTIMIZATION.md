@@ -3432,7 +3432,9 @@ Every diagnostic/hash frame-100 dump preserves SHA256
 `d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16`.
 The optional span-validator attempt produces no completed frame/stat sidecar
 with either DSP, including a 60-second bounded baseline run; it is an open
-validator/harness issue, not a passed field-level gate. No physical Falcon
+validator/harness issue, not a passed field-level gate. (Root cause and
+repair: section 3.15. It was a bus error in the copy path, and the repaired
+validator passes this DSP's records.) No physical Falcon
 speedup is claimed.
 
 The default, camera-light reference, PHASEPROBE, WINPROBE/OBJLIGHTS=0,
@@ -3539,7 +3541,8 @@ finish with 1,149 packets. Frame-100 SHA256 remains
 full-buffer expectations, including half continuity, the 53,760-pixel bound,
 transparency, blend, clipping, UV wrap, full-width gradients and shade clamps.
 It verifies both guards, pixel count, consumed rows and final Y; all pass.
-The stale optional span validator described in 2.4m is still not a passed gate.
+The stale optional span validator described in 2.4m is still not a passed gate
+(repaired in section 3.15, where it passes).
 All 512 rendered-frame hashes match the original CPU/DSP pair, including
 the authored choreography and moving hold. The full SSI-loopback target
 produces no completed frame with this configuration in a bounded run; this
@@ -5135,6 +5138,88 @@ paths, as `measure_frames.py` does. For the hash gate assemble both walkers
 with `-DTREX_FRAME_HASH`, run each with `--frames 512` and compare the
 `frmhash.res` files; never quote timing from a hash build.
 
+### 3.15 The copy path and the span validator ended in a bus error -- root cause and repair (2026-11-18)
+
+**Symptom.** With `direct_unpack_enabled` patched to 0, or with
+`span_validate_enabled` patched to 1, the executable took a bus error before
+its first frame completed. 4.1g found it in the legacy and the draw-order
+pipeline alike; 2.4m and 2.4n had already recorded the visible half, a span
+validator that "produces no completed frame". Every frame that did not take
+the direct unpack body was affected: validation frames, the equal-layout
+control of 8.2b, and the diagnostic hosts whose `direct_unpack_enabled`
+assembles to 0.
+
+**Root cause: two implementations of one idea, a day apart.** 3.11
+(`c0ab7f0`, 2026-08-28) rewrote the single unpack body to write straight into
+the packets: A1 was the packet base, the three head values went to packet word
+2 and two resolve slots, and the body hopped a 128-byte packet stride per
+survivor. 8.2b (`8748e4e`, 2026-08-29) reached the same saving differently: it
+added a separate *direct* body and kept the old one as the *copy path* for
+validation frames, the host fallback and the diagnostic builds, pointing it at
+`dsp_triangle_rx_buffer` and at `build_gpu_shadow_packets`, which reads
+contiguous 25-longword records. After the rebase the body under that name was
+3.11's. A non-direct frame therefore wrote packet-shaped 128-byte blocks into
+the record buffer, the copying builder read them as 100-byte records, took a
+garbage source index, and indexed the texture metadata far outside its table.
+Nothing gated it, because both lines were validated on their own direct path
+and no gate ever set either flag afterwards.
+
+**Repair.** The copy body is back on the layout its consumers read: the head
+values are three `(a1)+` stores, the UV-pack lookup takes its source index
+from -72(a1), the stride hop is gone, and the validator branch takes the index
+from -80(a1) -- the five places 3.11 changed, and nothing else. The restored
+body is 14 bytes shorter, so seven unexecuted NOP words follow its closing
+branch: every later address, including the 16-byte pin of the direct body and
+the whole rasterizer, is where it was, and each executable keeps its size. The
+direct body, the packets, the record format and the DSP are untouched.
+
+**Gates**, Hatari `2.6.1-devel (Nov 18 2026)`, fork source `c5d5bf34`:
+
+- **Copy path, both pipelines.** With `direct_unpack_enabled` = 0 the hash
+  builds of the default and the legacy pipeline each reproduce all **512 frame
+  hashes** of the reference. For the default this is also the first run of
+  4.1g's handling of a frame that is not streamed.
+- **Span validator, both pipelines.** With `span_validate_enabled` = 1 both
+  diagnostic executables complete the 265-frame prefix and report
+  **268,823 records, 0 mismatches**, every per-field counter 0 and
+  `val_no_vertices` 0 (`val_stats.res`, magic `VAL0`). That is the first
+  field-for-field validation of the span records since 3.12's 167,176, and so
+  the first to cover the prelight table of 2.4k, the cached verdict of 2.4m,
+  the span numerators of 2.4n and the `ORDERED=1` image of 4.1f.
+- **Nothing else moved.** The default and the legacy diagnostic build measure
+  540.887 / 363.057 ms and 599.698 / 425.679 ms on the cycle-exact and MMU
+  profiles, identical to the tick with 4.1g; their unpatched hash builds keep
+  all 512 hashes and the frame-100 checkpoint `d89958b3...3d16`.
+
+Raw counters are in
+[`docs/performance/copyfix-2026-11-18.json`](docs/performance/copyfix-2026-11-18.json).
+The frame times of the patched runs are not baselines: a validation frame
+does the host's reference arithmetic for every record.
+
+**Still not exercised.** The host fallback proper -- `build_host_triangle_stream`
+after a protocol failure -- has no switch that forces it. It feeds the same
+copying builder these runs now prove, but its own record construction and its
+Ordering Table hand-off in the draw-order build remain untested. The SSI row
+diagnostic host (`-DTREX_SSI_ROWS -DTREX_SSI_HATARI`) completes frames again;
+its stream output was not checked here.
+
+**Also corrected.** The `TREXSSI.LOD` rule copied the tracked default DSP
+image, which since 4.1g is the draw-order one; the loopback host is a legacy
+host, so the rule now deploys the `ORDERED=0` image.
+
+**Reproduction.** Patch the flag in a diagnostic or hash build and run it as
+usual; `val_stats.res` appears beside `render_stats.res`:
+
+```sh
+make trex_m68030
+cp TREX/m68030/trex_m68030.tos hatari_runs/validate.tos
+python3 tools/patch_data_flag.py hatari_runs/validate.tos \
+  TREX/m68030/build/trex_m68030.lst span_validate_enabled 1 0
+python3 tools/measure_frames.py hatari_runs/validate.tos \
+  TREX/dsp/trex_dsp.lod hatari_runs/validate --frames 265 --timeout 3000
+od -A d -t u4 --endian=big hatari_runs/validate/val_stats.res
+```
+
 ## 4. Work already assigned to the DSP
 
 The current DSP program keeps the static vertex mesh, the packed triangle
@@ -5775,15 +5860,16 @@ links, the SSI pipeline executable and image are byte-identical to before, the
 prepass diagnostic host renders the checkpoint with the legacy image, and the
 wrong-order probe still measures (370.8 ms on the MMU ledger).
 
-**Found while checking, not introduced here.** The non-direct record path is
-broken in the legacy build as well: with `direct_unpack_enabled` patched to 0,
+**Found while checking, not introduced here -- repaired in section 3.15.** The
+non-direct record path was broken in the legacy build as well: with `direct_unpack_enabled` patched to 0,
 or with `span_validate_enabled` patched to 1, both the legacy and the default
 executable take a bus error before the first frame completes. 2.4m and 2.4n
 already recorded that the span validator produces no completed frame; this is
-the same defect seen from the copy path. It means the default's handling of a
-non-streamed frame could not be exercised, and that the protocol-failure
-fallback, which uses the same copying builder, should be treated as
-unverified in both builds until that is repaired.
+the same defect seen from the copy path. It meant the default's handling of a
+non-streamed frame could not be exercised at the time; 3.15 repairs the path,
+runs it through the 512-frame gate in both pipelines and validates 268,823
+records with no mismatch. The protocol-failure fallback proper still has no
+forced test.
 
 **Not measured.** No physical Falcon has run this pipeline. The hardware
 packages (`fps_package`, `prof_package`) now carry it, so the next hardware

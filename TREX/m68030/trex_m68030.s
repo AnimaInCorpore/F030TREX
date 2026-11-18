@@ -3821,10 +3821,14 @@ build_host_triangle_stream
 	bne	.dsp_cull_direct_output
 	cnop	0,16
 .dsp_cull_copy_output
-	; A1 is the PACKET base here.  The three head values go to their final
-	; homes by fixed offset -- OT key straight into packet word 2, source index
-	; and shade into resolve slots 0 and 1 -- and A1 then steps to word 4 so
-	; the twenty-two span fields below stay a plain (a1)+ run.
+	; A1 walks dsp_triangle_rx_buffer: one contiguous 25-longword record
+	; per survivor -- source index, average-z key, shade, then the 22 span
+	; and level fields.  That is the layout dsp_packets_begin points this
+	; body at and the one build_gpu_shadow_packets, the span validator and
+	; the SSI row dump consume.  From c0ab7f0 to OPTIMIZATION.md 3.15 this
+	; body wrote packet-shaped data there instead, a rebase leftover of
+	; 3.11 under 8.2b's begin/finish, and every frame that took it ended
+	; in a bus error.
 	move.l	(a2)+,d1			; w0: slots | mid | shade | local
 	move.l	d1,d2
 	andi.l	#$1f,d2
@@ -3833,13 +3837,12 @@ build_host_triangle_stream
 	else
 	add.l	d6,d2
 	endc
-	move.l	d2,GPU_PACKET_RESOLVE(a1)	; global source index -> slot 0
-	move.l	(a2)+,8(a1)			; w1: average-z key -> packet word 2
+	move.l	d2,(a1)+			; global source index
+	move.l	(a2)+,(a1)+			; w1: average-z key
 	move.l	d1,d2
 	lsr.l	#5,d2
 	andi.l	#$3f,d2
-	move.l	d2,GPU_PACKET_RESOLVE+4(a1)	; tint<<4 | level -> slot 1
-	lea	GPU_PACKET_SPAN(a1),a1
+	move.l	d2,(a1)+			; tint<<4 | brightness level
 
 	; Expand the packed geometry into the seventeen-field block the packet
 	; builder and rasterizer consume, sign-extending each signed field
@@ -3893,12 +3896,10 @@ build_host_triangle_stream
 
 	; UV start packs from the resident texture metadata via the slot ids --
 	; they never travel the wire.  Meta layout: u,v longs per vertex slot.
-	; A1 is 15 longs into the span block here (fields 0..14), i.e. packet+76,
-	; so the source index in resolve slot 0 sits at +28 -- not the +20 it
-	; reaches once both packs are stored.  These two offsets were -72 and -80
-	; while the unpack still wrote a contiguous record; the validator caught
-	; the difference between them on first contact, so keep them distinct.
-	move.l	28(a1),d3			; global source index
+	; A1 is 18 longs into the record here (head plus fields 0..14), so the
+	; source index sits at -72, not the -80 it reaches once both packs are
+	; stored -- the validator caught the difference on first contact.
+	move.l	-72(a1),d3			; global source index
 	lsl.l	#5,d3
 	lea	(a0,d3.l),a3
 	move.l	d1,d2
@@ -3949,17 +3950,18 @@ build_host_triangle_stream
 	sub.l	d5,d3
 	move.l	d3,(a1)+			; 19..21: dlvl_dx, dlvl_up, dlvl_low
 	dbra	d2,.ux_lgrad
-	; A1 has reached packet+104, the end of the span block; step it over the
-	; six resolve slots to the next packet base.
-	lea	GPU_PACKET_BYTES-(GPU_PACKET_SPAN+22*4)(a1),a1
 	dbra	d0,.dsp_cull_copy_output
 	bra	.dsp_cull_unpack_done
+	; Unexecuted padding: the restored body is shorter than the packet-
+	; shaped one it replaces, and every address below this point has a
+	; measured instruction-cache phase.
+	dcb.w	7,$4e71
 
 	; Out of the unpack body on purpose -- see the note at the constants.
 	; validate_span_record owns d0-d7, so the two sign-extension constants
 	; are re-established before the body resumes.
 .dsp_cull_validate
-	move.l	20(a1),d1			; global source index, resolve slot 0
+	move.l	-80(a1),d1			; global source index
 	movem.l	d0/a2,-(sp)
 	lea	-68(a1),a2			; the seventeen unpacked fields
 	bsr	validate_span_record

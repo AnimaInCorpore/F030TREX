@@ -596,8 +596,10 @@ trex_m68030_legacy: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_legacy.tos t
 ./TREX/m68030/TREXSSI.TOS: ./TREX/m68030/build/TREXSSI.o ./TREX/m68030/build/ssi_dma.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
-./TREX/m68030/TREXSSI.LOD: ./TREX/dsp/trex_dsp.lod
-	cp $< $@
+# The loopback host walks the Ordering Table, so it is a legacy host and needs
+# the ORDERED=0 image under its own name.
+./TREX/m68030/TREXSSI.LOD: trex_dsp_legacy
+	cp $(LEGACY_LOD) $@
 
 ./TREX/m68030/trex_m68030.tos: ./TREX/m68030/build/trex_m68030.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
