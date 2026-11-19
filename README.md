@@ -179,6 +179,11 @@ diagnostic build measures **365.3 ms / 2.74 FPS** cycle-exact and
 the plain pair's, `make trex_m68030_plain` (`-DTREX_PLAIN_ORDER`,
 `TREXORDR.LOD`). The default claims the sound system (`Locksnd`, DSP transmit
 to DMA record) while it runs and falls back to the plain pipeline if it cannot.
+**Since 2.8a (unreleased)** the host assembles the next batch's list ahead
+of the hand-over and services the DSP during the framebuffer clear, at an
+identical picture: the diagnostic build measures **348.5 ms / 2.87 FPS**
+cycle-exact and **339.2 ms / 2.95 FPS** on the MMU ledger, and `TREX.TOS`
+**349.0 ms / 2.87 FPS** and **339.3 ms / 2.95 FPS**.
 Emulator only; no Falcon has run the stream yet. The figures in the rest of
 this paragraph are the previous pipeline's. Over the 265-frame prefix its full-mesh **diagnostic** build
 measured **433.7 ms / 2.31 FPS**, and `TREX.TOS` measures **431.1 ms /

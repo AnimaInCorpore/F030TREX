@@ -3029,6 +3029,11 @@ dsp_packets_begin
 	endc
 	addq.l	#1,dsp_call_count
 	clr.l	dsp_pipeline_active
+	; No chunk is in flight and no list is assembled until this frame's
+	; first send; the clear's service call (2.8a) relies on that.
+	clr.l	dsp_chunk_inflight
+	clr.l	dsp_chunk_prepared
+	clr.l	dsp_early_failed
 	tst.l	dsp_triangle_stream_ready
 	beq	.begin_done
 	; Cross-frame pipelining: the animation for THIS slot's geometry was
@@ -3149,29 +3154,55 @@ dsp_packets_begin
 	clr.l	dsp_triangle_input_count
 	bsr	dsp_send_build_chunk
 	move.l	#1,dsp_pipeline_active
+	; Chunk 0 is in flight from here on.  stream_drain_chunks used to set
+	; this itself; the clear may now fetch chunks before it runs (2.8a).
+	move.l	#1,dsp_chunk_inflight
+	ifd	TREX_STREAM_DRAW
+	bsr	dsp_prepare_ahead
+	endc
 .begin_done
 	rts
 
 ; Three words out, nothing back: the DSP starts computing the chunk and the
 ; pipeline's next ack read is the synchronization point.  The chunk is
 ; deducted from the not-yet-sent pool at send time.
+;
+; The list is assembled by dsp_prepare_build_chunk.  Normally that happens
+; here, right before the send; with handover_prebuild_enabled the pipeline
+; has already assembled it while the DSP was still building the chunk before
+; (OPTIMIZATION.md 2.8a), and only the transfer is left.
 dsp_send_build_chunk
+	tst.l	dsp_chunk_prepared
+	bne	.send_chunk_prepared
+	move.l	dsp_triangle_input_count,d6
+	bsr	dsp_prepare_build_chunk
+.send_chunk_prepared
+	clr.l	dsp_chunk_prepared
+	move.l	dsp_chunk_next_count,d4
+	move.l	d4,dsp_triangle_chunk_count
+	sub.l	d4,dsp_triangles_remaining
+	move.l	dsp_chunk_next_words,d5
+	Dsp_BlkUnpacked	dsp_triangle_chunk_tx,d5,dsp_rx_buffer,#0
+	rts
+
+; Assemble the list of the next chunk to send in dsp_triangle_chunk_tx.
+; In:  D6 = the chunk's position in the draw list (its base triangle).
+; The chunk is NOT deducted from the not-yet-sent pool here; the send does
+; that.  Sets dsp_chunk_next_count, dsp_chunk_next_words, dsp_chunk_prepared.
+; Clobbers D0/D1/D4/D5/A0-A2.
+dsp_prepare_build_chunk
 	move.l	dsp_triangles_remaining,d4
 	cmpi.l	#DSP_TRIANGLE_CHUNK,d4
 	bls	.send_chunk_sized
 	move.l	#DSP_TRIANGLE_CHUNK,d4
 .send_chunk_sized
-	move.l	d4,dsp_triangle_chunk_count
+	move.l	d4,dsp_chunk_next_count
 	move.l	#DSP_CMD_BUILD_TRIANGLES,dsp_triangle_chunk_tx
 	move.l	d4,dsp_triangle_chunk_tx+4
-	move.l	dsp_triangle_input_count,d6
 	move.l	d6,dsp_triangle_chunk_tx+8
 	; The chunk's UV pairs follow the three command words: two packed
 	; words per triangle, copied from the host-resident pack at this
 	; chunk's base.  The DSP stores them chunk-locally (chunk_uvs).
-	move.l	dsp_triangles_remaining,d5
-	sub.l	d4,d5
-	move.l	d5,dsp_triangles_remaining
 	ifd	TREX_ORDERED
 	; D4 = triangles in this chunk, D6 = the chunk's position in the draw
 	; list.  Each triangle travels as its global number and its two UV
@@ -3247,8 +3278,53 @@ dsp_send_build_chunk
 	add.l	d5,d5
 	addq.l	#3,d5				; total words: 3 + 2*count
 	endc
-	Dsp_BlkUnpacked	dsp_triangle_chunk_tx,d5,dsp_rx_buffer,#0
+	move.l	d5,dsp_chunk_next_words
+	move.l	#1,dsp_chunk_prepared
 	rts
+
+	ifd	TREX_STREAM_DRAW
+; Chunk hand-over, first half (OPTIMIZATION.md 2.8a): assemble the list of
+; the chunk AFTER the one in flight now, so the hand-over itself is only the
+; fetch and one block send.  The DSP used to sit idle in its main loop while
+; this ran between the two.  Nothing to do when no chunk is in flight, when
+; none is left to send, or when the flag is patched off.
+dsp_prepare_ahead
+	tst.l	handover_prebuild_enabled
+	beq	.prepare_ahead_done
+	tst.l	dsp_chunk_inflight
+	beq	.prepare_ahead_done
+	tst.l	dsp_triangles_remaining
+	beq	.prepare_ahead_done
+	tst.l	dsp_chunk_prepared
+	bne	.prepare_ahead_done
+	move.l	dsp_triangle_input_count,d6
+	add.l	dsp_triangle_chunk_count,d6		; the base after the chunk in flight
+	bsr	dsp_prepare_build_chunk
+.prepare_ahead_done
+	rts
+
+; Chunk hand-over, second half: the framebuffer clear calls this when the DSP
+; has a chunk ready, instead of leaving it waiting until the clear is done.
+; One chunk is fetched, the next launched, and the fetched one unpacked and
+; resolved -- nothing is drawn.  A protocol failure is remembered for
+; stream_drain_chunks, which reports it to dsp_packets_finish as before.
+clear_service_chunk
+	tst.l	dsp_chunk_inflight
+	beq	.clear_service_done
+	tst.l	dsp_direct_frame
+	beq	.clear_service_done
+	tst.l	dsp_early_failed
+	bne	.clear_service_done
+	movem.l	d0-d7/a0-a6,-(sp)
+	bsr	dsp_drain_chunk_pipeline
+	tst.l	d0
+	bne	.clear_service_ok
+	move.l	#1,dsp_early_failed
+.clear_service_ok
+	movem.l	(sp)+,d0-d7/a0-a6
+.clear_service_done
+	rts
+	endc
 
 	ifd	TREX_SSI_SHADOW
 ; The optional host-shadow path is deliberately separate from the renderer's
@@ -4490,6 +4566,9 @@ dsp_drain_chunk_pipeline
 	; The pool bookkeeping advanced at launch time; loop while a chunk is
 	; still computing on the DSP.
 	ifd	TREX_STREAM_DRAW
+	; The chunk just launched keeps the DSP busy: assemble the list of the
+	; one after it now, so the next hand-over does not wait for it (2.8a).
+	bsr	dsp_prepare_ahead
 	moveq	#1,d0
 	rts
 	else
@@ -4525,7 +4604,14 @@ dsp_drain_chunk_pipeline
 ; Returns D0 = 1 on success, 0 after a protocol failure.
 stream_drain_chunks
 	clr.l	stream_drawn
-	move.l	#1,dsp_chunk_inflight		; dsp_packets_begin launched chunk 0
+	; dsp_packets_begin launched chunk 0 and set dsp_chunk_inflight; the
+	; clear may have fetched chunks since (2.8a), and a protocol failure
+	; there is reported here.
+	tst.l	dsp_early_failed
+	beq	.stream_begin
+	moveq	#0,d0
+	rts
+.stream_begin
 	tst.l	dsp_direct_frame
 	bne	.stream_loop
 .stream_plain
@@ -4588,9 +4674,14 @@ SPAN_STREAM_BYTES = 2048*1024
 SPAN_STREAM_BYTES = 512*1024
 	endc
 	ifnd	SPAN_STREAM_SHARE
-; The cycle-exact emulator's optimum (7.4g).  The balance point belongs to
-; the machine that runs it; a physical Falcon will want its own figure.
-SPAN_STREAM_SHARE = 160
+; The cycle-exact emulator's optimum with the chunk hand-over of 2.8a, swept
+; per build; it was 160 for both before (7.4g).  The balance point belongs
+; to the machine that runs it; a physical Falcon will want its own figure.
+	ifd	TREX_HIRES
+SPAN_STREAM_SHARE = 176
+	else
+SPAN_STREAM_SHARE = 168
+	endc
 	endc
 SPAN_STAT_LONGS = 8
 ; Claim the DSP-transmit -> DMA-record route once.  Without it the frame
@@ -5592,6 +5683,9 @@ gpu_clear_ot
 	; frame, and the full-clear text below is byte-for-byte the loop that
 	; shipped before -- same registers, same counters, same shape -- so the
 	; off arm is the old behaviour and not merely an equivalent of it.
+	; (Since 2.8a each row of the full clear and each band of the delta
+	; clear ends with the chunk service test; clear_service_enabled = 0
+	; leaves one tst.l and one taken branch of it.)
 	tst.l	delta_clear_enabled
 	bne	.clear_delta
 
@@ -5604,6 +5698,16 @@ gpu_clear_ot
 	move.l	d0,(a0)+
 	dbra	d1,.clear_framebuffer_loop
 	adda.l	#(VIDEO_SCREEN_STRIDE-(SCREEN_WIDTH*2)),a0
+	ifd	TREX_STREAM_DRAW
+	; 2.8a: the DSP finishes its first chunk long before this clear does.
+	; Look once per row whether it has, and hand the chunk over at once.
+	tst.l	clear_service_enabled
+	beq	.clear_row_next
+	btst.b	#DSP_HOST_ISR_RXDF,DSP_HOST_ISR
+	beq	.clear_row_next
+	bsr	clear_service_chunk
+.clear_row_next
+	endc
 	dbra	d2,.clear_framebuffer_row
 	bra	.clear_fb_done
 .clear_delta
@@ -5721,6 +5825,15 @@ delta_clear_bands
 	dbra	d1,.dcb_row
 .dcb_next
 	adda.w	#DC_BAND_ROWS*VIDEO_SCREEN_STRIDE,a0
+	ifd	TREX_STREAM_DRAW
+	; 2.8a: as in the full clear, once per band.
+	tst.l	clear_service_enabled
+	beq	.dcb_band_next
+	btst.b	#DSP_HOST_ISR_RXDF,DSP_HOST_ISR
+	beq	.dcb_band_next
+	bsr	clear_service_chunk
+.dcb_band_next
+	endc
 	dbra	d2,.dcb_band
 	movem.l	(sp)+,d1-d7/a1-a2
 	rts
@@ -8670,6 +8783,14 @@ span_stream_share
 ; tools/patch_data_flag.py compares both at one linked layout.
 stream_fetch_ahead
 	dc.l	1
+; Chunk hand-over (2.8a).  1 = assemble the next chunk's list while the DSP
+; still builds the one before; 0 = assemble it after the fetch, as before.
+handover_prebuild_enabled
+	dc.l	1
+; 1 = the framebuffer clear hands a finished chunk over as soon as the DSP
+; has it; 0 = the DSP waits until the clear is done, as before.
+clear_service_enabled
+	dc.l	1
 	endc
 
 ; 1 = the record unpack writes span/level fields straight into the packets'
@@ -9875,6 +9996,16 @@ dsp_triangle_unpack_base
 dsp_pipeline_active
 	ds.l	1
 dsp_chunk_inflight
+	ds.l	1
+; The next chunk's list (2.8a): assembled flag, triangle count, word count.
+dsp_chunk_prepared
+	ds.l	1
+dsp_chunk_next_count
+	ds.l	1
+dsp_chunk_next_words
+	ds.l	1
+; A chunk fetched during the clear failed; stream_drain_chunks reports it.
+dsp_early_failed
 	ds.l	1
 	ifd	TREX_STREAM_DRAW
 stream_drawn

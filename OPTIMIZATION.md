@@ -88,7 +88,17 @@ in [`TREX/m68030/trex_m68030.s`](TREX/m68030/trex_m68030.s).
 
 ## 2. Current measured baseline
 
-**Latest active baseline (2026-11-18): section 7.4h.** The draw-order
+**Latest active baseline (2026-11-19): section 2.8a.** The pipeline is
+7.4h's; the host now assembles the next chunk's list ahead of the hand-over
+and services the DSP during the framebuffer clear, and the span-stream share
+is 168 (176 at 640x400). On Hatari `c5d5bf34` the diagnostic build measures
+**348.5 ms / 2.87 FPS** on the cycle-exact profile with Videl contention and
+**339.2 ms / 2.95 FPS** on the MMU ledger, the release timing copy
+**349.0 ms / 2.87 FPS** and **339.3 ms / 2.95 FPS**, and the 640x400 pair
+**590.5 ms / 1.69 FPS** and 562.4 ms / 1.78 FPS, at an identical picture. The
+stage figures quoted from 7.4h and 6.6a below are the ones before it.
+
+**Baseline before it (2026-11-18): section 7.4h.** The draw-order
 pipeline with the span-and-offset stream of 7.4g is the default: the DSP walks
 the rows and pixels of 160 of every 256 qualified-opaque triangles and streams
 spans and texel offsets over SSI/DMA. On Hatari `c5d5bf34` the diagnostic
@@ -106,7 +116,9 @@ and after its viewing-distance, brightness, light and aspect tuning (6.6a)
 section 2, and every section outside 4.1e-4.1g and 7.4g-7.4h, was measured on
 the previous index-order pipeline, which `TREX_LEGACY_OT` still builds and
 which measures 599.7 ms and 425.7 ms. No physical Falcon has run either
-draw-order default.
+draw-order default. Section 2.8 profiles the DSP side of both stream builds:
+it spends 22% of a default frame and 36% of a 640x400 frame waiting -- on the
+SSI transmitter, and on the host between chunks -- not computing.
 
 **Previous baseline of the index-order pipeline (2026-09-06): section 2.4m.** The
 diagnostic measures **433.7 ms / 2.31 FPS**, and the release **431.1 ms /
@@ -4212,6 +4224,335 @@ ST-RAM access.
 divide the measured 952 ms between the packet stage and the rasterizer. The
 prediction above says the packet stage carries the larger share of the growth.
 
+### 2.8 Where the DSP's clocks go in the stream pipeline: a PC-range profile (2026-11-19)
+
+**Question.** 7.4g reads the share sweep as "above the optimum the frame waits
+on the DSP", and 7.4i concluded from the compact stream that "the frame waits
+on DSP arithmetic". Neither was measured on the DSP. The stage timers are the
+68030's, 2.4l's ladder belongs to the legacy pipeline, and Hatari's own DSP
+profiler does not survive a run of the corrected build. This section measures
+what the DSP does with every clock of a default frame and of a 640x400 frame.
+
+**Instrument.** Emulator-side, so the measured programs are the unchanged
+default and 640x400 pairs. The Hatari fork's `DSP_Run` books every executed DSP
+instruction's oscillator clocks to the P-address ranges named in
+`HATARI_DSP_PCPROF="lo-hi,..."` (up to 24, overlapping allowed) and rewrites
+the totals to `dsp_pcprof.txt` in the run directory every 10 ms of DSP time,
+because `tools/measure_frames.py` kills the emulator. Three companions:
+`HATARI_DSP_PCPROF_START=<pc>` starts the count when that address first
+executes (here `command_set_animated_frame`, which skips the program's
+set-up); `HATARI_DSP_PCPROF_CALLERS=lo-hi` books the clocks spent inside one
+range by the return address on the system stack, which separates the callers
+of the shared `receive_word` / `send_word`; `HATARI_DSP_PCPROF_CMD=pc,ret`
+splits the main loop's wait for a command by the command that ended it.
+`tools/dsp_pcprof.py env <listing>` derives all four values from the labels of
+the ASM56000 listing, and `tools/dsp_pcprof.py report <listing> <file>` turns
+the result into milliseconds per frame. Waiting is defined as the `JCLR` clocks
+beyond one six-clock poll per transferred unit or word.
+
+The instrument only observes. With it armed the diagnostic default measures
+365.3 ms and the 640x400 build 617.3 ms cycle-exact (617.5 and 617.4 in two
+earlier armed runs), frame 100 `d89958b3...3d16` and `f8781fbf...630e` --
+7.4h's figure and, within 0.2 ms, 7.4i's 617.5. The
+booked clocks come to 366.3 and 619.0 ms a frame: the count starts at the
+priming animation before frame 0 and ends a few milliseconds after frame 265's
+statistics, so it runs 0.3% over the bracketed frame time, and that agreement
+is also the check that one booked clock is 1/32,000,000 s.
+
+**Measured**, identical 265-frame prefixes, cycle-exact with Videl contention,
+Hatari `2.6.1-devel`, fork source `c5d5bf34` plus the profiler patch (binary
+`e0894bfc...`), TOS 4.02, 16 MHz 68030, corrected 32 MHz DSP; default pair at
+4 MiB (`trex_dsp.lod` `92d4744c...`), 640x400 pair at 14 MiB (`TREXHIRS.LOD`
+`afcd5686...`). Emulator measurements, not physical-Falcon timings. Raw
+counters:
+[`docs/performance/dsp-pcprof-2026-11-19.json`](docs/performance/dsp-pcprof-2026-11-19.json).
+
+| DSP time per frame | 240x224 default | | 640x400 | |
+|---|---:|---:|---:|---:|
+| Stream walker, arithmetic | 54.7 ms | 14.9% | 138.3 ms | 22.3% |
+| **Stream walker, waiting on the SSI transmitter** | **28.6 ms** | 7.8% | **116.2 ms** | 18.8% |
+| Span setup (`make_triangle_span`, `span_div`, UV fetch) | 63.9 ms | 17.4% | 70.9 ms | 11.4% |
+| Sort key and lighting (`make_triangle_zkey`, `_shade`) | 54.7 ms | 14.9% | 59.0 ms | 9.5% |
+| Area, bounding box, projected lookups | 34.7 ms | 9.5% | 41.5 ms | 6.7% |
+| Order keys and index reload (`command_prepass` to the end) | 27.4 ms | 7.5% | 28.7 ms | 4.6% |
+| Transform and project | 11.6 ms | 3.2% | 11.6 ms | 1.9% |
+| BUILD chunk loop and record pack | 10.6 ms | 2.9% | 11.8 ms | 1.9% |
+| `prelight_run`'s own loop | 4.5 ms | 1.2% | 4.7 ms | 0.8% |
+| Band marking and `GET_BANDS` | -- | | 6.2 ms | 1.0% |
+| **Host port: waiting for the host to send** | **46.0 ms** | 12.6% | **98.3 ms** | 15.9% |
+| Host port: waiting for the host to read | 6.7 ms | 1.8% | 7.0 ms | 1.1% |
+| Host port: word moves | 8.1 ms | 2.2% | 8.8 ms | 1.4% |
+| Everything else (dispatch, animation, morph) | 15.0 ms | 4.1% | 16.0 ms | 2.6% |
+| **Booked** | **366.3 ms** | | **619.0 ms** | |
+| of which not computing (the three waits) | 81.3 ms | 22.2% | 221.5 ms | 35.8% |
+
+The wait for the host to send, by the command that ended it (the remaining
+3.9 and 3.6 ms are data words inside a command):
+
+| Main loop waiting for | 240x224 default | 640x400 |
+|---|---:|---:|
+| `GET_TRIANGLES`, the fetch of a finished chunk | 23.5 ms (0.73 ms x 32.2) | 38.4 ms (1.09 ms x 35.4) |
+| `BUILD_TRIANGLES`, the next chunk's list | 12.2 ms (0.38 ms x 32.2) | 13.0 ms (0.37 ms x 35.4) |
+| `PREPASS`, the order keys that start a frame | 1.1 ms | **38.4 ms** |
+| The four animation commands | 5.4 ms | 4.3 ms |
+| `GET_BANDS` | -- | 0.7 ms |
+| **All** | **42.1 ms** | **94.8 ms** |
+
+The SSI transmitter per frame: 31,169 units at 240x224 (20,360 texel units,
+two header units for each of 5,120 spans, 569 terminators) and 116,858 at
+640x400 (83,726 texel units, three header units for each of 10,838 spans, 618
+terminators). A texel unit waits 36.2 and 39.7 clocks on average on top of the
+loop's own 20; the last header unit, which follows the previous one after two
+instructions, waits 33.5 and 29.8.
+
+**What it says.**
+
+- **The DSP is not saturated.** It spends 22% of a default frame and 36% of a
+  640x400 frame in a polling loop. "The frame waits on the DSP" is true of
+  the packet stage as the 68030 sees it; it is not true that the DSP computes
+  throughout.
+- **The wire does bind the walker.** A texel unit costs 20 clocks of arithmetic
+  and then waits for the transmitter, 56 to 60 clocks a unit in all, against
+  the 64-clock unit period of 7.4f's 1 MB/s (a span's first texel unit follows its
+  prestep arithmetic and waits less, which pulls the mean below 64). That is 116 ms a frame at
+  640x400. **This corrects 7.4i's reading**, not its measurement: the compact
+  stream removed units and the packet stage did not shrink, but the reason
+  cannot be that the transfer was hidden behind arithmetic. By instruction
+  count (an estimate, not a measurement) its encoders cost about as many
+  clocks as the unit periods they replaced, or more: roughly 220 for a
+  continuation header against the 192 of three header units, and roughly 105
+  for a delta pair against the 128 of two texel units.
+- **Every chunk hand-over leaves the DSP idle for 1.1 to 1.5 ms**, 35.7 ms a
+  frame at 240x224 and 51.4 ms at 640x400. Having acknowledged a chunk, the
+  DSP waits for `GET_TRIANGLES`: the host polls for the acknowledgement only
+  between two draws (`stream_drain_chunks`) and not at all during the
+  framebuffer clear, which it starts right after launching chunk 0, and then
+  spends two `Dsp_BlkUnpacked` transactions. After the records it waits again
+  while `dsp_send_build_chunk` assembles the next list.
+- **At 640x400 the DSP finishes its frame-ahead work 38 ms before the host
+  asks for the order keys**; at 240x224 it is 1 ms. Share 160 was located on
+  the default build (7.4g) and puts the two processors level there. At 640x400
+  the 68030's tail is the longer one, which is direct evidence that the share
+  is not at its optimum for that build (6.6a: "not located").
+- **Arithmetic ranking.** Span setup is the largest single phase at 240x224
+  (63.9 ms) and the walker's arithmetic at 640x400 (138.3 ms). Sort key,
+  lighting, area and bounding box together are 89 and 101 ms; they run in the
+  frame-ahead pass for every triangle and again in BUILD for the listed ones,
+  and this profile does not separate the two.
+
+**Levers.** Status 2026-11-19: the first is built and the share re-swept on
+both builds (section 2.8a); the third is not built. The bounds are the
+measured waits; the frame gain is
+smaller, because the 68030's own waiting is not measured here and the share
+has to be re-balanced after any of them.
+
+1. *Chunk hand-over* (35.7 / 51.4 ms of DSP idle). Send the next chunk's list
+   while the current one is still being built -- 3 + 96 words of input
+   buffer; the X pad has 885 spare words at 240x224 -- and poll for the
+   acknowledgement inside the clear. No new transport.
+2. *The 640x400 share and frame start* (38.4 ms). Sweep the share at 640x400,
+   or let the host choose the marks from its backlog when it assembles a
+   chunk's list (`dsp_send_build_chunk` already decides them there), which
+   would also fit the balance to a physical Falcon without a sweep.
+3. *The transmitter wait* (28.6 / 116.2 ms). An interrupt-drained transmit
+   buffer would let the walker run ahead of the wire; its service costs clocks
+   per unit (8 to 12 clocks would be 8 to 12 ms at 240x224 and 29 to 44 ms at
+   640x400, an estimate), and an SSI transmit interrupt under Crossbar
+   handshake has been exercised neither in the emulator nor on hardware.
+
+**Not established.** Emulator only. The 68030's waiting -- the counterpart
+needed to turn a DSP-side bound into a frame prediction -- is not measured.
+The unit period of a real handshaked route is unknown (7.4f), and with it the
+transmitter wait on hardware.
+
+**Reproduction.**
+
+```sh
+make DOSBOX=/path/to/DOSBox trex_m68030_hires
+cp TREX/dsp/build/TREXDSP.LST hatari_runs/hires.lst   # before the next assembly
+eval "$(python3 tools/dsp_pcprof.py env hatari_runs/hires.lst)"
+python3 tools/measure_frames.py TREX/m68030/trex_hires.tos \
+  TREX/m68030/TREXHIRS.LOD hatari_runs/pcprof-hires-ce --dsp-name TREXHIRS.LOD \
+  --memsize 14 --cpu-core cycle-exact --videl-contention on --frames 265 \
+  --timeout 6000
+python3 tools/dsp_pcprof.py report hatari_runs/hires.lst \
+  hatari_runs/pcprof-hires-ce/dsp_pcprof.txt
+```
+
+For the default pair build `trex_m68030`, keep its listing the same way and
+drop `--dsp-name` and `--memsize`. The Hatari binary needs the profiler patch
+to `src/falcon/dsp.c`; without the variables it behaves as before.
+
+### 2.8a The chunk hand-over, shortened: 365.3 -> 348.5 ms and 617.3 -> 590.5 ms (2026-11-19)
+
+2.8 measured the DSP idle for 1.1 to 1.5 ms at every chunk hand-over. This
+section removes the two parts of that wait the host can remove without a new
+protocol, and re-sweeps the share afterwards. **Host only**: no DSP word, no
+transaction and no DSP image changes (`trex_dsp.lod` `92d4744c...`,
+`TREXHIRS.LOD` `afcd5686...`, both as before).
+
+**What changed.**
+
+- **The next list is assembled ahead** (`handover_prebuild_enabled`).
+  `dsp_send_build_chunk` is split: `dsp_prepare_build_chunk` assembles a
+  chunk's list -- the three header words and, per triangle, its number with
+  the stream mark and its two UV words -- and the send is one
+  `Dsp_BlkUnpacked`. `dsp_prepare_ahead` calls the first right after a chunk
+  has been launched (in `dsp_packets_begin` and at the end of
+  `dsp_drain_chunk_pipeline`), for the chunk that follows the one in flight,
+  so the hand-over itself is the fetch and one block send. The DSP used to
+  wait in its main loop while the list was assembled between the two.
+- **The clear hands chunks over** (`clear_service_enabled`). The framebuffer
+  clear looks at RXDF once per row (full clear) or once per band (band delta
+  clear) and calls `clear_service_chunk`, which runs
+  `dsp_drain_chunk_pipeline` for one chunk: fetch, launch the next, unpack,
+  build the heads, resolve. Nothing is drawn. Before, the DSP finished its
+  first chunk early in the clear and waited for the rest of it.
+- **The share** is 168, and 176 with `TREX_HIRES` (160 for both before): with
+  the DSP's packet stage shorter, the balance point moved towards the DSP.
+
+**Ownership and ordering.**
+
+- `dsp_triangle_chunk_tx` holds the *next* chunk's list from the moment the
+  previous send has returned; the DSP has taken every word by then.
+  `dsp_chunk_prepared`, `dsp_chunk_next_count` and `dsp_chunk_next_words`
+  describe it. `dsp_triangles_remaining` is deducted at the send, no longer
+  at assembly, so "more to send" keeps its meaning in the pipeline.
+- The stream marks (`order_marks`, `span_share_acc`) are decided at assembly,
+  chunk after chunk in list order as before, so the same triangles are
+  marked. A list is assembled only for positions the draw loop cannot have
+  reached (`order_drawn` stays below `dsp_triangle_input_count`).
+- `dsp_chunk_inflight` is set by `dsp_packets_begin` when chunk 0 goes out;
+  `stream_drain_chunks` no longer sets it, because the clear may already have
+  fetched chunks. A protocol failure during the clear is latched in
+  `dsp_early_failed` and reported by `stream_drain_chunks`, so the fallback
+  of `dsp_packets_finish` is reached as before. That path has no forced test
+  (as in 4.1g).
+- **The stage timers shift.** The clear stage now contains the hand-overs it
+  performs (16.2 -> 23.6 ms at 240x224); the clear itself costs one flag test
+  and one port read per row or band more. Compare frames, not stages.
+- Text 15,546 -> 15,768 bytes at 240x224 (16,000 -> 16,222 at 640x400); data
+  shrinks by the same 222 bytes behind its page pin and BSS is unchanged.
+
+**Measured**, identical 265-frame prefixes, Hatari `2.6.1-devel`, fork source
+`c5d5bf34` plus 2.8's profiler patch (binary `e0894bfc...`), TOS 4.02, 16 MHz
+68030, corrected 32 MHz DSP, 4 MiB (14 MiB for 640x400). Emulator
+measurements, not physical-Falcon timings; the two profiles must not be mixed.
+The arms of one build are one linked executable with data longwords patched
+(`tools/patch_data_flag.py`); the rebuilt defaults are byte-identical to the
+patched executables that were measured. Raw counters and input hashes:
+[`docs/performance/handover-2026-11-19.json`](docs/performance/handover-2026-11-19.json).
+
+Cycle-exact with Videl contention, share 160, one layout per build:
+
+| Arm | 240x224 | 640x400 |
+|---|---:|---:|
+| `master` (`3e4167a`) | 365.3 ms | 617.3 ms |
+| Both flags 0 (this layout's control) | 366.0 ms | 615.8 ms |
+| List assembled ahead only | 360.3 ms (-5.7) | -- |
+| Clear service only | 357.0 ms (-9.0) | -- |
+| **Both** | **352.2 ms (-13.8)** | **606.3 ms (-9.5)** |
+
+Share sweep with both flags set, cycle-exact:
+
+| Share of 256 | 240x224 | 640x400 |
+|---:|---:|---:|
+| 160 | 352.2 ms | 606.3 ms |
+| 168 | **348.5 ms** | 597.6 ms |
+| 176 | 349.6 ms | **590.5 ms** |
+| 184 | 352.4 ms | 590.0 ms |
+| 192 | 354.8 ms | 597.2 ms |
+| 208 | 359.0 ms | 615.8 ms |
+| 224 | -- | 634.8 ms |
+
+The defaults, against the figures before this section:
+
+| Build | Cycle-exact before | Cycle-exact now | MMU ledger before | MMU ledger now |
+|---|---:|---:|---:|---:|
+| Default diagnostic | 365.3 ms / 2.737 FPS | **348.5 ms / 2.869 FPS** | 351.8 ms / 2.843 FPS | **339.2 ms / 2.948 FPS** |
+| `TREX.TOS` timing copy | 366.8 ms / 2.726 FPS | **349.0 ms / 2.865 FPS** | 353.1 ms / 2.832 FPS | **339.3 ms / 2.947 FPS** |
+| 640x400 | 617.3 ms / 1.620 FPS | **590.5 ms / 1.693 FPS** | 561.0 ms / 1.783 FPS | 562.4 ms / 1.778 FPS |
+
+That is **-16.8 ms, +4.8% FPS** cycle-exact and -12.6 ms, +3.7% on the MMU
+ledger for the diagnostic build, -17.8 ms (+5.1%) and -13.8 ms (+4.1%) for the
+release, and **-26.8 ms, +4.5% FPS** cycle-exact for 640x400. The "before"
+columns are 7.4h's and 2.8's figures; the MMU-ledger 640x400 figure before is
+this layout's control arm (7.4i recorded 562.0 ms for `master`), and the
+default's control arm reads 352.4 ms there. Cycle-exact stages at the new
+defaults: set frame 13.5, packet 227.0, clear 23.6, raster 84.2 ms at
+240x224, and 13.2 / 446.6 / 27.3 / 102.9 ms at 640x400.
+
+**The MMU ledger at 640x400 does not gain: +1.4 ms.** With both flags set and
+the share left at 160 that profile measures 539.2 ms, 21.8 ms below its
+control; share 176, the cycle-exact optimum, gives all of it back, because the
+ledger charges the 68030 no instruction time and so wants a lower share
+(7.4g found the same for the default build). The share follows the cycle-exact
+profile, as it has since 7.4g; it remains one patchable longword.
+
+The DSP's waiting (2.8's instrument, cycle-exact, per frame):
+
+| DSP waiting for | 240x224 before | now | 640x400 before | now |
+|---|---:|---:|---:|---:|
+| `GET_TRIANGLES`, the fetch of a finished chunk | 23.5 ms | 10.6 ms | 38.4 ms | 20.4 ms |
+| `BUILD_TRIANGLES`, the next chunk's list | 12.2 ms | 4.8 ms | 13.0 ms | 4.8 ms |
+| `PREPASS`, the order keys that start a frame | 1.1 ms | 1.8 ms | 38.4 ms | 13.2 ms |
+| The SSI transmitter | 28.6 ms | 29.7 ms | 116.2 ms | 128.6 ms |
+
+The transmitter wait grows with the share: 32,522 and 129,435 units a frame
+now, 31,169 and 116,858 before.
+
+**Gates.**
+
+- 240x224: all **512 frame hashes** of the hash build match the reference
+  (`frmhash.res` `0a3f2fa1...`) at share 160 and at the new 168; frame 100 is
+  `d89958b3...3d16` in every arm, and every 265-frame run writes 9,049,666
+  pixels.
+- 640x400: the frame-sequence probe with the DSP-marked band clear writes a
+  `fbseq.res` **byte-identical to `master`'s for all 265 frames** (135,680,000
+  bytes), at share 160 and at the new 176; frame 100 is `f8781fbf...630e` in
+  every arm.
+- The legacy and plain draw-order hosts still assemble and link.
+
+**What it says.**
+
+- The two parts are independent and add: -5.7 and -9.0 ms alone, -13.8 ms
+  together at 240x224.
+- The clear was the larger one. Servicing it alone takes the DSP's wait for
+  `GET_TRIANGLES` from 23.4 to 10.9 ms a frame at 240x224: one wait per
+  frame, behind chunk 0, was about half of that term.
+- The gain only becomes a frame gain once the share follows: at share 160
+  the faster DSP waits 7.7 ms (240x224) and 52.2 ms (640x400) for the frame to
+  start, which the sweep turns into drawing taken off the 68030.
+
+**Left of the hand-over**, per chunk at 240x224: 0.33 ms before the fetch and
+0.15 ms before the next list, 15.4 ms a frame. The first is how long the draw
+in progress takes to end (the host looks between two triangles) plus two
+`Dsp_BlkUnpacked` calls, the second one more call. Removing it needs either
+the host interrupt of the DSP port or a second list and record buffer on the
+DSP; the 640x400 image has 11 program words left below its ceiling, so the
+latter needs room made first. Unbuilt and unpriced.
+
+**Not established.** No physical Falcon has run it. The share optima are the
+cycle-exact emulator's.
+
+**Reproduction.**
+
+```sh
+make DOSBOX=/path/to/DOSBox trex_m68030 trex_m68030_framehash trex_m68030_hires
+python3 tools/measure_frames.py TREX/m68030/trex_m68030.tos \
+  TREX/dsp/trex_dsp.lod hatari_runs/handover-ce \
+  --cpu-core cycle-exact --videl-contention on --frames 265 --timeout 2400
+cp TREX/m68030/trex_m68030.tos hatari_runs/handover_off.tos
+python3 tools/patch_data_flag.py hatari_runs/handover_off.tos \
+  TREX/m68030/build/trex_m68030.lst handover_prebuild_enabled 0 1
+python3 tools/patch_data_flag.py hatari_runs/handover_off.tos \
+  TREX/m68030/build/trex_m68030.lst clear_service_enabled 0 1
+python3 tools/patch_data_flag.py hatari_runs/handover_off.tos \
+  TREX/m68030/build/trex_m68030.lst span_stream_share 160 168
+```
+
+Arm 2.8's profile (`tools/dsp_pcprof.py env`) for the DSP-side waits.
+
 ## 3. Rasterizer cost model
 
 **This model describes the retired bounding-box edge-function rasterizer.**
@@ -7348,6 +7689,8 @@ brightness, light elevation and horizontal focal length; it measures
 **616.4 ms / 1.62 FPS** cycle-exact and **561.7 ms / 1.78 FPS** on the MMU
 ledger. The figures below are the untuned, unarmed state in which it was
 first measured, and its geometry paragraph describes focal 1865.
+**Since 2.8a** (chunk hand-over, share 176) it measures **590.5 ms /
+1.69 FPS** cycle-exact and 562.4 ms / 1.78 FPS on the MMU ledger.
 
 `make DOSBOX=/path/to/DOSBox trex_m68030_hires` builds an opt-in pair that
 renders the whole of a **640x400 interlaced true-colour** RGB/TV mode:
@@ -7449,7 +7792,9 @@ Two share points, same executable, cycle-exact with contention:
 | 256 | 764.6 ms / 1.31 FPS | 657.8 ms | 27.9 ms |
 
 160 beats both ends; the curve between them was not swept, so the optimum
-is not located at this resolution.
+is not located at this resolution. 2.8 measures the DSP idle for 38 ms a
+frame before the host asks for the order keys (1 ms in the default build),
+which says the balance point lies elsewhere here.
 
 **Gates.**
 
@@ -8974,6 +9319,9 @@ diagnostic are set frame 13.5, packet 258.3, clear 16.2, raster 77.0 ms.
 The share stays at 160, the cycle-exact optimum; on the MMU ledger share 64
 measured lower (330.5 ms, 7.4g), and the share is one patchable data longword
 (`span_stream_share`) if hardware puts the balance point elsewhere.
+**Since 2.8a the default share is 168** (176 at 640x400): the shorter chunk
+hand-over moved the balance point, and the defaults measure 348.5 / 339.2 ms
+(diagnostic) and 349.0 / 339.3 ms (release).
 
 The v1.2 row is the published `TREX.ZIP` (rebuilt from tag `v1.2`
 byte-identically), timing-patched the same way. Its MMU-ledger figure
@@ -9061,6 +9409,13 @@ last two rows -- only the DSP image differs:
   the packet stage: the SSI transfer overlaps the DSP's own work, and the
   frame waits on DSP arithmetic. The "half the packet window" figure
   above was an estimate from the structural rate, and it was wrong.
+  **Corrected by 2.8 (2026-11-19):** the measurement above stands, this
+  reading of it does not. The uncompressed walker spends 116.2 ms a frame
+  waiting on the SSI transmitter, so the transfer is not hidden behind
+  arithmetic; the compact encoders replaced that wait with about as much
+  arithmetic of their own (2.8, an instruction-count estimate). A smaller
+  stream only pays if producing it costs fewer clocks than the unit periods
+  it removes.
 - **Headers alone cost the DSP more than they save:** the per-span
   continuation test raises the packet stage by 31.7 ms cycle-exact.
 - **The 68030 hotspot is the delta pair loop** (`.c_pair`): 7 instructions
@@ -10336,6 +10691,23 @@ The open roadmap, in recommended order (expected effects from the section
     record tracks at 32 MHz, the record address at acknowledgement time
     and cache coherency of a window still being filled are untested on a
     Falcon.
+
+27. Take up the DSP's waiting. **Measured -- see section 2.8; the chunk
+    hand-over is built -- see section 2.8a:** the host assembles the next
+    list ahead and services the DSP during the clear, and with the share
+    re-swept the diagnostic build measures **365.3 -> 348.5 ms cycle-exact
+    (+4.8% FPS)** and 351.8 -> 339.2 ms on the MMU ledger, the 640x400 build
+    **617.3 -> 590.5 ms cycle-exact (+4.5% FPS)** and 561.0 -> 562.4 ms on
+    the ledger, pictures identical.  The transmitter wait and the rest of
+    the hand-over are open.  What 2.8 measured before it:  An emulator-side PC-range profile (`HATARI_DSP_PCPROF`,
+    `tools/dsp_pcprof.py`) books the DSP's clocks of the default and the
+    640x400 frame: **81.3 of 366.3 ms and 221.5 of 619.0 ms are polling
+    loops**, not arithmetic.  Three levers, in order of cost: the chunk
+    hand-over (35.7 / 51.4 ms of DSP idle while the host notices the
+    acknowledgement, fetches and assembles the next list), the 640x400 share
+    and frame start (38.4 ms idle before the order keys), and the SSI
+    transmitter wait (28.6 / 116.2 ms).  Those are bounds on DSP time, not
+    frame predictions: the 68030's own waiting is unmeasured.
 
 ## 11. References
 

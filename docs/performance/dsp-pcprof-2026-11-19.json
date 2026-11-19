@@ -1,0 +1,635 @@
+{
+  "date": "2026-11-19",
+  "instrument": "HATARI_DSP_PCPROF (PC-range clock counter in the Hatari fork's DSP_Run)",
+  "hatari": {
+    "fork_source": "c5d5bf34 plus the uncommitted dsp.c profiler patch",
+    "sha256": "e0894bfc47761316ed09ef91e79ea7da57b3a42040ad96c6402a8358b207fec5"
+  },
+  "frames": 265,
+  "dsp_clock_hz": 32000000,
+  "note": "Counters start at the first SET_ANIMATED_FRAME and end when the emulator is killed after frame 265's statistics appear; clocks are DSP oscillator clocks.",
+  "runs": {
+    "default": {
+      "command": [
+        "C:/Arbeit/F030Arcade/third_party/hatari/build-ucrt64/src/hatari.exe",
+        "--machine",
+        "falcon",
+        "--cpulevel",
+        "3",
+        "--cpuclock",
+        "16",
+        "--mmu",
+        "false",
+        "--cpu-exact",
+        "true",
+        "--compatible",
+        "true",
+        "--data-cache",
+        "true",
+        "--videl-contention",
+        "true",
+        "--patch-tos",
+        "true",
+        "--fast-boot",
+        "true",
+        "--tos",
+        "C:/Arbeit/F030Arcade/third_party/tos/tos402.img",
+        "--dsp",
+        "emu",
+        "--memsize",
+        "4",
+        "--ttram",
+        "0",
+        "--monitor",
+        "rgb",
+        "--frameskips",
+        "4",
+        "--sound",
+        "off",
+        "--benchmark",
+        "--confirm-quit",
+        "off",
+        "--log-level",
+        "fatal",
+        "--alert-level",
+        "fatal",
+        "--harddrive",
+        ".",
+        "--auto",
+        "C:\\RUN.TOS",
+        "--run-vbls",
+        "60000"
+      ],
+      "inputs": {
+        "binary": {
+          "path": "C:/Arbeit/F030TREX/TREX/m68030/trex_m68030.tos",
+          "sha256": "b94f6054233d2c896f0f1942a8759c6eda9d875f3f7d98c07fc19baf7b561da2"
+        },
+        "dsp": {
+          "path": "C:/Arbeit/F030TREX/TREX/dsp/trex_dsp.lod",
+          "sha256": "92d4744cb0807860842506d100a05e00a7ab2a8e0bd8c2d5a2f8f46e5c758e23"
+        },
+        "hatari": {
+          "path": "C:/Arbeit/F030Arcade/third_party/hatari/build-ucrt64/src/hatari.exe",
+          "sha256": "e0894bfc47761316ed09ef91e79ea7da57b3a42040ad96c6402a8358b207fec5"
+        },
+        "tos": {
+          "path": "C:/Arbeit/F030Arcade/third_party/tos/tos402.img",
+          "sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb"
+        }
+      },
+      "environment": {
+        "SDL_VIDEODRIVER": "dummy",
+        "HATARI_DSP_PCPROF_START": "00FA",
+        "HATARI_DSP_PCPROF_CALLERS": "02C2-02CA",
+        "HATARI_DSP_PCPROF_CMD": "02C4,004F",
+        "HATARI_DSP_PCPROF": "083B-083C,083D-083D,0889-088A,088B-088B,08B3-08B4,08B5-08B5,08B8-08B9,08BA-08BA,079B-0907,056E-079A,02C2-02C3,02C4-02C6,02C7-02C8,02C9-02CA,019D-0292,030D-0336,0337-03D4,03D5-04D7,04D8-056D,0913-0975,028A-028B"
+      },
+      "report": [
+        "  wall clock        : 96815 ms  (365.3 ms/frame, 2.74 FPS)",
+        "    DSP set_frame                      13.5 ms    3.7%",
+        "    DSP readback + packet build       258.3 ms   70.7%",
+        "    Framebuffer clear                  16.2 ms    4.4%",
+        "    Ordering Table insertion            0.0 ms    0.0%",
+        "    Software span rasterizer           77.0 ms   21.1%",
+        "    Present                             0.0 ms    0.0%",
+        "  frame-100 SHA256: d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16"
+      ],
+      "total": {
+        "clocks": 3106248740,
+        "instructions": 990495404
+      },
+      "ranges": [
+        {
+          "range": "083b-083c",
+          "what": "ss_wait_end jclr",
+          "clocks": 2166204,
+          "instructions": 361034
+        },
+        {
+          "range": "083d-083d",
+          "what": "ss_wait_end movep",
+          "clocks": 904800,
+          "instructions": 150800
+        },
+        {
+          "range": "0889-088a",
+          "what": "ss_pixel_wait jclr",
+          "clocks": 227696406,
+          "instructions": 37949401
+        },
+        {
+          "range": "088b-088b",
+          "what": "ss_pixel_wait movep",
+          "clocks": 21582120,
+          "instructions": 5395530
+        },
+        {
+          "range": "08b3-08b4",
+          "what": "ss_header_wait1 jclr",
+          "clocks": 8254392,
+          "instructions": 1375732
+        },
+        {
+          "range": "08b5-08b5",
+          "what": "ss_header_wait1 movep",
+          "clocks": 5426964,
+          "instructions": 1356741
+        },
+        {
+          "range": "08b8-08b9",
+          "what": "ss_header_wait2 jclr",
+          "clocks": 53600886,
+          "instructions": 8933481
+        },
+        {
+          "range": "08ba-08ba",
+          "what": "ss_header_wait2 movep",
+          "clocks": 5426964,
+          "instructions": 1356741
+        },
+        {
+          "range": "079b-0907",
+          "what": "span_stream_walk..ss_top_clip",
+          "clocks": 706372932,
+          "instructions": 213977597
+        },
+        {
+          "range": "056e-079a",
+          "what": "make_triangle_span..span_uv_fetch",
+          "clocks": 541462444,
+          "instructions": 198337808
+        },
+        {
+          "range": "02c2-02c3",
+          "what": "receive_word jclr",
+          "clocks": 403218228,
+          "instructions": 67203038
+        },
+        {
+          "range": "02c4-02c6",
+          "what": "receive_word tail",
+          "clocks": 21602780,
+          "instructions": 6480834
+        },
+        {
+          "range": "02c7-02c8",
+          "what": "send_word jclr",
+          "clocks": 71670768,
+          "instructions": 11945128
+        },
+        {
+          "range": "02c9-02ca",
+          "what": "send_word tail",
+          "clocks": 19436712,
+          "instructions": 4859178
+        },
+        {
+          "range": "019d-0292",
+          "what": "command_build_triangles..triangle_reply",
+          "clocks": 89585220,
+          "instructions": 30748423
+        },
+        {
+          "range": "030d-0336",
+          "what": "prelight_run",
+          "clocks": 37906410,
+          "instructions": 12790609
+        },
+        {
+          "range": "0337-03d4",
+          "what": "transform_vertices..project_vertices",
+          "clocks": 97965528,
+          "instructions": 40194124
+        },
+        {
+          "range": "03d5-04d7",
+          "what": "make_triangle_zkey..make_triangle_shade",
+          "clocks": 463597972,
+          "instructions": 169476258
+        },
+        {
+          "range": "04d8-056d",
+          "what": "lookup_projected_xy..make_triangle_bbox",
+          "clocks": 294453676,
+          "instructions": 100227991
+        },
+        {
+          "range": "0913-0975",
+          "what": "lookup_projected_z..prepass_load_triangle",
+          "clocks": 232139758,
+          "instructions": 88811615
+        },
+        {
+          "range": "028a-028b",
+          "what": "triangle_reply ss_flush jclr",
+          "clocks": 128580,
+          "instructions": 21430
+        }
+      ],
+      "wait_by_return_address": {
+        "0000": 300844,
+        "004f": 357356760,
+        "00fe": 9576,
+        "00ff": 97584,
+        "0104": 3192,
+        "0105": 33798,
+        "010a": 5320,
+        "010b": 40446,
+        "0110": 21280,
+        "0111": 176898,
+        "0115": 2660,
+        "0117": 36780,
+        "0126": 14946,
+        "0128": 4392192,
+        "0141": 7980,
+        "0143": 9534,
+        "0146": 13848,
+        "014e": 11616,
+        "0152": 828240,
+        "017d": 3910,
+        "0189": 2650,
+        "018b": 2650,
+        "019e": 296460,
+        "01a1": 282852,
+        "01be": 3225876,
+        "01bf": 8765268,
+        "01c1": 8834478,
+        "01c3": 8952090,
+        "028f": 85270,
+        "0292": 85270,
+        "0296": 85240,
+        "0299": 85240,
+        "02a8": 8497656,
+        "02aa": 77804754,
+        "02cc": 5597316,
+        "02cf": 8606454,
+        "02d2": 17052768,
+        "0923": 1075292,
+        "0937": 3220736,
+        "0944": 2764
+      },
+      "command_wait": {
+        "04": {
+          "name": "BUILD_TRIANGLES",
+          "clocks": 103726248,
+          "commands": 8527
+        },
+        "06": {
+          "name": "GET_TRIANGLES",
+          "clocks": 199045350,
+          "commands": 8524
+        },
+        "0a": {
+          "name": "PREPASS (order keys)",
+          "clocks": 8925540,
+          "commands": 265
+        },
+        "0c": {
+          "name": "SET_ANIMATED_FRAME",
+          "clocks": 7770006,
+          "commands": 265
+        },
+        "0d": {
+          "name": "LOAD_ANIMATION_GAIT",
+          "clocks": 31284994,
+          "commands": 798
+        },
+        "0e": {
+          "name": "APPLY_ANIMATION_TARGET",
+          "clocks": 6328668,
+          "commands": 391
+        },
+        "0f": {
+          "name": "FINISH_ANIMATED_FRAME",
+          "clocks": 275952,
+          "commands": 266
+        }
+      }
+    },
+    "hires": {
+      "command": [
+        "C:/Arbeit/F030Arcade/third_party/hatari/build-ucrt64/src/hatari.exe",
+        "--machine",
+        "falcon",
+        "--cpulevel",
+        "3",
+        "--cpuclock",
+        "16",
+        "--mmu",
+        "false",
+        "--cpu-exact",
+        "true",
+        "--compatible",
+        "true",
+        "--data-cache",
+        "true",
+        "--videl-contention",
+        "true",
+        "--patch-tos",
+        "true",
+        "--fast-boot",
+        "true",
+        "--tos",
+        "C:/Arbeit/F030Arcade/third_party/tos/tos402.img",
+        "--dsp",
+        "emu",
+        "--memsize",
+        "14",
+        "--ttram",
+        "0",
+        "--monitor",
+        "rgb",
+        "--frameskips",
+        "4",
+        "--sound",
+        "off",
+        "--benchmark",
+        "--confirm-quit",
+        "off",
+        "--log-level",
+        "fatal",
+        "--alert-level",
+        "fatal",
+        "--harddrive",
+        ".",
+        "--auto",
+        "C:\\RUN.TOS",
+        "--run-vbls",
+        "60000"
+      ],
+      "inputs": {
+        "binary": {
+          "path": "C:/Arbeit/F030TREX/TREX/m68030/trex_hires.tos",
+          "sha256": "bbf78ae305db1eb176e00d1d2a2650fb97d7a3fc9a6145503ff84e971edd2695"
+        },
+        "dsp": {
+          "path": "C:/Arbeit/F030TREX/TREX/m68030/TREXHIRS.LOD",
+          "sha256": "afcd56867e23ab319a59c1e1eb41b578c22affcb11a54b51c37c23376f991288"
+        },
+        "hatari": {
+          "path": "C:/Arbeit/F030Arcade/third_party/hatari/build-ucrt64/src/hatari.exe",
+          "sha256": "e0894bfc47761316ed09ef91e79ea7da57b3a42040ad96c6402a8358b207fec5"
+        },
+        "tos": {
+          "path": "C:/Arbeit/F030Arcade/third_party/tos/tos402.img",
+          "sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb"
+        }
+      },
+      "environment": {
+        "SDL_VIDEODRIVER": "dummy",
+        "HATARI_DSP_PCPROF_START": "00FD",
+        "HATARI_DSP_PCPROF_CALLERS": "02C6-02CE",
+        "HATARI_DSP_PCPROF_CMD": "02C8,004F",
+        "HATARI_DSP_PCPROF": "0873-0874,0875-0875,08BD-08BE,08BF-08BF,08DB-08DC,08DD-08DD,08F3-08F4,08F5-08F5,08F8-08F9,08FA-08FA,07D7-0946,05AA-07D6,02C6-02C7,02C8-02CA,02CB-02CC,02CD-02CE,01A0-0296,0311-033A,033B-03D8,03D9-04DB,04DC-0571,0572-05A9,0952-09B4,028E-028F"
+      },
+      "report": [
+        "  wall clock        : 163595 ms  (617.3 ms/frame, 1.62 FPS)",
+        "    DSP set_frame                      12.8 ms    2.1%",
+        "    DSP readback + packet build       444.4 ms   72.0%",
+        "    Framebuffer clear                  23.2 ms    3.8%",
+        "    Ordering Table insertion            0.0 ms    0.0%",
+        "    Software span rasterizer          136.5 ms   22.1%",
+        "    Present                             0.0 ms    0.0%",
+        "  frame-100 SHA256: f8781fbfcf4c0b0b44bd15f37a7102f540cc2cbd9c7b100a297540c9f4d5630e"
+      ],
+      "total": {
+        "clocks": 5249300372,
+        "instructions": 1527936841
+      },
+      "ranges": [
+        {
+          "range": "0873-0874",
+          "what": "ss_wait_end jclr",
+          "clocks": 2380584,
+          "instructions": 396764
+        },
+        {
+          "range": "0875-0875",
+          "what": "ss_wait_end movep",
+          "clocks": 982062,
+          "instructions": 163677
+        },
+        {
+          "range": "08bd-08be",
+          "what": "ss_pixel_wait jclr",
+          "clocks": 1013141292,
+          "instructions": 168856882
+        },
+        {
+          "range": "08bf-08bf",
+          "what": "ss_pixel_wait movep",
+          "clocks": 88749568,
+          "instructions": 22187392
+        },
+        {
+          "range": "08db-08dc",
+          "what": "ss_header_wait0 jclr",
+          "clocks": 17540214,
+          "instructions": 2923369
+        },
+        {
+          "range": "08dd-08dd",
+          "what": "ss_header_wait0 movep",
+          "clocks": 11488448,
+          "instructions": 2872112
+        },
+        {
+          "range": "08f3-08f4",
+          "what": "ss_header_wait1 jclr",
+          "clocks": 35128230,
+          "instructions": 5854705
+        },
+        {
+          "range": "08f5-08f5",
+          "what": "ss_header_wait1 movep",
+          "clocks": 11488448,
+          "instructions": 2872112
+        },
+        {
+          "range": "08f8-08f9",
+          "what": "ss_header_wait2 jclr",
+          "clocks": 102694428,
+          "instructions": 17115738
+        },
+        {
+          "range": "08fa-08fa",
+          "what": "ss_header_wait2 movep",
+          "clocks": 11488448,
+          "instructions": 2872112
+        },
+        {
+          "range": "07d7-0946",
+          "what": "span_stream_walk..ss_top_clip",
+          "clocks": 2157811064,
+          "instructions": 591769910
+        },
+        {
+          "range": "05aa-07d6",
+          "what": "make_triangle_span..span_uv_fetch",
+          "clocks": 600931252,
+          "instructions": 220275108
+        },
+        {
+          "range": "02c6-02c7",
+          "what": "receive_word jclr",
+          "clocks": 847405536,
+          "instructions": 141234256
+        },
+        {
+          "range": "02c8-02ca",
+          "what": "receive_word tail",
+          "clocks": 22445930,
+          "instructions": 6733779
+        },
+        {
+          "range": "02cb-02cc",
+          "what": "send_word jclr",
+          "clocks": 75874092,
+          "instructions": 12645682
+        },
+        {
+          "range": "02cd-02ce",
+          "what": "send_word tail",
+          "clocks": 21917912,
+          "instructions": 5479478
+        },
+        {
+          "range": "01a0-0296",
+          "what": "command_build_triangles..triangle_reply",
+          "clocks": 100472262,
+          "instructions": 34390799
+        },
+        {
+          "range": "0311-033a",
+          "what": "prelight_run",
+          "clocks": 39962290,
+          "instructions": 13566208
+        },
+        {
+          "range": "033b-03d8",
+          "what": "transform_vertices..project_vertices",
+          "clocks": 97965528,
+          "instructions": 40194124
+        },
+        {
+          "range": "03d9-04db",
+          "what": "make_triangle_zkey..make_triangle_shade",
+          "clocks": 500533106,
+          "instructions": 182559582
+        },
+        {
+          "range": "04dc-0571",
+          "what": "lookup_projected_xy..make_triangle_bbox",
+          "clocks": 352276634,
+          "instructions": 119526121
+        },
+        {
+          "range": "0572-05a9",
+          "what": "band_mark..command_get_bands",
+          "clocks": 52263350,
+          "instructions": 17599621
+        },
+        {
+          "range": "0952-09b4",
+          "what": "lookup_projected_z..prepass_load_triangle",
+          "clocks": 243557134,
+          "instructions": 93269863
+        },
+        {
+          "range": "028e-028f",
+          "what": "triangle_reply ss_flush jclr",
+          "clocks": 139182,
+          "instructions": 23197
+        }
+      ],
+      "wait_by_return_address": {
+        "0000": 329984,
+        "004f": 803671578,
+        "0101": 9576,
+        "0102": 91236,
+        "0107": 3192,
+        "0108": 32286,
+        "010d": 5320,
+        "010e": 55998,
+        "0113": 21280,
+        "0114": 227520,
+        "0118": 2660,
+        "011a": 31902,
+        "0129": 12630,
+        "012b": 4392192,
+        "0144": 7980,
+        "0146": 8058,
+        "0149": 13098,
+        "0151": 10800,
+        "0155": 828240,
+        "0180": 3910,
+        "018c": 2660,
+        "018e": 2660,
+        "01a1": 286632,
+        "01a4": 301152,
+        "01c1": 3548568,
+        "01c2": 8802684,
+        "01c4": 8801322,
+        "01c6": 8947872,
+        "0293": 93710,
+        "0296": 93710,
+        "029a": 93680,
+        "029d": 93680,
+        "02ac": 9506664,
+        "02ae": 81584742,
+        "02d0": 5419512,
+        "02d3": 7683960,
+        "02d6": 16474854,
+        "0599": 2650,
+        "059d": 106000,
+        "059f": 1325842,
+        "0962": 1186312,
+        "0976": 3519448,
+        "0983": 5716
+      },
+      "command_wait": {
+        "04": {
+          "name": "BUILD_TRIANGLES",
+          "clocks": 109848060,
+          "commands": 9371
+        },
+        "06": {
+          "name": "GET_TRIANGLES",
+          "clocks": 325822506,
+          "commands": 9368
+        },
+        "0a": {
+          "name": "PREPASS (order keys)",
+          "clocks": 325394148,
+          "commands": 266
+        },
+        "0c": {
+          "name": "SET_ANIMATED_FRAME",
+          "clocks": 1453332,
+          "commands": 265
+        },
+        "0d": {
+          "name": "LOAD_ANIMATION_GAIT",
+          "clocks": 28730602,
+          "commands": 798
+        },
+        "0e": {
+          "name": "APPLY_ANIMATION_TARGET",
+          "clocks": 5807424,
+          "commands": 391
+        },
+        "0f": {
+          "name": "FINISH_ANIMATED_FRAME",
+          "clocks": 250014,
+          "commands": 266
+        },
+        "44": {
+          "name": "GET_BANDS",
+          "clocks": 6365490,
+          "commands": 265
+        }
+      }
+    }
+  }
+}
