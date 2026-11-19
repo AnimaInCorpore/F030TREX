@@ -2684,6 +2684,12 @@ animation_expand_delta_stream
 ; acknowledgement leaves every band at full width: over-clearing, never a
 ; ghost.
 dsp_fetch_bands
+	; Without a loaded program nobody answers, and the receive loop below
+	; would wait forever: a DSP image TOS refuses to load (4.2's size
+	; limit) hung mode 2 at frame 0 (7.4i).  The bands then stay as
+	; delta_clear_bands left them for this frame: empty.
+	tst.l	dsp_program_loaded
+	beq	.bands_skip
 	movem.l	d0-d2/a0-a1,-(sp)
 	move.l	#DSP_CMD_GET_BANDS,dsp_bands_tx
 	lea	dsp_bands_tx,a0
@@ -2711,6 +2717,7 @@ dsp_fetch_bands
 	dbra	d2,.bands_full
 .bands_done
 	movem.l	(sp)+,d0-d2/a0-a1
+.bands_skip
 	rts
 	endc
 

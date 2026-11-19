@@ -9078,8 +9078,13 @@ alias; and the image, at 2,770 words in all, then hit TOS's load limit
 (4.2): every run rendered nothing, which surfaced only as `dsp_state 0`
 after two rounds of measurements had silently measured no DSP at all. The
 fit came from emptying the band table at start-up instead of preloading it
-(2,670 words). `dsp_fetch_bands` on the branch also returns without
-talking to the DSP when no program is loaded, instead of waiting forever.
+(2,670 words). `dsp_fetch_bands` returns without talking to the DSP when
+no program is loaded, instead of waiting forever; that guard alone is on
+`master` since 2026-11-19. With an image TOS refuses, the 640x400 host
+now completes its frames with `dsp_state` 0 instead of hanging at frame 0,
+and with the real image it measures 617.5 ms cycle-exact and 562.0 ms on
+the MMU ledger (6.6a.1's 616.4 / 561.7 ms before the guard shifted the
+layout), frame 100 unchanged.
 
 Not merged. Raw counters:
 [`docs/performance/hires-compact-stream-2026-11-19.json`](docs/performance/hires-compact-stream-2026-11-19.json).
