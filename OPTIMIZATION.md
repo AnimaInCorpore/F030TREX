@@ -5644,6 +5644,56 @@ summed, spans of the largest frame, recorded packets summed -- and
 picture is unchanged (frame 100 `d89958b3...3d16`, 9,049,666 pixels); the
 timings above were taken with the eight-byte header and were not re-taken.
 
+### 3.17 An eight-block, table-entered stream pixel loop -- built, measured, REJECTED (2026-11-19)
+
+`span_stream_draw`'s pixel loop is four instructions per pixel, one of
+them the `DBRA`. The candidate unrolls it eight times and enters through
+a reversed table of block addresses: with `D4 = n - 1 = 8q + i`, a
+memory-indirect `jmp ([.draw_table,pc,d3.w*4])` enters block `7 - i`, the
+first pass draws `i + 1` pixels and `DBRA` runs `q` further groups of
+eight; `n = 8k` needs no special case. A data longword,
+`span_unroll_enabled`, selects the loop per span, so the A/B is a
+one-byte patch on one layout (2.1). The estimate before the run was a gain
+of about 9 cycles per span (~5 ms per frame at 640x400): spans average
+5.8 pixels (7.4i), so most spans need one partial pass instead of n
+`DBRA`s, against about 20 cycles of setup.
+
+**Measured**, 265 frames, Hatari `c5d5bf34` (emulator only):
+
+| Build | Plain loop | Eight blocks | Frame | Raster stage |
+|---|---:|---:|---:|---:|
+| Default 240x224, cycle-exact | 365.9 ms | 370.3 ms | **+4.4 ms** | +8.9 ms |
+| Default 240x224, MMU ledger | 351.9 ms | 352.3 ms | +0.4 ms | +3.4 ms |
+| 640x400 (14 MiB), cycle-exact | 622.9 ms | 628.7 ms | **+5.8 ms** | +8.8 ms |
+| 640x400 (14 MiB), MMU ledger | 560.9 ms | 561.6 ms | +0.7 ms | +1.9 ms |
+
+Slower everywhere, and the estimate had the wrong sign. The cost sits in
+instruction time -- it nearly vanishes on the MMU ledger, which charges
+the 68030 none -- and the candidates are the memory-indirect `JMP` with
+its table read and the 80-byte unrolled body competing for the 256-byte
+instruction cache (3.9); neither is isolated. The picture is identical:
+the frame-hash build writes the reference list `0a3f2fa1...` over 512
+frames in both arms, and frame 100 and the pixel counts agree. The code's
+mere presence moved the unarmed 640x400 build from 616.4 to 622.9 ms
+(layout, 2.1). Not merged; the code is on branch `stream-draw-unroll`
+(`d86aba8`). Raw counters:
+[`docs/performance/stream-unroll-2026-11-19.json`](docs/performance/stream-unroll-2026-11-19.json).
+
+**Not built: a pointer texture.** The 68030's memory-indirect modes read a
+32-bit pointer, never a byte used as a scaled index, so the two-instruction
+fetch `move.b (0,a5,d1.l),d0` / `move.w (0,a6,d0.l*2),(a4)+` has no
+one-instruction form with byte texels. With each texel stored as a longword
+pointing at its colour in the page's bank-zero CLUT, and the span's bank
+offset as post-index, it becomes `move.w ([0,a5,d1.l*4],d2.l),(a4)+`. The
+memory accesses stay the same (pointer, CLUT word, framebuffer write); the
+texel read becomes a long -- two bus transfers on the 16-bit ST-RAM bus --
+and fills the data cache four times as fast; the six pages grow from 384 KB
+to 1.5 MB, which only the 14 MiB build can hold; and a full-format
+memory-indirect effective address costs the 68030 more than the brief
+indexed form. Expected no faster (estimate, and the table-entered loop
+above is a hint about memory-indirect cost, not a proof for a data
+access); recorded so the idea is not re-derived.
+
 ## 4. Work already assigned to the DSP
 
 The current DSP program keeps the static vertex mesh, the packed triangle
@@ -6413,6 +6463,22 @@ text as 0, so the `$40` start was never added. On the tracked image it
 printed `$A5D`, past the ceiling, for a program that ends at `P:$0975`
 (listing and an exact parse agree: first free `$976`). The form above gives
 `$976`; the listing's last `P:` address is the cross-check.
+
+**A second ceiling: TOS 4.02's `Dsp_LoadProg` size limit (2026-11-19).**
+Independent of the P/Y overlay, TOS refuses an image that is too large *in
+total*. Bisected in Hatari with a probe that runs `Dsp_Lock`, `Dsp_Reserve`
+and `Dsp_LoadProg` and records the return codes (7.4i): an image of 2,720
+data words in 8 `_DATA` blocks loads (return 0), 2,725 words in 8 blocks
+returns -1. Both fit the rule **3 x (data words + blocks) <= 8,192 bytes**
+(2,728 x 3 = 8,184 loads, 2,733 x 3 = 8,199 fails). The host's own load
+buffer plays no part: the probe passed 12,288 bytes, and `Dsp_Lock` and
+`Dsp_Reserve` succeeded in every case. The data words count every block,
+X and Y included -- a preloaded X table costs as much as code. The
+failure is silent in this program: `dsp_open` clears `dsp_state`, the run
+renders nothing and still completes its frame count, so **a run whose
+`dsp_state` is 0 or whose pixel count is 0 measured nothing**. The tracked
+default image carries 2,358 P words plus its Y data, well inside the
+limit.
 
 The current program ends at `P:$099E`, leaving 33 words `$099F-$09BF` before
 `triangle_indices`: the normal-cache build ended at `P:$091E`, section
@@ -8945,6 +9011,78 @@ python3 tools/measure_frames.py TREX/m68030/trex_plain.tos \
   TREX/m68030/TREXORDR.LOD hatari_runs/plain-ce --dsp-name TREXORDR.LOD \
   --cpu-core cycle-exact --videl-contention on --frames 265 --timeout 2400
 ```
+
+### 7.4i Compact span stream at 640x400 -- built, lossless, measured SLOWER, not merged (2026-11-19)
+
+At 640x400 the span stream carries 233.7 KB a frame (6.6a.1), at most
+420.6 KB; at the route's structural 1 MB/s (7.4f) that is at least ~234 ms
+of transfer a frame, which looked like half of the ~438 ms packet window.
+This section shrinks the stream and measures whether the frame follows.
+
+**What the stream is made of** (frame 100's `spanstrm.res`, 640x400,
+measured): 83,617 units -- 54,503 texel offsets (65%), 28,434 span-header
+units (34%: three per span, spans average 5.8 pixels), 680 terminators.
+Only **7.9%** of pixels repeat the previous texel (runs: 46,039 of one
+pixel, 4,054 of two, ~110 longer), so run-length coding grows the stream
+(+25% to +55% for the two variants modelled), and a per-pixel "repeat"
+flag would cost every pixel to save 8% of them. But **99.1%** of pixel steps
+fit dU and dV in -8..7, within a triangle 97% of spans start on the next
+row, the bank changes in 4.8% of them and the x step always fits -32..31.
+
+**The encodings** (`TREX_HIRES` only, branch `hires-stream-compression`,
+`6fc3190`):
+
+- **Continuation header**, one unit: `D << 14 | 1 << 13 | (dx & 63) << 7 |
+  length - 1` when the triangle's previous span was the row above with the
+  same bank and length <= 128; otherwise the full three-unit header (with
+  `D` in bit 14). `$FFFF` still ends a triangle.
+- **Texel deltas** (`D = 1`, chosen per triangle when du/dx and dv/dx both
+  lie in -7..6, which keeps every step, texture-edge wraps included, inside
+  the nibbles): the first offset in full, then two pixels per unit as
+  `(t1 << 4) + t2`, `t = step + $808`. The DSP needs no masking for that
+  layout; the 68030 decodes each pixel as `((field & $0F0F) - $808)`.
+
+**Lossless.** With the band clear armed in mode 2 and in mode 1, the
+frame-sequence probe writes dumps byte-identical to `master`'s for all 265
+frames; frame 100 is `f8781fbf...630e` in every run. The stream shrinks from
+61.9 MB to 34.0 MB over the prefix (-45.1%), its largest frame from 420.6 to
+222.9 KB.
+
+**Measured** (265 frames, 14 MiB, emulator only), same 68030 binary for the
+last two rows -- only the DSP image differs:
+
+| 640x400 | Stream | Cycle-exact | MMU ledger | CE packet | CE raster |
+|---|---:|---:|---:|---:|---:|
+| Uncompressed (`master`, 6.6a.1) | 61.9 MB | **616.4 ms** | **561.7 ms** | 443.5 ms | 136.0 ms |
+| Compact headers only | 51.9 MB | 642.8 ms | 593.7 ms | 475.2 ms | 130.8 ms |
+| Headers + texel deltas | 34.0 MB | 715.2 ms | 582.2 ms | 458.3 ms | 220.1 ms |
+
+- **The wire was not the bottleneck.** Cutting it by 45% does not shorten
+  the packet stage: the SSI transfer overlaps the DSP's own work, and the
+  frame waits on DSP arithmetic. The "half the packet window" figure
+  above was an estimate from the structural rate, and it was wrong.
+- **Headers alone cost the DSP more than they save:** the per-span
+  continuation test raises the packet stage by 31.7 ms cycle-exact.
+- **The 68030 hotspot is the delta pair loop** (`.c_pair`): 7 instructions
+  per pixel against the plain loop's 4, plus ~10 instructions of per-span
+  setup at 5.8 pixels a span. Attributed by the A/B -- the header-only
+  image never enters it and leaves the raster stage at 130.8 ms -- not by a
+  profiler; ~89 ms cycle-exact. A table-driven decode would need one byte
+  per pixel, which costs the DSP about what the wire saves.
+
+**What it took to fit**, kept on the branch: the compact code pushed the
+HIRES DSP image past `P:$09BF`, so 150 corner normals move from the Y window
+to the X pad (`NORMAL_Y_COUNT` 2,707, index list at `Y:$0AEC`, P ceiling
+`$0AEB`). A first attempt placed the code at `P:$7700` instead, the X pad's
+alias; and the image, at 2,770 words in all, then hit TOS's load limit
+(4.2): every run rendered nothing, which surfaced only as `dsp_state 0`
+after two rounds of measurements had silently measured no DSP at all. The
+fit came from emptying the band table at start-up instead of preloading it
+(2,670 words). `dsp_fetch_bands` on the branch also returns without
+talking to the DSP when no program is loaded, instead of waiting forever.
+
+Not merged. Raw counters:
+[`docs/performance/hires-compact-stream-2026-11-19.json`](docs/performance/hires-compact-stream-2026-11-19.json).
 
 ## 8. When SSI/crossbar streaming is worthwhile
 
