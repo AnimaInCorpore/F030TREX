@@ -228,7 +228,15 @@ TRI_OCCLUDER_BIT	= 23
 ; fill the Y window to its last-but-two word (5,714 words).
 NORMAL_TOTAL	= 3610
 NORMAL_WORDS	= 2
+	IF	HIRES
+; The HIRES image needs program words the default does not (the compact
+; span stream, 2.5d), so 150 normals move from the Y window into the spare X
+; pad: the index list then starts 300 words later and the P ceiling, which
+; the list sets, rises from $09BF to $0AEB.
+NORMAL_Y_COUNT	= 2707
+	ELSE
 NORMAL_Y_COUNT	= 2857
+	ENDIF
 NORMAL_X_COUNT	= NORMAL_TOTAL-NORMAL_Y_COUNT
 ; Where the BUILD chunk buffers start in X.  prelight_table ends below it and
 ; the gap is padded, so chunk_uvs, triangle_out, the phase-local light copy,
@@ -510,6 +518,12 @@ main
 	movep	#$0140,x:m_pcc
 	movep	#$0020,x:m_pcddr
 	movep	#$1a00,x:m_crb
+	IF	HIRES
+	; The band table starts empty (2.5c).  It is not preloaded in the LOD:
+	; TOS 4.02's Dsp_LoadProg refuses an image past about 2,730 words in all,
+	; and the HIRES image with the compact stream carried 2,770 (2.5d).
+	jsr	band_reset
+	ENDIF
 	movep	#$0020,x:m_pcd
 	ENDIF
 
@@ -2571,14 +2585,19 @@ command_get_bands
 	jsr	<send_word
 	nop
 get_bands_send
+	jsr	band_reset
+	jmp	<main_loop
+
+; Empty the band table: xmin $FFF, xmax 0 (the host's clamp rejects the pair).
+band_reset
 	move	#band_table,r0
 	move	#>$fff,x0
 	clr	a
-	do	#DC_BANDS,get_bands_reset
+	do	#DC_BANDS,band_reset_end
 	move	x0,x:(r0)+
 	move	a1,x:(r0)+
-get_bands_reset
-	jmp	<main_loop
+band_reset_end
+	rts
 	ENDIF
 
 make_triangle_span
@@ -3063,6 +3082,9 @@ span_uv_slot2
 ; Clobbers A, B, X0, X1, Y0, Y1.
 ; -----------------------------------------------------------------------------
 span_stream_walk
+	IF	HIRES
+	jsr	ss_tri_start_c		; compact stream state (2.5d), far P code
+	ENDIF
 	move	#>$800,y1
 	move	#>$80,x1
 	move	y:span_sx0,x0
@@ -3259,12 +3281,13 @@ ss_right_ok
 	IF	HIRES
 	move	b1,r0		; R0 = pixel count
 	move	x0,r6		; x of the first pixel
+	jsr	ss_header_c
 	ELSE
 	move	r7,a
 	add	x0,a	b1,r0		; y << 8 | x; R0 = pixel count
 	move	a1,r6
-	ENDIF
 	jsr	<ss_header
+	ENDIF
 	; U and V at the first pixel, the header already on the wire.
 	move	y:span_dudx,x1
 	move	r5,a
@@ -3279,6 +3302,9 @@ ss_row_v
 	move	a0,b
 	move	y:<ss_dv,x1
 	move	#$ff0000,y0
+	IF	HIRES
+	jsr	ss_pixels_c
+	ELSE
 	do	r0,ss_pixels_end
 	move	r4,x0
 	tfr	b,a	(r4)+n4
@@ -3289,6 +3315,7 @@ ss_pixel_wait
 	movep	a1,x:m_tx
 	add	x1,b
 ss_pixels_end
+	ENDIF
 
 ss_row_next
 	move	y:<ss_xl,a
@@ -3313,9 +3340,9 @@ ss_half_end
 	rts
 
 ; A span's two header units.  R0 = pixel count, R6 = y << 8 | x.
-; HIRES sends three: length - 1, (tint << 4 | level) << 9 | y, then x;
-; R7 = y, R6 = x.
+; HIRES uses ss_header_c in the far P region instead (2.5d).
 ; Clobbers A, X0 and X1; leaves B, Y0 and Y1 alone.
+	IF	!HIRES
 ss_header
 	IF	HIRES
 	move	r0,a
@@ -3362,6 +3389,7 @@ ss_header_wait2
 	jclr	#m_tde,x:m_sr,ss_header_wait2
 	movep	a0,x:m_tx
 	rts
+	ENDIF
 
 ; Left edge off screen: the span starts at column zero and U/V advance by
 ; the clipped distance as well as by the prestep.
@@ -3373,11 +3401,12 @@ ss_left_clip
 	move	a1,y:ss_clip
 	IF	HIRES
 	move	#0,r6		; column zero
+	jsr	ss_header_c
 	ELSE
 	move	r7,x0
 	move	x0,r6		; position unit: column zero
-	ENDIF
 	jsr	<ss_header
+	ENDIF
 	move	y:ss_clip,x0
 	move	y:span_dudx,x1
 	mpy	x1,x0,b
@@ -4648,6 +4677,243 @@ pio_burst_send
 
 	ENDIF
 
+	IF	HIRES
+; -----------------------------------------------------------------------------
+; Compact span stream (OPTIMIZATION.md 2.5d).
+;
+; It follows the rest of the program; the HIRES layout moves the index list
+; up to make the room (NORMAL_Y_COUNT).  A first version lived at P:$7700,
+; the X pad's alias, and TOS 4.02's Dsp_LoadProg refused the whole image.
+;
+; Per span, a header unit (bit 15 clear; $FFFF still ends a triangle):
+;   full:          D << 14 | length - 1, then bank << 9 | y, then x
+;   continuation:  D << 14 | 1 << 13 | (dx & 63) << 7 | length - 1
+;                  when the triangle's previous span was the row above, with
+;                  the same bank, dx in -32..31 and length at most 128
+; D = 0: one offset unit V << 8 | U per pixel, as before.
+; D = 1: the first offset in full, then two pixels per unit:
+;   (t1 << 4) + t2,  t = (offset - previous offset) + $808
+; so the host steps each pixel by ((field & $0F0F) - $808), field = u >> 4
+; for the first pixel of a pair and u for the second.  D is set per triangle
+; when du/dx and dv/dx both lie in -7..6 texels per pixel: every step then
+; has both bytes of t inside 0..15, wraps past a texture edge included.
+; -----------------------------------------------------------------------------
+ss_tri_start_c
+	clr	a
+	move	a1,y:ss_cvalid
+	move	a1,y:ss_dflag
+	move	y:span_dudx,a
+	move	#>-7*256,x0
+	cmp	x0,a
+	jlt	ss_tri_plain
+	move	#>6*256,x0
+	cmp	x0,a
+	jgt	ss_tri_plain
+	move	y:span_dvdx,a
+	move	#>-7*256,x0
+	cmp	x0,a
+	jlt	ss_tri_plain
+	move	#>6*256,x0
+	cmp	x0,a
+	jgt	ss_tri_plain
+	move	#>$4000,x0
+	move	x0,y:ss_dflag
+ss_tri_plain
+	rts
+
+; One 16-bit unit from X0.  Clobbers A and X1.
+ss_tx
+	move	#>$80,x1
+	mpy	x1,x0,a
+ss_tx_wait
+	jclr	#m_tde,x:m_sr,ss_tx_wait
+	movep	a0,x:m_tx
+	rts
+
+; R0 = pixel count, R6 = x, R7 = y.  Clobbers A, B, X0 and X1; leaves
+; Y0 (the row's prestep) and Y1 alone.
+ss_header_c
+	move	y:<ss_lvl,a
+	tst	a
+	jpl	ss_hc_low
+	clr	a
+ss_hc_low
+	move	#>$0fff,x1
+	cmp	x1,a
+	jle	ss_hc_high
+	tfr	x1,a
+ss_hc_high
+	move	#>$0f00,x1
+	and	x1,a		; level << 8
+	move	y:<ss_tint,x1
+	add	x1,a		; (tint << 4 | level) << 8
+	move	a1,b
+	move	y:ss_cvalid,a
+	tst	a
+	jeq	ss_hc_full
+	move	y:ss_cbank,x0
+	cmp	x0,b
+	jne	ss_hc_full
+	move	r0,a
+	move	#>128,x0
+	cmp	x0,a
+	jgt	ss_hc_full
+	move	y:ss_cy,a
+	move	#>1,x0
+	add	x0,a
+	move	r7,x0
+	cmp	x0,a
+	jne	ss_hc_full
+	move	r6,a
+	move	y:ss_cx,x0
+	sub	x0,a		; dx
+	move	#>-32,x0
+	cmp	x0,a
+	jlt	ss_hc_full
+	move	#>31,x0
+	cmp	x0,a
+	jgt	ss_hc_full
+	move	#>$3f,x0
+	and	x0,a
+	rep	#7
+	asl	a		; (dx & 63) << 7
+	move	r0,x0
+	add	x0,a
+	move	#>$2000-1,x0
+	add	x0,a		; | 1 << 13 | length - 1
+	move	y:ss_dflag,x0
+	add	x0,a		; | D << 14
+	move	a1,x0
+	jsr	ss_tx
+	jmp	ss_hc_done
+ss_hc_full
+	move	r0,a
+	move	#>1,x0
+	sub	x0,a
+	move	y:ss_dflag,x0
+	add	x0,a		; D << 14 | length - 1
+	move	a1,x0
+	jsr	ss_tx
+	tfr	b,a
+	asl	a		; bank << 9
+	move	r7,x0
+	add	x0,a		; | y
+	move	a1,x0
+	jsr	ss_tx
+	move	r6,x0
+	jsr	ss_tx		; x
+ss_hc_done
+	move	r7,x0
+	move	x0,y:ss_cy
+	move	r6,x0
+	move	x0,y:ss_cx
+	move	b1,y:ss_cbank
+	move	#>1,x0
+	move	x0,y:ss_cvalid
+	rts
+
+; The span's pixels.  In: R0 = count, R4/N4 = U, B = V << 8, X1 = its step,
+; Y0 = $FF0000.  Leaves Y1 alone.
+ss_pixels_c
+	move	y:ss_dflag,a
+	tst	a
+	jne	ss_pc_delta
+	do	r0,ss_pc_plain_end
+	move	r4,x0
+	tfr	b,a	(r4)+n4
+	and	y0,a
+	or	x0,a
+ss_pc_wait
+	jclr	#m_tde,x:m_sr,ss_pc_wait
+	movep	a1,x:m_tx
+	add	x1,b
+ss_pc_plain_end
+	rts
+
+ss_pc_delta
+	move	r4,x0
+	tfr	b,a	(r4)+n4
+	and	y0,a
+	or	x0,a
+ss_pc_wait0
+	jclr	#m_tde,x:m_sr,ss_pc_wait0
+	movep	a1,x:m_tx		; the first offset, in full
+	add	x1,b
+	move	#>$ffff00,x0
+	and	x0,a
+	move	a1,y:ss_prev
+	move	r0,a
+	move	#>1,x0
+	sub	x0,a		; deltas to send
+	move	a1,y:ss_n
+	jeq	ss_pc_done
+	asr	a		; pairs
+	move	a1,r0
+	move	r0,a
+	tst	a
+	jeq	ss_pc_tail
+	do	r0,ss_pc_pairs_end
+	move	r4,x0
+	tfr	b,a	(r4)+n4
+	and	y0,a
+	or	x0,a
+	add	x1,b
+	move	#>$ffff00,x0
+	and	x0,a
+	move	y:ss_prev,x0
+	move	a1,y:ss_prev
+	sub	x0,a
+	move	#>$080800,x0
+	add	x0,a		; t1 << 8
+	rep	#4
+	asl	a
+	move	a1,y:ss_hi		; (t1 << 4) << 8
+	move	r4,x0
+	tfr	b,a	(r4)+n4
+	and	y0,a
+	or	x0,a
+	add	x1,b
+	move	#>$ffff00,x0
+	and	x0,a
+	move	y:ss_prev,x0
+	move	a1,y:ss_prev
+	sub	x0,a
+	move	#>$080800,x0
+	add	x0,a		; t2 << 8
+	move	y:ss_hi,x0
+	add	x0,a
+ss_pc_wait1
+	jclr	#m_tde,x:m_sr,ss_pc_wait1
+	movep	a1,x:m_tx
+	nop			; no jump at or next to the loop's last word
+ss_pc_pairs_end
+ss_pc_tail
+	move	y:ss_n,a
+	move	#>1,x0
+	and	x0,a
+	jeq	ss_pc_done
+	move	r4,x0
+	tfr	b,a	(r4)+n4
+	and	y0,a
+	or	x0,a
+	add	x1,b
+	move	#>$ffff00,x0
+	and	x0,a
+	move	y:ss_prev,x0
+	sub	x0,a
+	move	#>$080800,x0
+	add	x0,a
+	rep	#4
+	asl	a		; the last pixel alone; the second slot is padding
+ss_pc_wait2
+	jclr	#m_tde,x:m_sr,ss_pc_wait2
+	movep	a1,x:m_tx
+ss_pc_done
+	rts
+; The HIRES program must end below P:$0AEC.  ASM56000 cannot compare an
+; address term in IF, so check the LOD's P extent after any change here.
+	ENDIF
+
 ; -----------------------------------------------------------------------------
 ; X memory
 ; -----------------------------------------------------------------------------
@@ -4698,12 +4964,11 @@ prelight_table
 	ds	CHUNK_UVS_BASE-prelight_table-TREX_PRIMITIVES-512
 	ELSE
 	IF	HIRES
-; The band table of 2.5c, in the spare words after prelight_table; it is
-; assembled empty, so the program's first frame starts from a clean table.
+; The band table of 2.5c, in the spare words after prelight_table.  main
+; empties it at start-up (band_reset); it is not preloaded, to keep the LOD
+; under TOS's load limit.
 band_table
-	DUP	DC_BANDS
-	dc	$fff,0
-	ENDM
+	ds	DC_BANDS*2
 	ds	CHUNK_UVS_BASE-prelight_table-TREX_PRIMITIVES-DC_BANDS*2
 	ELSE
 	ds	CHUNK_UVS_BASE-prelight_table-TREX_PRIMITIVES
@@ -5136,6 +5401,15 @@ ss_dv equ project_temp_y  ; dv/dx << 8
 ss_tint equ project_temp_z  ; (tint << 12) - 1
 ss_clip equ prepass_cnt_lo
 ss_tmp equ prepass_cnt_lo+1
+; HIRES compact stream (2.5d), same bank, long-form on-chip cells.
+ss_cvalid equ prepass_cnt_lo+2  ; a previous span of this triangle exists
+ss_cy equ prepass_cnt_lo+3  ; its row
+ss_cx equ prepass_cnt_lo+4  ; its first column
+ss_cbank equ prepass_cnt_lo+5  ; its (tint << 4 | level) << 8
+ss_dflag equ prepass_cnt_lo+6  ; $4000 when this triangle's pixels are delta coded
+ss_prev equ prepass_cnt_lo+7  ; the last sent offset << 8
+ss_hi equ prepass_cnt_lo+8  ; first pixel of a pair, (t << 4) << 8
+ss_n equ prepass_cnt_lo+9  ; deltas in the current span
 	ENDIF
 
 ; Sticky arming flag, written only by CMD_PREPASS.  It starts at zero, so an
@@ -5318,7 +5592,11 @@ triangles_loaded
 ; rep/do target must stay one word.
 ; -----------------------------------------------------------------------------
 
+	IF	HIRES
+	org	y:$0aec		; P ceiling $0AEB (see NORMAL_Y_COUNT)
+	ELSE
 	org	y:$09c0
+	ENDIF
 
 ; Packed vertex AND corner-normal indices per triangle, uploaded once by
 ; CMD_LOAD_TRIANGLES and read by every chunk afterwards.  See TRI_INDEX_BITS

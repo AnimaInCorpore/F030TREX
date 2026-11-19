@@ -2684,6 +2684,12 @@ animation_expand_delta_stream
 ; acknowledgement leaves every band at full width: over-clearing, never a
 ; ghost.
 dsp_fetch_bands
+	; Without a loaded program there is nobody to answer, and the receive
+	; loop below would wait forever (2.5d found a too-large image doing
+	; exactly that).  The bands stay as delta_clear_bands left them: empty,
+	; which is correct for a frame nothing was drawn into by the DSP path.
+	tst.l	dsp_program_loaded
+	beq	.bands_skip
 	movem.l	d0-d2/a0-a1,-(sp)
 	move.l	#DSP_CMD_GET_BANDS,dsp_bands_tx
 	lea	dsp_bands_tx,a0
@@ -2711,6 +2717,7 @@ dsp_fetch_bands
 	dbra	d2,.bands_full
 .bands_done
 	movem.l	(sp)+,d0-d2/a0-a1
+.bands_skip
 	rts
 	endc
 
@@ -6181,34 +6188,13 @@ offset_draw_packet
 ;      raster_pixel_count.  Clobbers D0-D5/A4/A6.
 span_stream_draw
 	ifd	TREX_HIRES
-	; With the band delta clear armed (2.5b), a streamed triangle must
-	; widen the band table like rasterize_packet's delta_mark_packet does,
-	; or its pixels would never be cleared.  One test per triangle; the
-	; marking loop is a separate copy, so the unarmed loop is unchanged.
-	cmpi.l	#1,delta_clear_enabled		; mode 2: the DSP marks (2.5c)
-	beq	span_stream_draw_marked
+	bra	span_stream_draw_compact
 	endc
 	moveq	#0,d0
 	moveq	#0,d1
 	moveq	#0,d2
 	moveq	#0,d5
 .draw_span
-	ifd	TREX_HIRES
-	; Three units: length - 1, (tint << 4 | level) << 9 | y, x.
-	moveq	#0,d4
-	move.w	(a1)+,d4		; length - 1
-	bmi	.draw_done
-	move.w	(a1)+,d3
-	move.w	d3,d2
-	andi.w	#$fe00,d3		; bank * 512 bytes
-	lea	(0,a0,d3.w),a6		; this span's CLUT bank
-	andi.l	#$1ff,d2		; y
-	mulu.w	#FRAMEBUFFER_STRIDE,d2
-	lea	(0,a3,d2.l),a4
-	move.w	(a1)+,d2		; x
-	lea	(0,a4,d2.w*2),a4		; first pixel
-	moveq	#0,d2
-	else
 	move.w	(a1)+,d3
 	bmi	.draw_done
 	moveq	#0,d4
@@ -6217,7 +6203,6 @@ span_stream_draw
 	lea	(0,a0,d3.w*2),a6		; this span's CLUT bank
 	move.w	(a1)+,d2
 	lea	(0,a3,d2.l*2),a4		; first pixel
-	endc
 	addq.l	#1,d5
 	add.l	d4,d5
 .draw_pixel
@@ -6231,81 +6216,164 @@ span_stream_draw
 	rts
 
 	ifd	TREX_HIRES
-; span_stream_draw with band marking (OPTIMIZATION.md 2.5b).  The same draw
-; loop plus, per span, the triangle's leftmost and rightmost pixel; its rows
-; are the first span's and the last span's, since spans arrive in row order.
-; Once per triangle the bands those rows touch are widened exactly as
-; delta_mark_packet widens them.  Also clobbers A2 (last row), D6/D7 (x
-; range), which are saved.
-span_stream_draw_marked
+; The 640x400 build's compact span stream (OPTIMIZATION.md 2.5d).  Per span
+; a header unit, bit 15 clear ($FFFF ends the triangle):
+;   full:          D << 14 | length - 1, then bank << 9 | y, then x
+;   continuation:  D << 14 | 1 << 13 | (dx & 63) << 7 | length - 1,
+;                  the row below the previous span, same bank
+; D = 0: one offset unit per pixel.  D = 1: the first offset in full, then
+; two pixels per unit, each stepping the offset by ((field & $0F0F) - $808)
+; with field = u >> 4 for the first of the pair and u for the second; an odd
+; last pixel uses only the first field.
+; With delta_clear_enabled = 1 (the 68030 marks, 2.5b) each span also widens
+; the triangle's x range and the bands are marked at the terminator.
+; In:  A0 = the page's opaque word CLUT, bank zero of tint zero
+;      A1 = stream, A3 = render window, A5 = texture page
+; Out: A1 = first unit after the terminator.  Clobbers D0-D5/A4/A6.
+span_stream_draw_compact
 	movem.l	d6-d7/a2,-(sp)
 	moveq	#0,d0
 	moveq	#0,d1
-	moveq	#0,d2
 	moveq	#0,d5
-	move.w	#$7fff,d6		; leftmost pixel
-	moveq	#-1,d7			; rightmost pixel; negative = no span
-	tst.w	(a1)
-	bmi	.mark_span		; a terminator alone: nothing drawn
-	move.w	2(a1),d3
-	andi.w	#$1ff,d3
-	move.w	d3,dc_stream_ymin	; the first span's row
-.mark_span
+	moveq	#0,d6			; first column of the span
+	moveq	#0,d7			; its row, as a byte offset
+	suba.l	a2,a2			; its row
+	cmpi.l	#1,delta_clear_enabled
+	seq	dc_cm_on
+	move.w	#$7fff,dc_cm_xmin
+	move.w	#-1,dc_cm_xmax
+	move.w	#-1,dc_cm_ymin
+.c_span
 	moveq	#0,d4
-	move.w	(a1)+,d4		; length - 1
-	bmi	.mark_done
-	move.w	(a1)+,d3
-	move.w	d3,d2
-	andi.w	#$fe00,d3		; bank * 512 bytes
-	lea	(0,a0,d3.w),a6		; this span's CLUT bank
-	andi.l	#$1ff,d2		; y
-	move.l	d2,a2			; the last span's row, once the loop ends
-	mulu.w	#FRAMEBUFFER_STRIDE,d2
-	lea	(0,a3,d2.l),a4
-	move.w	(a1)+,d2		; x
-	lea	(0,a4,d2.w*2),a4		; first pixel
-	cmp.w	d2,d6
-	ble	.mark_lo
-	move.w	d2,d6
-.mark_lo
-	add.w	d4,d2			; last pixel
-	cmp.w	d2,d7
-	bge	.mark_hi
+	move.w	(a1)+,d4
+	cmpi.w	#$ffff,d4
+	beq	.c_done
+	move.w	d4,d3			; D rides in bit 14
+	btst	#13,d4
+	bne	.c_cont
+	andi.w	#$3ff,d4		; length - 1
+	move.w	(a1)+,d2		; bank << 9 | y
+	moveq	#0,d7
 	move.w	d2,d7
-.mark_hi
-	moveq	#0,d2
+	andi.w	#$fe00,d2
+	lea	(0,a0,d2.w),a6		; this span's CLUT bank
+	andi.w	#$1ff,d7
+	move.l	d7,a2			; row
+	mulu.w	#FRAMEBUFFER_STRIDE,d7
+	move.w	(a1)+,d6		; x
+	bra	.c_pixels
+.c_cont
+	addq.l	#1,a2
+	addi.l	#FRAMEBUFFER_STRIDE,d7
+	move.w	d4,d2
+	lsr.w	#7,d2
+	andi.w	#$3f,d2
+	eori.w	#$20,d2
+	subi.w	#$20,d2			; dx, sign-extended from six bits
+	add.w	d2,d6
+	andi.w	#$7f,d4			; length - 1
+.c_pixels
+	lea	(0,a3,d7.l),a4
+	lea	(0,a4,d6.w*2),a4		; first pixel
 	addq.l	#1,d5
 	add.l	d4,d5
-.mark_pixel
+	tst.b	dc_cm_on
+	beq	.c_unmarked
+	move.w	dc_cm_xmin,d2
+	cmp.w	d2,d6
+	bge	.c_mark_lo
+	move.w	d6,dc_cm_xmin
+.c_mark_lo
+	move.w	d6,d2
+	add.w	d4,d2			; last pixel
+	cmp.w	dc_cm_xmax,d2
+	ble	.c_mark_hi
+	move.w	d2,dc_cm_xmax
+.c_mark_hi
+	tst.w	dc_cm_ymin
+	bpl	.c_mark_y
+	move.w	a2,dc_cm_ymin
+.c_mark_y
+	move.w	a2,dc_cm_ymax
+.c_unmarked
+	btst	#14,d3
+	bne	.c_delta
+.c_plain
 	move.w	(a1)+,d1		; texel offset, V << 8 | U
 	move.b	(0,a5,d1.l),d0		; texel -> palette index
 	move.w	(0,a6,d0.l*2),(a4)+		; shaded colour -> framebuffer
-	dbra	d4,.mark_pixel
-	bra	.mark_span
-.mark_done
+	dbra	d4,.c_plain
+	bra	.c_span
+.c_delta
+	move.w	(a1)+,d1		; the first offset, in full
+	move.b	(0,a5,d1.l),d0
+	move.w	(0,a6,d0.l*2),(a4)+
+	tst.w	d4			; deltas left
+	beq	.c_span
+	move.w	d4,d3
+	andi.w	#1,d3			; a lone last pixel?
+	lsr.w	#1,d4			; pairs
+	swap	d4
+	move.w	d3,d4
+	swap	d4			; the odd flag waits in the high word
+	tst.w	d4
+	beq	.c_tail
+	subq.w	#1,d4
+.c_pair
+	move.w	(a1)+,d2
+	move.w	d2,d3
+	lsr.w	#4,d3
+	andi.w	#$0f0f,d3
+	add.w	d3,d1
+	subi.w	#$0808,d1
+	move.b	(0,a5,d1.l),d0
+	move.w	(0,a6,d0.l*2),(a4)+
+	andi.w	#$0f0f,d2
+	add.w	d2,d1
+	subi.w	#$0808,d1
+	move.b	(0,a5,d1.l),d0
+	move.w	(0,a6,d0.l*2),(a4)+
+	dbra	d4,.c_pair
+.c_tail
+	swap	d4
+	tst.w	d4
+	beq	.c_span
+	move.w	(a1)+,d2
+	lsr.w	#4,d2
+	andi.w	#$0f0f,d2
+	add.w	d2,d1
+	subi.w	#$0808,d1
+	move.b	(0,a5,d1.l),d0
+	move.w	(0,a6,d0.l*2),(a4)+
+	bra	.c_span
+.c_done
 	add.l	d5,raster_pixel_count
-	tst.w	d7
-	bmi	.mark_out		; no span, no band
+	tst.b	dc_cm_on
+	beq	.c_out
+	move.w	dc_cm_xmax,d7
+	bmi	.c_out			; no span, no band
+	move.w	dc_cm_xmin,d6
 	moveq	#0,d2
-	move.w	dc_stream_ymin,d2
-	move.l	a2,d3
+	move.w	dc_cm_ymin,d2
+	moveq	#0,d3
+	move.w	dc_cm_ymax,d3
 	lsr.l	#DC_BAND_SHIFT,d2		; first band
 	lsr.l	#DC_BAND_SHIFT,d3		; last band
 	sub.l	d2,d3			; band count - 1
 	move.l	dc_table_base,a4
 	lea	(0,a4,d2.l*4),a4		; DC_ENTRY = 4 bytes per band
-.mark_band
+.c_band
 	cmp.w	(a4),d6
-	bge	.mark_band_lo
+	bge	.c_band_lo
 	move.w	d6,(a4)
-.mark_band_lo
+.c_band_lo
 	cmp.w	2(a4),d7
-	ble	.mark_band_hi
+	ble	.c_band_hi
 	move.w	d7,2(a4)
-.mark_band_hi
+.c_band_hi
 	addq.l	#4,a4
-	dbra	d3,.mark_band
-.mark_out
+	dbra	d3,.c_band
+.c_out
 	movem.l	(sp)+,d6-d7/a2
 	rts
 	endc
@@ -9291,8 +9359,16 @@ dc_band_table
 dc_table_base
 	dc.l	0
 	ifd	TREX_HIRES
-dc_stream_ymin
+dc_cm_xmin
 	dc.w	0
+dc_cm_xmax
+	dc.w	0
+dc_cm_ymin
+	dc.w	0
+dc_cm_ymax
+	dc.w	0
+dc_cm_on
+	dc.b	0
 	even
 dsp_bands_errors
 	dc.l	0
