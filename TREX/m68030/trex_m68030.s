@@ -6220,11 +6220,61 @@ span_stream_draw
 	endc
 	addq.l	#1,d5
 	add.l	d4,d5
+	; span_unroll_enabled picks the pixel loop per span (OPTIMIZATION.md
+	; 3.17): both are assembled, so the two arms share one layout.
+	tst.l	span_unroll_enabled
+	bne.s	.draw_unrolled
 .draw_pixel
 	move.w	(a1)+,d1		; texel offset, V << 8 | U
 	move.b	(0,a5,d1.l),d0		; texel -> palette index
 	move.w	(0,a6,d0.l*2),(a4)+		; shaded colour -> framebuffer
 	dbra	d4,.draw_pixel
+	bra	.draw_span
+	; Eight blocks entered through a table: D4 = n - 1 splits into
+	; 8q + i, the first pass draws i + 1 pixels and DBRA runs q more
+	; groups of eight.  The table is reversed, so index i enters block
+	; 7 - i, and n = 8k needs no special case.
+.draw_unrolled
+	move.w	d4,d3
+	lsr.w	#3,d4			; further groups of eight
+	andi.w	#7,d3			; (n - 1) & 7
+	jmp	([.draw_table,pc,d3.w*4])
+.draw_table
+	dc.l	.draw_u7,.draw_u6,.draw_u5,.draw_u4
+	dc.l	.draw_u3,.draw_u2,.draw_u1,.draw_u0
+.draw_u0
+	move.w	(a1)+,d1
+	move.b	(0,a5,d1.l),d0
+	move.w	(0,a6,d0.l*2),(a4)+
+.draw_u1
+	move.w	(a1)+,d1
+	move.b	(0,a5,d1.l),d0
+	move.w	(0,a6,d0.l*2),(a4)+
+.draw_u2
+	move.w	(a1)+,d1
+	move.b	(0,a5,d1.l),d0
+	move.w	(0,a6,d0.l*2),(a4)+
+.draw_u3
+	move.w	(a1)+,d1
+	move.b	(0,a5,d1.l),d0
+	move.w	(0,a6,d0.l*2),(a4)+
+.draw_u4
+	move.w	(a1)+,d1
+	move.b	(0,a5,d1.l),d0
+	move.w	(0,a6,d0.l*2),(a4)+
+.draw_u5
+	move.w	(a1)+,d1
+	move.b	(0,a5,d1.l),d0
+	move.w	(0,a6,d0.l*2),(a4)+
+.draw_u6
+	move.w	(a1)+,d1
+	move.b	(0,a5,d1.l),d0
+	move.w	(0,a6,d0.l*2),(a4)+
+.draw_u7
+	move.w	(a1)+,d1
+	move.b	(0,a5,d1.l),d0
+	move.w	(0,a6,d0.l*2),(a4)+
+	dbra	d4,.draw_u0
 	bra	.draw_span
 .draw_done
 	add.l	d5,raster_pixel_count
@@ -9289,6 +9339,12 @@ dc_band_table
 ; frame by delta_clear_bands.  Rasterizer and clear both read this cell, so
 ; they cannot end up on different pages.
 dc_table_base
+	dc.l	0
+
+; 1 = span_stream_draw uses the eight-block table-entered pixel loop,
+; 0 = the plain loop (OPTIMIZATION.md 3.17).  A data longword so the A/B is
+; a one-byte patch on one layout (2.1).
+span_unroll_enabled
 	dc.l	0
 	ifd	TREX_HIRES
 dc_stream_ymin
