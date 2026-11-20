@@ -1,0 +1,57 @@
+{
+  "date": "2026-11-20",
+  "scene": "PS1 left/right head glances on the wider patrol",
+  "emulator": {
+    "build": "Patched Hatari 2.6.1-devel, F030Arcade fork",
+    "sha256": "e0894bfc47761316ed09ef91e79ea7da57b3a42040ad96c6402a8358b207fec5",
+    "tos402_sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb",
+    "machine": "Falcon, 16 MHz 68030, cycle-exact, MMU off, data cache on, DSP emulated, RGB, Videl contention on, 14 MiB ST-RAM",
+    "timer": "Emulated 200 Hz elapsed counter. Viewing timing enables stats_flush_enabled on a copy of the viewing TOS."
+  },
+  "timing": {
+    "ms_per_frame": 372.234375,
+    "fps": 2.686479,
+    "ticks_200_hz": 23823,
+    "host_sha256": "7bf8ea42f3c67d7f0570034a9abd176b0da87c1e148ef949a5fbcb8411562bd6",
+    "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+  },
+  "files_sha256": {
+    "TREX/m68030/trex_hires_bg_run.tos": "b41bfe9807e306a3b0f643c45ec8eec0ee81aa8d4a3d05a106c75a96f033417c",
+    "TREX/m68030/TREXBGND.LOD": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3",
+    "TREX/m68030/trex_hires_bg.tos": "d79044898553d2828789a2d82ee72e5b94282cc443f486e14e3bad83411a8c7b",
+    "TREX/m68030/trex_hires_bg_fbseq.tos": "28158fc5d174fe654d3a5e2c1afeccf1f06f9be2796ef6dbc5419cbb80423482",
+    "TREX/model/backdrop_path.bin": "1928c4f900e22d19022d41cac02928c0a123f40b53237f8f64571efcd6c1f83d",
+    "TREX/model/backdrop_poses.bin": "5b48331822225216efc7195fd0aee910a56d803dbdeb37206a5061e301a0ec7b",
+    "TREX/model/backdrop_shadow.bin": "61c1ab3ce688dd288450643a62369bd354507fd7fdbc78eb330347654b5753fc",
+    "TREX/model/trex.o3d": "d1e5b3ab01f33b62a54546cf296f7c0e2fe151d70f7fc64d6d7815d9d5ea55ae",
+    "TREX/model/trex_animation.bin": "09f2626ef46051a045ad5282db9d18533dac4f718bd8748fb317ed4bdb88c1c9",
+    "TREX/textures/backdrop_640x400.bin": "bad956fc250580b3c0ee0a94f22a90e7bad063603f734138a616bcd2ad257b80",
+    "TREX/textures/trex_texture_page_10.tim": "12b518e8dcbcdae2bd5f98632969b287ac1a37d7e5ec28de1e1349ce70bf0457",
+    "TREX/textures/trex_texture_page_12.tim": "c148bbb856f04750aadf99d7e2c52e13e8fb9fd5fb6fceea4ee4df9abeeb9644",
+    "TREX/textures/trex_texture_page_14.tim": "1411653c050c208d130a69be7b2a57e8f08196d77167f6dabed00b4aa5423ba4",
+    "TREX/textures/trex_texture_page_26.tim": "c7d0af2b2b2683699a2c7d5280f00b07e382ef3cd25e54aa6d0473f967ed36a8",
+    "TREX/textures/trex_texture_page_28.tim": "1b9b942e0814b5107b44c0086f0670990f3cfe7b66e12e2b7a2fd5b23db17438",
+    "TREX/textures/trex_texture_page_30.tim": "1e79b7a8272184bb55ef514acc85ded7cb998588be491e4e15a54d704bf0376e"
+  },
+  "frames": 320,
+  "visible": {
+    "head": {
+      "minimum_distinct_pixels": 447,
+      "frame": 107
+    },
+    "torso": {
+      "minimum_distinct_pixels": 1282,
+      "frame": 111
+    }
+  },
+  "lap_frames": 48,
+  "lap_start": 66,
+  "repeat_frames_checked": 206,
+  "full_and_band_rgb565_sha256": "64a68a7030fa1b02e5fef9ff295bbc435c58b8e486f3437f93ae7f9b7d8e0ab6",
+  "preview": {
+    "duration": 46.16,
+    "closest_face_seconds": 5.995,
+    "circle_start_seconds": 28.735,
+    "one_circle_seconds": 17.08
+  }
+}

@@ -1,0 +1,72 @@
+{
+ "date": "2026-11-20",
+ "scene": "Blender scene as the source of the trail assets (OPTIMIZATION.md 6.6g)",
+ "emulator": {
+  "build": "Patched Hatari 2.6.1-devel, F030Arcade fork",
+  "sha256": "e0894bfc47761316ed09ef91e79ea7da57b3a42040ad96c6402a8358b207fec5",
+  "tos402_sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb",
+  "machine": "Falcon, 16 MHz 68030, cycle-exact, MMU off, data cache on, DSP emulated, RGB, Videl contention on, 14 MiB ST-RAM",
+  "timer": "Emulated 200 Hz elapsed counter. Viewing timing enables stats_flush_enabled on a copy of the viewing TOS."
+ },
+ "timing": {
+  "frames": 320,
+  "ms_per_frame": 462.4,
+  "fps": 2.16,
+  "set_frame_ms": 6.5,
+  "control": {
+   "run": "hatari_runs/trail-half-view (runtime morph mixing, same route and capture settings)",
+   "ms_per_frame": 468.6,
+   "fps": 2.13,
+   "set_frame_ms": 13.7
+  },
+  "host_sha256": "4763896eece5f5c10b9d507b72727dcbdbdfbb91ab8fd08a993484d4317dd1ee",
+  "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+ },
+ "framebuffer": {
+  "frames": 320,
+  "fbseq_host_sha256": "8f12f4672a19fc2f461c38d37e097a270de228ce3ac72c1edfc36ce3c98ad853",
+  "identical_to_previous_build": 169,
+  "differing_pixels_mean": 1.4,
+  "differing_pixels_max": 38,
+  "post_wrap_frames_equal_to_lap": "159 of 159",
+  "blender_vs_hatari": {
+   "frames": [
+    1,
+    23,
+    60,
+    90,
+    161
+   ],
+   "background_exact_percent": 100.0,
+   "silhouette_iou": [
+    0.959,
+    0.969,
+    0.987,
+    0.983,
+    0.985
+   ],
+   "mean_bias_5_6_5_steps_max": 0.25,
+   "note": "Remaining per-pixel model differences are texel sampling (perspective-correct EEVEE versus the Falcon rasterizer) and painter's-order versus depth-buffer visibility."
+  }
+ },
+ "export_checks": {
+  "poses_equal_to_host_mixed_reference": "161 of 161",
+  "route_matrix_max_q23_lsb": 3,
+  "translation_max_diff": 0,
+  "lights_ramp_backdrop": "identical",
+  "shadow_rows_changed": "94 of 8435, each one pixel pair at an edge"
+ },
+ "files_sha256": {
+  "TREX/scene/trex_trail.blend": "3d6c8f55e57d559451c1e90cba19cd83469660df5f30cdb2ca07a68225db9a60",
+  "TREX/model/backdrop_path.bin": "40a75666b0a3e68c32953c779101af61a9983dc99ec2fec1f7880acc79662624",
+  "TREX/model/backdrop_poses.bin": "5fa564e163f71f452279590f0361ad00026b2e0f73d7f00bb723a47cf092ceb4",
+  "TREX/model/backdrop_targets.bin": "17622a60e305b5c283375bf13f24b5c50f5bf803358525a53fdea81d0ede1b90",
+  "TREX/model/backdrop_shadow.bin": "9c31cd5f29255c8045f16cfab9ebffc1255995e96c2cac1e3eb8b73ad9447ca9",
+  "TREX/model/backdrop_lights.inc": "b37969e98c2091091fd0f4f518c43948e6ce0f9644d276727a4ba068ec6966ab",
+  "TREX/model/backdrop_ramp.inc": "beba80883e84a2d876c464cdfc4dee40b70c36851172781c6419505a9e2bb9cf",
+  "TREX/textures/backdrop_640x400.bin": "bad956fc250580b3c0ee0a94f22a90e7bad063603f734138a616bcd2ad257b80",
+  "TREX/m68030/trex_hires_bg_run.tos": "460d2ace8bc8ed97700864846e6829d0a150d5cd3ddec7fe3ab636e634c67271",
+  "TREX/m68030/trex_hires_bg.tos": "f75b969c2538484ab7161ce0dd871943bbd879fdd53b9c965d3d15e611bb90fe",
+  "TREX/m68030/trex_hires_bg_fbseq.tos": "8f12f4672a19fc2f461c38d37e097a270de228ce3ac72c1edfc36ce3c98ad853"
+ }
+}

@@ -139,6 +139,9 @@ SCREEN_HEIGHT	= 400
 SCREEN_WIDTH	= 240
 SCREEN_HEIGHT	= 224
 	ENDIF
+	IF	NOFOG*(1-HIRES)
+	FAIL	'NOFOG belongs to the 640x400 backdrop image'
+	ENDIF
 	IF	HIRES*(1-SPANSTREAM)
 	FAIL	'HIRES is built on the span-stream image'
 	ENDIF
@@ -1348,7 +1351,7 @@ build_triangle_not_killed
 	IF	PHASEPROBE
 	jclr	#PHASE_BIT_SPAN,y:<phase_mask,triangle_advance
 	ENDIF
-	IF	HIRES
+	IF	HIRES*(1-NOFOG*PRELIGHT)
 	jsr	<band_mark		; every built triangle, record or stream
 	ENDIF
 	jsr	<make_triangle_span
@@ -1688,8 +1691,10 @@ cache_light_direction_loop
 ; BUILD's chunk loop already relies on.
 ; -----------------------------------------------------------------------------
 prelight_run
+	IF	!NOFOG
 	move	y:<triangles_processed,x0
 	move	x0,y:<project_temp_x
+	ENDIF
 	move	#triangle_indices,r2
 	move	#prelight_table,r1
 	; A hardware DO with a zero count runs 65,536 times.
@@ -1709,7 +1714,14 @@ prelight_run
 	jsr	<make_triangle_bbox
 	tst	a
 	jeq	<prelight_next
+	IF	NOFOG
+	; The host collects these bands before starting the next pose. Mark
+	; from the clamped box already in hand, once per visible triangle.
+	jsr	<band_mark_bounds
+	ELSE
+	; Only the depth cue consumes Z here. Ordering still computes its own key.
 	jsr	<make_triangle_zkey
+	ENDIF
 	jsr	<make_triangle_shade
 	; shade<<12 | c2<<8 | c1<<4 | c0: the levels are 0..15 and the shade
 	; word is tint<<4 | level, six bits, so nothing reaches bit 18.
@@ -1734,8 +1746,10 @@ prelight_next
 	nop
 prelight_end
 prelight_done
+	IF	!NOFOG
 	move	y:<project_temp_x,x0
 	move	x0,y:<triangles_processed
+	ENDIF
 	rts
 	ENDIF
 
@@ -2010,6 +2024,14 @@ make_triangle_shade
 	; RANGE), then left-shifted from the RANGE=2^17-ish scale into a 1.23
 	; fraction -- diff==0 (at or beyond FAR) means fully into the far
 	; colour, diff==RANGE (at or inside NEAR) means unattenuated.
+	IF	NOFOG
+	; NOFOG=1 (OPTIMIZATION.md 6.6b): no depth cue.  The backdrop build
+	; shows the model in front of a picture, and a model that darkens with
+	; distance does not belong in it.  The scale is the largest 1.23
+	; fraction, so both later multiplies stay and stay exact to one LSB.
+	move	#>$7fffff,x0
+	move	x0,y:<shade_depth_scale
+	ELSE
 	move	#>ZKEY_FOG_NEAR+ZKEY_FOG_RANGE,a
 	move	y:triangle_zkey,x0
 	sub	x0,a
@@ -2025,6 +2047,7 @@ shade_depth_diff_clamped
 	rep	#6
 	asl	a
 	move	a1,y:<shade_depth_scale
+	ENDIF
 
 	clr	a
 	move	a1,y:<shade_acc_r
@@ -2337,8 +2360,15 @@ shade_level_positive
 	jle	<shade_level_clamped
 	move	x0,a
 shade_level_clamped
+	IF	NOFOG
+	; The four high fractional bits are the integer bank number in A1.
+	move	a1,x0
+	move	#>(1<<SHADE_BITS),y0
+	mpy	x0,y0,a
+	ELSE
 	rep	#SHADE_SHIFT
 	asr	a
+	ENDIF
 	rts
 
 shade_unlit_model
@@ -2527,9 +2557,12 @@ make_bbox_reject
 ; make_triangle_bbox (A, X1) and A, B, X0, X1, Y0, R0; BUILD's R1-R3/N2 and
 ; the walker's registers are untouched.
 band_mark
+	IF	!(NOFOG*PRELIGHT)
 	jsr	<make_triangle_bbox
 	tst	a
 	jeq	<band_mark_out		; nothing on screen
+	ENDIF
+band_mark_bounds
 	move	y:tri_ymin,a
 	rep	#3
 	asr	a			; first band
@@ -4129,6 +4162,29 @@ prepass_occlusion_done
 	ENDIF
 
 prepass_unpack_indices
+	IF	NOFOG
+	; Fractional MPY by 2^-12 puts the packed high field in A1. Mask
+	; away sign extension (normal indices can set bit 23 of the word).
+	; X1 retains word A, including its occluder bit, for the caller.
+	move	#>TRI_VERTEX_MASK,y0
+	move	#>$800,x0
+	move	y:(r2)+,y1
+	move	y1,x1
+	tfr	y1,a
+	and	y0,a
+	mpy	x0,y1,a	a1,y:triangle_i0
+	and	y0,a	y:(r2)+,y1
+	tfr	y1,a	a1,y:triangle_i1
+	and	y0,a
+	mpy	x0,y1,a	a1,y:triangle_i2
+	move	#>TRI_INDEX_MASK,y0
+	and	y0,a	y:(r2)+,y1
+	tfr	y1,a	a1,y:triangle_n0
+	and	y0,a
+	mpy	x0,y1,a	a1,y:triangle_n1
+	and	y0,a
+	move	a1,y:triangle_n2
+	ELSE
 	move	y:(r2)+,x1
 	move	y:(r2)+,y1
 	move	#>TRI_VERTEX_MASK,x0
@@ -4157,6 +4213,7 @@ prepass_unpack_indices
 	rep	#TRI_INDEX_BITS
 	lsr	a
 	move	a1,y:triangle_n2
+	ENDIF
 	rts
 
 ; Reload one resident triangle.  X0 is the triangle number on entry.  The

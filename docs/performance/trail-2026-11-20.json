@@ -1,0 +1,177 @@
+{
+  "date": "2026-11-20",
+  "scene": "Eye-level trail and turning morphs",
+  "emulator": {
+    "build": "Patched Hatari 2.6.1-devel, F030Arcade fork",
+    "sha256": "e0894bfc47761316ed09ef91e79ea7da57b3a42040ad96c6402a8358b207fec5",
+    "tos402_sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb",
+    "machine": "Falcon, 16 MHz 68030, cycle-exact, MMU off, data cache on, DSP emulated, RGB, Videl contention on, 14 MiB ST-RAM",
+    "timer": "Emulated 200 Hz elapsed counter. Viewing timing enables stats_flush_enabled on a copy of the viewing TOS."
+  },
+  "physical_falcon": "unmeasured",
+  "files_sha256": {
+    "TREX/m68030/trex_hires_bg_run.tos": "6d35038c06e61170ad117be193d70fc1aa52f961dd85a3275fc502dab668c552",
+    "TREX/m68030/TREXBGND.LOD": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3",
+    "TREX/m68030/trex_hires_bg.tos": "02feda595347492aefdc8333d6ab357585569afb1d9aaadbbf9fa2e46136b2e9",
+    "TREX/m68030/trex_hires_bg_fbseq.tos": "9283cf23b1e7373d2e205da08b61a76555bf1f37619a8e9a14ccbe4ccb72fc8e",
+    "TREX/model/backdrop_path.bin": "8b36e5f361eba2d32e11bc37a9403c124f1f314bf701d1f068897d6b5d4152c2",
+    "TREX/model/backdrop_poses.bin": "daf2e167d33ec1c6c8616713474f821b2376af13dfd5c4e3a0b0683eb410b800",
+    "TREX/model/backdrop_shadow.bin": "6325cc105976095213fc33df179b9dd2fdaa4e2ab3f92e9806179c0ccfebf5c5",
+    "TREX/model/trex.o3d": "d1e5b3ab01f33b62a54546cf296f7c0e2fe151d70f7fc64d6d7815d9d5ea55ae",
+    "TREX/model/trex_animation.bin": "09f2626ef46051a045ad5282db9d18533dac4f718bd8748fb317ed4bdb88c1c9",
+    "TREX/textures/backdrop_640x400.bin": "62221bdb59ab3bc26b9ff7e1c6bab06acc952294a3bcbd49fd50e23e2b80fc24",
+    "TREX/textures/trex_texture_page_10.tim": "12b518e8dcbcdae2bd5f98632969b287ac1a37d7e5ec28de1e1349ce70bf0457",
+    "TREX/textures/trex_texture_page_12.tim": "c148bbb856f04750aadf99d7e2c52e13e8fb9fd5fb6fceea4ee4df9abeeb9644",
+    "TREX/textures/trex_texture_page_14.tim": "1411653c050c208d130a69be7b2a57e8f08196d77167f6dabed00b4aa5423ba4",
+    "TREX/textures/trex_texture_page_26.tim": "c7d0af2b2b2683699a2c7d5280f00b07e382ef3cd25e54aa6d0473f967ed36a8",
+    "TREX/textures/trex_texture_page_28.tim": "1b9b942e0814b5107b44c0086f0670990f3cfe7b66e12e2b7a2fd5b23db17438",
+    "TREX/textures/trex_texture_page_30.tim": "1e79b7a8272184bb55ef514acc85ded7cb998588be491e4e15a54d704bf0376e"
+  },
+  "timing": {
+    "frames": 320,
+    "viewing_share_sweep": {
+      "144": {
+        "ms_per_frame": 353.03125,
+        "fps": 2.83261,
+        "ticks_200_hz": 22594,
+        "host_sha256": "9317dffd24325562e032d1ed1c03c417345ca507470fbfc4610800b63ec5899c",
+        "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+      },
+      "152": {
+        "ms_per_frame": 349.984375,
+        "fps": 2.85727,
+        "ticks_200_hz": 22399,
+        "host_sha256": "357e9912ac7374883d4710f13ec307b34e14fd818ecf67b2cd750c021589466e",
+        "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+      },
+      "156": {
+        "ms_per_frame": 349.640625,
+        "fps": 2.86008,
+        "ticks_200_hz": 22377,
+        "host_sha256": "e6f1eef86f139a3f5e228b17498441dcb747240e24d7773fcea5c5716b54a8bd",
+        "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+      },
+      "160": {
+        "ms_per_frame": 349.78125,
+        "fps": 2.85893,
+        "ticks_200_hz": 22386,
+        "host_sha256": "f30ab28f1ba4863d72f821e407b969582b27dcef1cfe8bb5ecc23dff58930b66",
+        "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+      },
+      "164": {
+        "ms_per_frame": 349.515625,
+        "fps": 2.861102,
+        "ticks_200_hz": 22369,
+        "host_sha256": "03c0ada0499699b72a447f8fb0e160a1fac03b9807162c29ba9bd6357c51381a",
+        "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+      },
+      "168": {
+        "ms_per_frame": 349.953125,
+        "fps": 2.857526,
+        "ticks_200_hz": 22397,
+        "host_sha256": "7d03ee59c1e25f6c1aaab11020167cf45dabf49a13a187fe00160e9cec8eb1f5",
+        "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+      },
+      "176": {
+        "ms_per_frame": 351.359375,
+        "fps": 2.846089,
+        "ticks_200_hz": 22487,
+        "host_sha256": "9f74e82bc5d8badf01af98acfdc945b55e7f04b01670fe82db7a75412dce2c50",
+        "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+      }
+    },
+    "shipped_share": 164,
+    "final_viewing": {
+      "ms_per_frame": 349.546875,
+      "fps": 2.860847,
+      "ticks_200_hz": 22371,
+      "host_sha256": "03c0ada0499699b72a447f8fb0e160a1fac03b9807162c29ba9bd6357c51381a",
+      "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+    },
+    "final_diagnostic": {
+      "ms_per_frame": 349.59375,
+      "fps": 2.860463,
+      "ticks_200_hz": 22374,
+      "host_sha256": "02feda595347492aefdc8333d6ab357585569afb1d9aaadbbf9fa2e46136b2e9",
+      "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+    }
+  },
+  "geometry_comparison": {
+    "final": {
+      "closest_frame": 21,
+      "max_near_skull_travel_px": 56.99,
+      "projection_bounds_xyxy": [
+        [
+          14,
+          101,
+          626,
+          296
+        ],
+        [
+          163,
+          108,
+          547,
+          304
+        ]
+      ]
+    },
+    "uniform_cadence": {
+      "closest_frame": 18,
+      "max_near_skull_travel_px": 106.56,
+      "projection_bounds_xyxy": [
+        [
+          14,
+          101,
+          626,
+          296
+        ],
+        [
+          163,
+          108,
+          547,
+          303
+        ]
+      ]
+    }
+  },
+  "framebuffer_checks": {
+    "arms": [
+      "full restore, share 156",
+      "band restore, share 156",
+      "band restore, share 164"
+    ],
+    "size": 163840000,
+    "identical_sha256": "5c31478f7dcb913ae6e5e9c503cdb1a9aada723c9fd51039f18fb59f17c68c6c",
+    "visible": {
+      "head": {
+        "minimum_distinct_pixels": 323,
+        "frame": 108
+      },
+      "torso": {
+        "minimum_distinct_pixels": 903,
+        "frame": 112
+      }
+    },
+    "unique_poses": 114,
+    "loop_first": 66,
+    "verified_after_wrap": 206
+  },
+  "preview": {
+    "source": "Framebuffer sequence with presentation intervals from final viewing build",
+    "points_ms": {
+      "turn_start": 6250,
+      "closest_face": 8395,
+      "turn_end": 18045,
+      "lap_start": 26445,
+      "lap_end": 42590
+    },
+    "duration_seconds": 42.91,
+    "sha256": "2f61ee4042c277baca027e187f6dd9234287a56e324c2af87844f1bf51997a3b"
+  },
+  "viewing_tos_text_data_bss": [
+    15946,
+    2228662,
+    4861030
+  ],
+  "artwork": "Same trail artwork as 2026-11-19."
+}

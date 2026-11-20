@@ -1,0 +1,83 @@
+{
+  "scene": "Eye-level jungle background",
+  "date": "2026-11-20",
+  "artwork": {
+    "source": "TREX/textures/jungle_eye_level.png",
+    "method": "Built-in ImageGen",
+    "final_prompt": "Create a cinematic photographic environment plate for a prehistoric T-Rex walking demo. Landscape 16:10. A fixed perfectly LEVEL camera looks straight ahead into a humid, colorful primeval jungle from the height of a dinosaur's eyes. Upright tree trunks rise vertically. Moderate telephoto perspective (horizontal field of view 38 degrees), no wide-angle distortion and no downward tilt. Critical composition: the ground plane's vanishing point is at the exact center of the frame, halfway up the image. The flat, broad earth clearing must visually open out toward the viewer. The distant path enters the woods at the center around the halfway mark, while the foreground fills only the lower half. The TOP half is lush layered tree ferns, towering araucaria, tangled hanging vines, glimpses of pale sky, and hazy blue-green jungle in depth. Avoid a mountaintop panorama. On the sides make a rich asymmetric botanical frame: brilliant vermilion and coral foliage, golden fern tips, magenta bromeliads and cool turquoise moss against deep jade and viridian. Leave the travel area entirely bare: all of the lower middle from 22% to 85% across must be walkable, warm russet silt and ochre clay with irregular damp patches and fine natural texture becoming smaller into the distance. Keep plants, rocks, tall roots and conspicuous flowers along the extreme side margins. No circular groove, artificial trails, rows, paving or repeated pattern. At face height in the center and right midground use quieter, cool forest tones so a warm brown moving animal can read clearly. Soft daylight from high camera-left, gentle frontal fill, diffuse canopy shadows. Ground and foliage belong to the same perspective and lighting. Environment only, no dinosaur, animal, people, foreground cast animal shadow, typography, border or UI.",
+    "sha256": "92d51cc1cab0385e4e616b9c48d3e2cefe34c0fa7321d540499140c2894708c1"
+  },
+  "projection": {
+    "horizon_y": 200,
+    "vanishing_point_xy": [
+      320,
+      200
+    ],
+    "horizontal_fov_deg": 37.6,
+    "estimated_contact_centres_xyxy": [
+      182,
+      302,
+      511,
+      412
+    ],
+    "circular_lap_estimated_contact_centres_xyxy": [
+      196,
+      302,
+      507,
+      342
+    ]
+  },
+  "files_sha256": {
+    "TREX/m68030/trex_hires_bg_run.tos": "1cc8cc942eadf80ebbec6e6510bab8d038c4588de0b84caeb8dfdfdbb07351c5",
+    "TREX/m68030/TREXBGND.LOD": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3",
+    "TREX/m68030/trex_hires_bg.tos": "adbcddb069f2bd408b8e874aae2f849c7a5b37c6e55ace29afef2c57403f8ea8",
+    "TREX/m68030/trex_hires_bg_fbseq.tos": "f4a37440f992442d1dbc29ae5657b8ba2996551ab0246ee47bbb38b25e369a67",
+    "TREX/model/backdrop_path.bin": "8b36e5f361eba2d32e11bc37a9403c124f1f314bf701d1f068897d6b5d4152c2",
+    "TREX/model/backdrop_poses.bin": "daf2e167d33ec1c6c8616713474f821b2376af13dfd5c4e3a0b0683eb410b800",
+    "TREX/model/backdrop_shadow.bin": "6325cc105976095213fc33df179b9dd2fdaa4e2ab3f92e9806179c0ccfebf5c5",
+    "TREX/model/trex.o3d": "d1e5b3ab01f33b62a54546cf296f7c0e2fe151d70f7fc64d6d7815d9d5ea55ae",
+    "TREX/model/trex_animation.bin": "09f2626ef46051a045ad5282db9d18533dac4f718bd8748fb317ed4bdb88c1c9",
+    "TREX/textures/backdrop_640x400.bin": "8b51bdb32f9a5127fd6da155e51dadda5fe55e713f87e6aa98e2a769c6914335",
+    "TREX/textures/trex_texture_page_10.tim": "12b518e8dcbcdae2bd5f98632969b287ac1a37d7e5ec28de1e1349ce70bf0457",
+    "TREX/textures/trex_texture_page_12.tim": "c148bbb856f04750aadf99d7e2c52e13e8fb9fd5fb6fceea4ee4df9abeeb9644",
+    "TREX/textures/trex_texture_page_14.tim": "1411653c050c208d130a69be7b2a57e8f08196d77167f6dabed00b4aa5423ba4",
+    "TREX/textures/trex_texture_page_26.tim": "c7d0af2b2b2683699a2c7d5280f00b07e382ef3cd25e54aa6d0473f967ed36a8",
+    "TREX/textures/trex_texture_page_28.tim": "1b9b942e0814b5107b44c0086f0670990f3cfe7b66e12e2b7a2fd5b23db17438",
+    "TREX/textures/trex_texture_page_30.tim": "1e79b7a8272184bb55ef514acc85ded7cb998588be491e4e15a54d704bf0376e"
+  },
+  "only_embedded_picture_changed_in_timed_viewing_binary": true,
+  "emulator": {
+    "build": "Patched Hatari 2.6.1-devel, F030Arcade fork",
+    "sha256": "e0894bfc47761316ed09ef91e79ea7da57b3a42040ad96c6402a8358b207fec5",
+    "tos402_sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb",
+    "machine": "Falcon, 16 MHz 68030, cycle-exact, MMU off, data cache on, DSP emulated, RGB, Videl contention on, 14 MiB ST-RAM",
+    "timer": "Emulated 200 Hz elapsed counter. Viewing timing enables stats_flush_enabled on a copy of the viewing TOS."
+  },
+  "timing": {
+    "ms_per_frame": 349.515625,
+    "fps": 2.861102,
+    "ticks_200_hz": 22369,
+    "host_sha256": "7e8eed5c029a3f075f7a843c992a59e18aeea60c82e2c7585aba05559ac207d8",
+    "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+  },
+  "frames": 320,
+  "physical_falcon": "unmeasured",
+  "full_and_band_rgb565_sha256": "aa8e358e4c5c43c8ec09f9c5af751ae6837c3a806eb69e89e3331c9321ba1362",
+  "repeat_frames_checked": 206,
+  "visible": {
+    "head": {
+      "minimum_distinct_pixels": 323,
+      "frame": 108
+    },
+    "torso": {
+      "minimum_distinct_pixels": 903,
+      "frame": 112
+    }
+  },
+  "preview": {
+    "file": "trex-jungle-eye-level.mp4",
+    "duration_seconds": 42.91,
+    "sha256": "ce7d007dbe56e91196a4153b2cd241ff46274bb8aa7a5ade52a6cfaf38d53236",
+    "closest_face_seconds": 8.395
+  }
+}

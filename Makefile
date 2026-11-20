@@ -61,6 +61,9 @@ SPANSTREAM=$(ORDERED)
 # for a 640x400 render target, with a three-unit span header.  It pairs only
 # with the -DTREX_HIRES host, which loads it as TREXHIRS.LOD.
 HIRES=0
+# No depth cue (OPTIMIZATION.md 6.6b): the 640x400 image of the backdrop
+# build, whose host loads it as TREXBGND.LOD.
+NOFOG=0
 
 # One generator for the assembler-visible build switches, used by every DSP
 # rule so a variant can never assemble against a stale or missing config.
@@ -74,7 +77,7 @@ HIRES=0
 # asking for one variant could silently leave you the previous one.
 # SPANSTREAM appends a letter instead of a ninth digit, so every identity
 # written down before it existed still names the same image.
-DSPCONF_ID=$(SSIPROBE)$(WINPROBE)$(PIOBURST)$(PREPASSDIAG)$(OBJLIGHTS)$(PRELIGHT)$(PHASEPROBE)$(ORDERED)$(if $(filter 1,$(SPANSTREAM)),s)$(if $(filter 1,$(HIRES)),i)
+DSPCONF_ID=$(SSIPROBE)$(WINPROBE)$(PIOBURST)$(PREPASSDIAG)$(OBJLIGHTS)$(PRELIGHT)$(PHASEPROBE)$(ORDERED)$(if $(filter 1,$(SPANSTREAM)),s)$(if $(filter 1,$(HIRES)),i)$(if $(filter 1,$(NOFOG)),n)
 DSPCONF_STAMP=./TREX/dsp/build/dspconf-$(DSPCONF_ID).stamp
 # Each configuration assembles to its own image, so asking for one names a file
 # that either exists (and is current) or does not (and is built).  Existence is
@@ -92,7 +95,7 @@ PHASE_LOD=./TREX/dsp/build/trex_dsp-00001110-$(DSPSRC_ID).lod
 # ./TREX/dsp/trex_dsp.lod, so a variant build can never leave the wrong image
 # in the tree for `make measure` or a release to pick up.
 DSPCONF_DEFAULT_ID=00001101s
-DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\nPRELIGHT\tequ\t%s\nPHASEPROBE\tequ\t%s\nORDERED\tequ\t%s\nSPANSTREAM\tequ\t%s\nHIRES\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' '$(PRELIGHT)' '$(PHASEPROBE)' '$(ORDERED)' '$(SPANSTREAM)' '$(HIRES)' > ./TREX/dsp/build/dspconf.inc
+DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\nPRELIGHT\tequ\t%s\nPHASEPROBE\tequ\t%s\nORDERED\tequ\t%s\nSPANSTREAM\tequ\t%s\nHIRES\tequ\t%s\nNOFOG\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' '$(PRELIGHT)' '$(PHASEPROBE)' '$(ORDERED)' '$(SPANSTREAM)' '$(HIRES)' '$(NOFOG)' > ./TREX/dsp/build/dspconf.inc
 # Extra flags for the DSP assembly run.  Plain DOSBox needs none.  DOSBox-X
 # opens a working-folder prompt and a menu on macOS and then never reaches
 # BUILD.BAT, so it needs:
@@ -633,6 +636,55 @@ trex_m68030_hires_fbseq: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires_f
 	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_FB_SEQUENCE -o $@ -L ./TREX/m68030/build/trex_hires_fbseq.lst
 
 ./TREX/m68030/trex_hires_fbseq.tos: ./TREX/m68030/build/trex_hires_fbseq.o ./TREX/m68030/build/ssi_dma4.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
+# Fixed-camera 640x400 trail (OPTIMIZATION.md 6.6d-6.6g). The built assets
+# include the RGB565 backdrop, baked poses, DSP targets, transforms, shadow
+# spans, lights and ramp. Run "make backdrop" to export them from Blender. Three executables: the measured
+# one, the viewing one (-DTREX_RUN, no disk traffic) and the frame-sequence
+# probe that gates the band restore.  They load TREXBGND.LOD and no other
+# image: the HIRES=1 image without the depth cue (NOFOG=1).
+BACKDROP_BIN=./TREX/textures/backdrop_640x400.bin
+BACKDROP_LOD=./TREX/dsp/build/trex_dsp-00001101sin-$(DSPSRC_ID).lod
+.PHONY: trex_m68030_hires_backdrop trex_m68030_hires_backdrop_run trex_m68030_hires_backdrop_fbseq backdrop trex_dsp_backdrop
+trex_dsp_backdrop: create_dirs
+	@$(MAKE) --no-print-directory SSIPROBE=0 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=1 PRELIGHT=1 PHASEPROBE=0 ORDERED=1 SPANSTREAM=1 HIRES=1 NOFOG=1 trex_dsp
+	cp $(BACKDROP_LOD) ./TREX/m68030/TREXBGND.LOD
+# The Blender scene is the source (OPTIMIZATION.md 6.6g): "make backdrop"
+# exports route, poses, DSP targets, shadow, lights, ramp and picture from it.
+# Needs Blender on PATH (MSYS2: pacman -S mingw-w64-ucrt-x86_64-blender).
+# "make blender_seed" rebuilds the scene from the older procedural
+# generators and OVERWRITES TREX/scene -- only to start over.
+BACKDROP_SCENE=./TREX/scene/trex_trail.blend
+BACKDROP_SEED=./blender/seed
+BACKDROP_ASSETS=$(BACKDROP_BIN) ./TREX/model/backdrop_path.bin ./TREX/model/backdrop_shadow.bin \
+	./TREX/model/backdrop_poses.bin ./TREX/model/backdrop_targets.bin \
+	./TREX/model/backdrop_lights.inc ./TREX/model/backdrop_ramp.inc
+backdrop:
+	blender -b $(BACKDROP_SCENE) --python ./tools/blender_export_falcon.py -- ./TREX/model $(BACKDROP_BIN)
+
+.PHONY: blender_seed
+blender_seed:
+	mkdir -p $(BACKDROP_SEED)
+	python3 ./tools/make_backdrop.py ./TREX/textures/jungle_eye_level.png $(BACKDROP_SEED)/backdrop_640x400.bin --trail-camera
+	python3 ./tools/make_backdrop_path.py $(BACKDROP_SEED)/backdrop_path.bin $(BACKDROP_SEED)/backdrop_shadow.bin $(BACKDROP_SEED)/backdrop_poses.bin
+	python3 ./tools/blender_seed_data.py $(BACKDROP_SEED) $(BACKDROP_SEED)/data
+	blender -b --factory-startup --python ./tools/blender_build_scene.py -- $(BACKDROP_SEED)/data ./TREX/scene
+
+trex_m68030_hires_backdrop: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires_bg.tos trex_dsp_backdrop
+trex_m68030_hires_backdrop_run: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires_bg_run.tos trex_dsp_backdrop
+trex_m68030_hires_backdrop_fbseq: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires_bg_fbseq.tos trex_dsp_backdrop
+
+./TREX/m68030/build/trex_hires_bg.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin $(BACKDROP_ASSETS)
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_DELTA_DSP -DTREX_BACKDROP -o $@ -L ./TREX/m68030/build/trex_hires_bg.lst
+
+./TREX/m68030/build/trex_hires_bg_run.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin $(BACKDROP_ASSETS)
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_DELTA_DSP -DTREX_BACKDROP -DTREX_RUN -o $@ -L ./TREX/m68030/build/trex_hires_bg_run.lst
+
+./TREX/m68030/build/trex_hires_bg_fbseq.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin $(BACKDROP_ASSETS)
+	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_FB_SEQUENCE -DTREX_BACKDROP -o $@ -L ./TREX/m68030/build/trex_hires_bg_fbseq.lst
+
+./TREX/m68030/trex_hires_bg.tos ./TREX/m68030/trex_hires_bg_run.tos ./TREX/m68030/trex_hires_bg_fbseq.tos: ./TREX/m68030/%.tos: ./TREX/m68030/build/%.o ./TREX/m68030/build/ssi_dma4.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 ./TREX/m68030/build/trex_plain.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin

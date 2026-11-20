@@ -19,6 +19,7 @@ TREX/m68030/TREXSSI.LOD
 TREX/m68030/TREXORDR.LOD
 TREX/m68030/TREXLEGA.LOD
 TREX/m68030/TREXHIRS.LOD
+TREX/m68030/TREXBGND.LOD
 # Staging directory for the Falcon SSI/DMA test package (make ssi_dma_package).
 # Rebuildable, and its .LOD is a variant image that must never be mistaken for
 # the tracked default -- see OPTIMIZATION.md 7.4b.
@@ -73,3 +74,7 @@ TREX/dsp/build/
 TREX/m68030/TREXPIPE.LOD
 TREX/m68030/TREXPIPE.TOS
 TREX/m68030/ssi_pipe_package/
+
+# Blender seed and scratch output (make blender_seed); Blender's .blend1 backups.
+/blender/
+*.blend1

@@ -3551,7 +3551,8 @@ fixtures and frame-100 image, but cost 647.91 ms versus 623.66 ms for long
 multiplies at the same layout. Neither rejected path ships. Fewer RAM accesses
 or narrower instructions are hypotheses until the entire linked frame wins.
 
-**Program budget.** Default `$099E` (33 words free), camera lights `$098B`,
+**Program budget** (these extents are of the legacy index-order image,
+`ORDERED=0`, the default when they were taken). Base `$099E` (33 words free), camera lights `$098B`,
 phase ladder `$09B3`, window probe/OBJLIGHTS=0 `$09B7`, prepass diagnostics/
 OBJLIGHTS=0 `$09A9`, SSI bring-up `$09B0`, PRELIGHT=0 `$095C`. Each returns
 eight words; X/Y allocations and the `$09BF` P/Y boundary stay unchanged.
@@ -6821,7 +6822,16 @@ renders nothing and still completes its frame count, so **a run whose
 default image carries 2,358 P words plus its Y data, well inside the
 limit.
 
-The current program ends at `P:$099E`, leaving 33 words `$099F-$09BF` before
+Extents measured from the assembled images on 2026-11-20:
+
+| Image | Last P word | Free below `$09BF` |
+|---|---|---:|
+| Shipping default (`ORDERED`, `SPANSTREAM`, tracked `trex_dsp.lod`) | `P:$0975` | 74 words |
+| 640×400 `TREXHIRS.LOD` | `P:$09B4` | 11 words |
+| Backdrop `TREXBGND.LOD` | `P:$099D` | 34 words |
+
+The history below is that of the legacy index-order image (`ORDERED=0`),
+which ends at `P:$099E`, leaving 33 words `$099F-$09BF` before
 `triangle_indices`: the normal-cache build ended at `P:$091E`, section
 7.4b's `CMD_SSI_STREAM` transport probe added 103 words, section 2.4j's
 `CMD_PIO_BURST` calibration burst and adopted object-space lighting took the
@@ -6835,6 +6845,10 @@ and the M68030 framebuffer path. Section 2.4n returns eight program words by
 constructing exact span numerators with MPY and parallel divisor loads.
 
 ### 4.3 Extracted PS1 morph animation and choreography — active
+
+The fixed-camera trail uses the extracted walking poses and face morphs with
+its own locomotion and framing. The current build is described in
+[6.6d](#66d-eye-level-trail-and-turning-morphs).
 
 The original Demo One animation has now been extracted by
 [`TREX/disassembly/extract_trex_animation.py`](TREX/disassembly/extract_trex_animation.py)
@@ -7690,7 +7704,9 @@ brightness, light elevation and horizontal focal length; it measures
 ledger. The figures below are the untuned, unarmed state in which it was
 first measured, and its geometry paragraph describes focal 1865.
 **Since 2.8a** (chunk hand-over, share 176) it measures **590.5 ms /
-1.69 FPS** cycle-exact and 562.4 ms / 1.78 FPS on the MMU ledger.
+1.69 FPS** cycle-exact and 562.4 ms / 1.78 FPS on the MMU ledger. Section 6.6b
+records the original opt-in jungle approach (609.6 / 565.1 ms). Sections
+6.6c and 6.6d document the elevated trail and the current eye-level trail.
 
 `make DOSBOX=/path/to/DOSBox trex_m68030_hires` builds an opt-in pair that
 renders the whole of a **640x400 interlaced true-colour** RGB/TV mode:
@@ -7882,6 +7898,659 @@ Raw counters in
 (`-DTREX_RUN`): no per-frame `render_stats.res`, no frame-100 dumps and no
 final flush, so the emulated hard disk stays idle while watching. No timing
 is taken from it (see 2.1 on why it is not layout-identical).
+
+### 6.6b Original jungle approach and backdrop restore (2026-11-19)
+
+The captures, binaries, lighting and timings in this subsection describe the
+original jungle approach. The current scene retains its two-page restore and
+has a different route, artwork, lighting and workload. See sections 6.6c–d.
+Since 6.6g, `make backdrop` exports the trail assets from the Blender scene.
+Where 6.6b–6.6f say `make backdrop` converts a picture, generates the route
+or prints light tables, they describe how those builds were made; today
+`make blender_seed` runs those generators once to recreate the scene.
+
+`make DOSBOX=/path/to/DOSBox trex_m68030_hires_backdrop` builds an opt-in
+variant of the 640x400 pair that shows the model in front of a picture instead
+of a black screen: `trex_hires_bg.tos` (`-DTREX_HIRES -DTREX_DELTA_DSP
+-DTREX_BACKDROP`) with the DSP image `TREXBGND.LOD`, the only name that host
+loads. `trex_m68030_hires_backdrop_run` is its viewing twin (`-DTREX_RUN`) and
+`trex_m68030_hires_backdrop_fbseq` its frame-sequence probe. **Every existing
+build is untouched**: rebuilt after the change, `trex_m68030.tos` and
+`trex_hires.tos` are byte-identical to before, and `trex_dsp.lod`
+(`92d4744c...`) and `TREXHIRS.LOD` (`afcd5686...`) reassemble unchanged.
+
+![The model in front of the backdrop, frame 100](docs/screenshots/trex-hires-backdrop.png)
+
+![The opening frame: the model at its farthest, lit as up close](docs/screenshots/trex-hires-backdrop-opening.png)
+
+**The picture.** `TREX/textures/backdrop_jungle.jpg` is the source, supplied by
+the project owner (generated with Gemini): a misty, overcast forest with a
+rainbow ahead. `tools/make_backdrop.py` converts it to
+`TREX/textures/backdrop_640x400.bin`, 640x400 Falcon true-colour words, row by
+row, 512,000 bytes, ordered-dithered; both files are tracked, so a build needs
+no Python (`make backdrop` reconverts). The converter crops the source to
+1866/2020 of its width before scaling, the same pixel shape the projection
+assumes for this mode (6.6a.1), so picture and model are right together on a
+TV and about 8% too wide together in an emulator that draws square pixels.
+Pure black is kept out of the picture, so a dump still tells it from a cleared
+screen.
+
+**Why a fixed picture fits the choreography.** In all 274 records the frame
+matrix is a rotation about the vertical axis only and the translation moves
+along the view axis only (`TREX/model/trex_animation.bin`: the model's up
+vector is (0, 1, 0) in camera space in every record, translation y is 0), so
+the camera neither pitches nor rolls, the horizon is the screen's centre row
+and the ground is one plane, 6,830 units below the optical axis (the feet
+stand on row 377 at depth 72,000 in the opening frame). The model's feet
+therefore meet the picture's forest floor at the bottom of the screen and walk
+out of it towards the camera; nothing in the picture has to move.
+
+**How it is drawn.**
+
+- **Start-up.** After the two screen buffers are wiped, the picture is copied
+  into both (`gpu_open`), so the background of either page is the picture
+  before the first frame.
+- **Per frame: the clear becomes a restore.** The band delta clear of 2.5b/2.5c
+  already knows, per eight-row band and page, the column range the previous
+  frame on that page drew into. `delta_clear_bands` writes the same longwords
+  as before, but reads them from the picture at the same screen position
+  (`move.l (a3)+,(a2)+` for `move.l d0,(a2)+`; A4 holds `backdrop_image -
+  render_base`). The bands are the DSP's (mode 2), unchanged.
+- **The full clear** (`delta_clear_enabled` = 0) becomes a full copy of the
+  picture. It is the reference arm of the gate below, not the shipped path.
+- **`backdrop_enabled`** (data longword, 1) switches all three back to black in
+  the same linked layout.
+- **Memory.** The picture is the last object of the data section: 512,000
+  bytes, a whole number of 4,096-byte pages, so the pinned buffers in BSS keep
+  their page offsets. 16,374 / 1,683,466 / 4,861,030 bytes of text/data/BSS
+  (6,560,870 in all) against 6,048,870 for `trex_hires.tos`. It needs the same
+  14 MiB.
+
+**The light, for this picture.** The source's lights -- a pink key and a
+reddish ambient, made for a black screen -- do not belong in an overcast
+forest, so the backdrop build replaces what the host sends and what it shades
+with; the DSP's light model is unchanged (`tools/make_backdrop_light.py`
+prints both tables).
+
+- **No direct sun.** A rainbow stands opposite the sun, so the sun is behind
+  the camera, and it is veiled. Three soft lights: the sky from above (0.80 of
+  the luminance), the veiled sun from behind the camera at 30 degrees (0.32),
+  and a bounce from the forest floor (0.28).
+- **The two channel weights select, they do not colour.** The DSP sums every
+  light once with a "red" and once with a "green" weight and classifies the
+  ratio (4.4). Sky and sun are sent with equal weights and the bounce with four
+  to one, the ambient pair with ratio 1.45, so the four classes become: lit
+  from above or behind the camera, in shade, a little bounce, lit from below.
+- **The ramp** (`shade_ramp_table`, 64 cells) gives each class its colour:
+  near-neutral warm daylight for the first, a green-gold for the last, sixteen
+  levels each from the common shade colour. The texture keeps its own brown.
+- **No depth cue** (`NOFOG=1`, DSP). The default images dim every triangle
+  with its distance, which reads as fading into darkness on a black screen
+  and is wrong in front of a picture that shows no such fall-off: in the
+  opening frames the whole model sat in the darkest bank. `TREXBGND.LOD` is
+  the `HIRES=1` image with the depth scale fixed at the largest 1.23 fraction
+  (configuration `00001101sin`, last P word `$09A7`, 24 words below the
+  ceiling; `TREXHIRS.LOD` ends at `$09B4`). The model is lit the same way at
+  every distance.
+
+**Picture gate: every frame.** The frame-sequence probe with the full copy
+(`delta_clear_enabled` 0) and with the band restore (patched to 2) wrote
+**byte-identical `fbseq.res` files for all 265 frames** (135,680,000 bytes,
+SHA256 `bc4a50e7...`): the bands restore every pixel any triangle leaves
+behind. 11,437,208 longwords are restored over the prefix, 43,159 a frame --
+the same count the band clear writes in `trex_hires.tos`.
+
+**Measured**, one linked executable with `backdrop_enabled` 1 and patched to
+0, identical 265-frame prefixes, Hatari `2.6.1-devel`, fork `24cd93e7`
+(`c5d5bf34` plus 2.8's unarmed observer; binary `e0894bfc...`), TOS 4.02,
+16 MHz 68030, corrected 32 MHz DSP, 14 MiB, `--monitor rgb`. Emulator
+measurements, not physical-Falcon timings; the two profiles must not be mixed.
+Raw counters:
+[`docs/performance/backdrop-2026-11-19.json`](docs/performance/backdrop-2026-11-19.json).
+
+| 640x400, one layout | Cycle-exact, contention on | MMU ledger |
+|---|---:|---:|
+| Black background (`backdrop_enabled` 0) | 593.6 ms / 1.685 FPS | 563.5 ms / 1.775 FPS |
+| **Backdrop** | **609.6 ms / 1.640 FPS** | **565.1 ms / 1.770 FPS** |
+
+| Stage, cycle-exact | Black | Backdrop | Delta |
+|---|---:|---:|---:|
+| Set frame | 13.2 ms | 13.4 ms | +0.2 ms |
+| Packet (DSP readback, build) | 447.9 ms | 420.2 ms | -27.7 ms |
+| Clear / restore | 27.5 ms | 52.1 ms | **+24.6 ms** |
+| Raster | 104.6 ms | 123.5 ms | +18.9 ms |
+| **Frame** | **593.6 ms** | **609.6 ms** | **+16.0 ms (-2.7% FPS)** |
+
+- The restore costs 24.6 ms more than the clear -- every longword is now read
+  as well as written -- and 16.0 ms of it reaches the frame; packet and raster
+  moving against each other is the balance shifting (the clear services chunk
+  hand-overs, 2.8a), not work added or removed.
+- On the MMU ledger the frame grows by 1.6 ms: that profile's frame waits on
+  the DSP, and the longer restore mostly fills that wait.
+- Against `trex_hires.tos` (590.5 / 562.4 ms, 2.8a) the black arm of this
+  executable is +3.1 and +1.1 ms: another layout, another light set (the level
+  distribution decides nothing the DSP times, but the image differs) and no
+  depth cue. The share is 6.6a's 176 and was not re-swept.
+
+**Not established.** No physical Falcon or TV has shown it. The picture's
+pixel shape follows 6.6a.1's estimate. The band restore is gated on the
+choreography prefix, not on the held turntable frames after it.
+
+**Reproduction.**
+
+```sh
+make DOSBOX=/path/to/DOSBox trex_m68030_hires_backdrop trex_m68030_hires_backdrop_fbseq
+python3 tools/measure_frames.py TREX/m68030/trex_hires_bg.tos \
+  TREX/m68030/TREXBGND.LOD hatari_runs/backdrop-ce --dsp-name TREXBGND.LOD \
+  --memsize 14 --cpu-core cycle-exact --videl-contention on --frames 265 \
+  --timeout 6000
+cp TREX/m68030/trex_hires_bg.tos hatari_runs/backdrop_off.tos
+python3 tools/patch_data_flag.py hatari_runs/backdrop_off.tos \
+  TREX/m68030/build/trex_hires_bg.lst backdrop_enabled 0 1
+cp TREX/m68030/trex_hires_bg_fbseq.tos hatari_runs/backdrop_fbseq2.tos
+python3 tools/patch_data_flag.py hatari_runs/backdrop_fbseq2.tos \
+  TREX/m68030/build/trex_hires_bg_fbseq.lst delta_clear_enabled 2 0
+```
+
+Run both frame-sequence executables (MMU ledger, `--frames 265`) and compare
+their `fbseq.res` with `cmp`.
+
+### 6.6c Fixed-camera dinosaur trail
+
+This is the elevated-camera version measured on 2026-11-19. The current
+backdrop targets build the eye-level version in section 6.6d.
+
+The RGB/TV viewing build renders the 1,376-vertex, 2,724-triangle T-Rex and
+six indexed PS1 texture pages at 640×400. This scene introduced the trail
+into the backdrop targets from 6.6b. The 68030 and DSP render each pose live.
+
+**Walking and framing.** Source TANM records 52–83 supply one complete gait.
+The route generator follows the foot moving backwards relative to the hips.
+It holds the centroid of that sole at the same world position across adjacent
+poses, blends the two foot constraints at the stance change, and sets body
+height from the lowest sole. The same calculation accounts for yaw during
+the near turn. The animal approaches for 48 poses, rounds the near bend over
+24 poses and curves away. From sample 144 it completes one circle in four
+strides (128 poses). Sample 272 returns to 144 with matching gait phase and
+world position. The original head-turn morph eases in as the shoulders turn
+away. The fixed camera is 15,800 units above the model origin and pitched
+down 21.5 degrees. Focal lengths are 1,410 and 1,303 pixels, with principal
+point (320, 284). The frame can crop the tail tip or feet on the near pass.
+
+**Terrain and lighting.** The single RGB565 backdrop uses an open clay and
+ochre trail with different plants, exposed roots and rock along each side.
+The upper-left sky key, frontal fill and earth bounce have relative
+luminances of 0.72, 0.36 and 0.16. The generator rotates their directions
+into the fixed camera basis. The four 16-level shade ramps retain the
+indexed skin texture, lift detail in shade and warm the undersides near the
+ground. A contact shadow darkens the local ground texture in three steps
+before the first mesh span is painted. The art source and the built-in
+ImageGen edit prompt are recorded in the [scene manifest](docs/performance/trail-2026-11-19.json).
+
+**Host data and page ownership.** `make backdrop` generates the 512,000-byte
+picture, 14,160-byte route and 213,928-byte shadow. The route begins with
+four big-endian longwords (loop start, focal X, focal Y, centre Y). Each of
+272 records contains nine signed Q1.23 matrix entries, three signed
+translations and one Q12 head weight, all stored as longwords. The host
+copies the transform into the existing animated-frame command. The shadow
+starts with one 32-bit relative offset per sample. Each points to four
+inclusive 16-bit bounds (min X, max X, min Y, max Y), then three rings.
+Each ring has a first Y and signed row count minus one. Each row supplies a
+byte column and RGB565 longword count minus one. Empty rings use −1. The
+host saves the current shadow bounds before advancing the pose and merges
+them into the render page's eight-row damage bands after DSP GET_BANDS.
+The viewing TOS header reports 16,234 / 1,912,982 / 4,861,030 bytes of
+text/data/BSS. The two screen buffers and existing SSI/DMA window still fit
+the 14 MiB configuration.
+
+**DSP work.** The NOFOG image unpacks upper index fields with one fractional
+multiply by `$000800` followed by a field mask. It quantizes clamped light
+with a multiply by 16 and omits the prelight depth-key calculation. Prelight
+also marks each survivor's clipped bounds immediately after computing them.
+GET_BANDS returns and empties the table before FINISH processes the next pose.
+The packet format, ordering and SSI/DMA protocol are unchanged. The Motorola
+assembler reported zero errors and warnings. The last loaded P word is
+`$099D`, ten words below the original backdrop image's last word.
+
+**Measured throughput.** On the same 320 trail frames, the previous backdrop
+DSP and its share of 176 took 405.0 ms/frame. The revised DSP at that share
+took 375.3 ms. A sweep of ten fixed shares from 128 to 208 gave the shortest
+measured time at **160/256**, 372.4 ms/frame, **2.69 FPS** (8.8% more FPS
+than the same-route control). The viewing executable had only its per-frame
+stats flush enabled for timing. These are emulated 200 Hz counter readings
+on cycle-exact Hatari, Falcon 16 MHz, DSP emulation, Videl contention on,
+14 MiB ST-RAM, RGB, TOS 4.02. Physical hardware speed is unmeasured.
+Individual runs and binary hashes are in the manifest.
+
+**Framing and framebuffer checks.** Across 320 emulator frames, omitting
+the skull/muzzle faces changed at least 120 pixels per frame. Omitting the
+central torso changed at least 1,464. Projecting each subset's vertices over
+the route gives inclusive head bounds of (33, 27) to (618, 384) and central
+torso bounds of (106, 3) to (577, 352). Vertex bounds are a projection
+calculation. The visibility counts come from actual textured framebuffer
+differences. The band restore matches the original DSP with a full
+background copy over 163,840,000 bytes. All 48 frames following the wrap
+also match their first-lap counterparts.
+
+![Near turn captured from the framebuffer](docs/screenshots/trex-trail-close.png)
+
+**Reproduction.** Build the viewing, diagnostic and FBSEQ backdrop targets
+listed in 6.6b. Use a scratch copy for each patched executable. To time the
+viewing layout, patch `stats_flush_enabled` to 1 with
+`tools/patch_data_flag.py` and the matching `trex_hires_bg_run.lst`. Run
+`tools/measure_frames.py` as in 6.6b with `--frames 320`. Use its own
+listing to patch `delta_clear_enabled` to 2 in the FBSEQ binary. Run it and
+the full-restore FBSEQ control separately. To check anatomical visibility,
+run `tools/check_backdrop_visibility.py make-probes <fbseq.tos> <scratch>`
+on the band-mode copy. Capture both probes under the same settings, then run
+`tools/check_backdrop_visibility.py check <full-fbseq.res> <no-head.res> <no-torso.res>`.
+
+### 6.6d Eye-level trail and turning morphs
+
+This section records the earlier eye-level jungle builds. The current build
+uses the standing viewpoint described in section 6.6e.
+
+The 2026-11-20 trail restores the first jungle shot's optical height and
+level pitch (both zero in model coordinates). The camera is fixed at
+principal point (320, 200) with focal lengths 940 and 868. The sky, fill
+and bounce directions have been regenerated in this camera basis. The
+entire approach, near bend and circular patrol use the same lens. The
+original mesh, corner normals, indexed texture pages and CLUTs remain the
+inputs to the live 640×400 renderer.
+
+**Pose authoring.** The build reads the 32 walking keys from TANM records
+52–83. It preserves the source leg articulation and shortens the travel of
+each foot during the turn, most strongly on the inside leg. Root placement
+uses the resulting sole positions. The torso shifts toward the supporting
+side, and the neck offsets part of the gait's vertical bob. The native
+head-turn target leads the hips into the bend. The original brow weights
+follow their gait phase. On the way out, the neck lifts so the muzzle stays
+visible past the shoulder. The tail elevation follows a quarter of the
+source angular excursion about a six-degree incline. Its lateral curve
+builds with distance from the hips and incorporates eight source keys of
+heading history at the tip. The leg, neck and tail adjustments are artistic
+additions to the extracted PS1 animation.
+
+**Timing.** A walking stride occupies 12 displayed poses on the circle.
+The near turn takes 12 additional samples, eased in and out. A single
+source time determines the interpolated vertex deltas, root placement,
+heading and contact shadow. In a projection of the same revised mesh and
+route, the largest displacement of the skull centroid between adjacent
+near-pass frames fell from 106.6 pixels with uniform cadence to 57.0
+pixels. Frame 21 gives the closest muzzle point. Frame 66 starts the
+circle, which returns to its starting pose at frame 114 after four strides.
+
+**Memory and rendering.** The trail generator writes 114 full-body XYZ16
+delta poses (941,184 bytes). The host reads them in place of the 444,416-byte
+TANM runtime asset in this build. The 5,944-byte route keeps the 16-byte
+view header and 52-byte record from 6.6c. Its final longword now holds the
+byte offset of the pose in the bank. The composed pose already contains
+the face morphs, so the host sends it once through the existing bounded
+gait transactions (512, 512 and 352 vertices). The DSP still adds the
+original base vertices, transforms, projects and lights the mesh every
+frame. Packet format, DSP program, SSI/DMA ownership and the framebuffer
+restore are as in 6.6c. The projected shadow occupies 39,892 bytes. The
+viewing TOS header gives 15,946 / 2,228,662 / 4,861,030 bytes of
+text/data/BSS. The tested configuration uses 14 MiB ST-RAM.
+
+**Validation.** The fastest of seven measured fixed span shares was 164/256.
+The viewing build averaged **2.86 FPS** over 320 frames on cycle-exact Hatari
+with Videl contention, a 16 MHz 68030, emulated DSP, RGB and TOS 4.02. This
+workload includes a different camera, cadence and mesh deformation from
+6.6c. Physical Falcon timing is unmeasured. The full background copy and
+band restore produced identical frames. Each of the 206 frames after the
+first lap matched the corresponding lap pose. Omitting the skull or torso
+separately changed at least **323** and **903** actual pixels, respectively,
+in every frame. Calculated inclusive vertex bounds were (14, 101) to
+(626, 296) for the skull and (163, 108) to (547, 304) for the central
+torso. The feet can extend below the near frame. Rebuild the assets with
+`make backdrop` and use the build and capture commands in 6.6c to repeat
+the tests. Run identities, timing and capture hashes are recorded in the
+[eye-level trail measurements](docs/performance/trail-2026-11-20.json).
+
+**Eye-level jungle artwork.** The current build uses
+[`jungle_eye_level.png`](TREX/textures/jungle_eye_level.png). The clay trail
+converges near (320, 200), the vanishing point of the level camera's forward
+axis. Its 37.6-degree horizontal field of view informed the framing. In the
+circle, the projected centres of the vertices near the planted soles range
+from x 196–507 and y 302–342. These positions fall on open earth in the
+new artwork. The canopy opens on camera left to match the mesh's sky light.
+`make backdrop` applies the existing pixel-aspect correction and RGB565
+conversion. The timed host binary matches the previous build byte for byte
+outside the embedded picture. Full redraw and band restore agreed across
+320 frames, and the viewing build measured 349.5 ms/frame (2.86 FPS) under
+the Hatari conditions above. See the [art prompt and capture measurements](docs/performance/jungle-eye-level-2026-11-20.json).
+
+### 6.6e Standing human viewpoint
+
+The initial three-stride run below is retained as a baseline. The current
+four-stride patrol is described in 6.6f.
+
+The camera stands 3,545 model units above the trail, equivalent to about
+1.65 m at the selected scene scale of 2,150 units/m. It aims 3.4 degrees
+up with fixed focal lengths of 1,320 and 1,219 pixels. The existing jungle
+plate is reprojected once from its original level lens during RGB565
+conversion. The resulting horizon is near row 272. The light vectors
+and the ground shadow are generated in the new camera basis.
+
+The T-Rex approaches front three-quarter and turns into a three-stride
+circle. The route uses the original planted-foot integration and turn
+retiming. A supplemental torso morph eases in at circle entry. It bends
+the ribs ahead of the pelvis with up to eight degrees of yaw and five
+degrees of inward lean, tapered toward the hips, legs and skull. The
+original PS1 gait, planted feet and separate tail bend drive the rest of
+the turn. The supplemental morph is composed into the XYZ16 poses at
+build time. The mesh and original texture pages use the existing live
+renderer. There are 102 unique poses and the lap begins at pose 66.
+The pose, route and shadow assets occupy 842,112, 5,320 and 21,332 bytes.
+The viewing TOS header reports 15,946 / 2,109,878 / 4,861,030 bytes of
+text/data/BSS.
+
+The 320-frame cycle-exact Hatari run with span share 164 measured
+373.7 ms/frame (2.68 FPS). Full redraw and band restore matched across the
+capture. All 218 frames following the first lap matched their corresponding
+lap poses. Skull and torso omission probes changed at least 299 and 1,165
+pixels respectively in every frame. At the closest point the projected
+skull spans 140 pixels horizontally. A foot, the outer flank or the tail
+can cross the frame edge. Physical Falcon throughput is unmeasured.
+[Standing-view capture and timing](docs/performance/standing-view-2026-11-20.json)
+
+### 6.6f Wider patrol circle
+
+The patrol takes four full strides per lap and repeats after 48 displayed
+poses. The yaw advances 7.5 degrees per displayed pose on the circle,
+down from 10 degrees. A circle fitted to the generated ground-plane hip
+positions gives a diameter of approximately 6.25 m, up from 4.80 m at
+the scene scale in 6.6e. The return path eases left to place the expanded
+lap inside the fixed camera view. The near approach and turn retain the
+standing viewpoint. On the wider circle the torso morph uses up to six
+degrees of yaw and 3.75 degrees of inward lean.
+
+The pose, route and shadow assets occupy 941,184, 5,944 and 23,432 bytes.
+The viewing TOS header reports 15,946 / 2,212,278 / 4,861,030 bytes of
+text/data/BSS. The three gait upload chunks and the DSP program are as
+in 6.6e.
+
+At span share 164, cycle-exact Hatari measured 377.3 ms/frame (2.65 FPS)
+over 320 frames. The lap took 17.3 seconds, up from 12.8 seconds. Full
+restore and band restore matched. The skull and torso contributed at
+least 650 and 1,282 pixels respectively per frame, and all 206 frames
+after wrap matched their corresponding lap poses.
+[Wider circle capture and timing](docs/performance/wide-circle-2026-11-20.json)
+
+The preceding side-glance build uses TANM target 6 for the left glance and target
+8 for the right. The right glance eases in as the animal faces the viewer
+on the circle and fades through neutral before the head looks left again.
+The head counter-rotates about the raised skull region so the muzzle aims
+nearer level while the neck clears the shoulder. The CPU selects a composed
+XYZ16 pose and sends it to the DSP for live rendering. The original
+runtime target command also accepts CPU-selected signed Q12 weights.
+This trail build composes the additional glances into the existing gait
+bank at asset generation time, so they add no runtime target transfers.
+The resulting 320-frame run averaged 372.2 ms/frame (2.69 FPS) in
+cycle-exact Hatari. Both restore modes matched, and the skull and torso
+contributed at least 447 and 1,282 pixels respectively every frame.
+[Side-glance run](docs/performance/side-glance-2026-11-20.json)
+
+#### Runtime morph weights
+
+Superseded by 6.6g: the exporter bakes these weights into the poses, and
+the 68030 no longer mixes them. Kept as the record of the measured build.
+
+Each 54-byte trail record appends a word of yaw (65536 units/revolution)
+after the pose offset. The 030 differences wrapped yaw across one displayed
+pose for the trunk and three for the tail. Lookback wraps within the lap.
+Facing and turn rate determine the signed glance. The left and right PS1
+targets cross through neutral. The gait retains support-side roll and foot
+placement. The pose-specific head targets follow the pitched neck. Trunk
+and tail targets taper towards their attachments.
+
+Each sample contains a neutral XYZ16 gait followed by four run lists
+(left, right, trunk, tail). A run starts with a 16-bit destination byte
+offset and 16-bit coordinate count followed by signed word deltas. A zero
+pair ends each list. The host mixes four signed Q12 weights (8 bytes) into
+its own 8,256-byte buffer before the existing three gait transfers.
+Pose, route and shadow occupy 2,595,298 / 6,172 / 23,432 bytes.
+Viewing TOS text/data/BSS are 16,218 / 3,866,790 / 4,869,222 bytes.
+
+Cycle-exact 16 MHz Hatari measured 387.6 ms/frame (2.58 FPS) over 320
+frames. Both restore modes matched and 206 repeated poses were identical.
+The skull and torso contributed at least 441 and 1,278 pixels respectively.
+[Runtime morph measurements](docs/performance/runtime-morph-2026-11-20.json)
+
+#### Runtime pose reuse and direct gait upload
+
+The trail CPU evaluates all four weights each frame. Zero weights across all
+targets select the neutral source directly. Otherwise the host selects one of
+48 mixed XYZ16 buffers by sample index modulo 48. Each slot has a 12-byte
+key containing the immutable source address and all four weight words.
+On a miss it copies the neutral geometry and applies the live weights. A
++4096 target adds its signed deltas directly. The 48 buffers occupy 396,288
+bytes plus 576 bytes of keys. The current viewer text/data/BSS are
+16,378 / 3,866,630 / 5,254,246 bytes. Faces, lights and pixels are evaluated
+by the live renderer each frame.
+
+The trail gait uploader sign-extends each XYZ16 coordinate directly into
+the host port after polling TXDE. It preserves the three command headers,
+the coordinate order, the bounded counts and the RXDF/ACK after each chunk.
+The wire format and DSP image remain the same.
+
+On the 320-frame cycle-exact 16 MHz Hatari workload, frame setup fell from
+26.2 to 11.3 ms/frame and total time from 387.6 to 373.1 ms/frame (2.68 FPS).
+Four subsequent laps (192 intervals following frame 114) averaged 2.84 FPS.
+The complete full-restore and band-restore captures both matched the preceding
+runtime-morph build byte for byte. Measurements are emulator-only.
+[Optimized runtime morph measurements](docs/performance/optimized-morph-2026-11-20.json)
+
+#### Close-turn articulation
+
+During approach samples 7 through 39 the host crossfades the gaze, trunk
+and tail controllers over four samples at each edge. The gaze samples the
+route heading two poses ahead. Trunk lean follows a two-interval trailing
+average. Tail curvature uses a three-interval window ending two poses ago.
+These windows express relative timing in gait samples. The stride geometry
+and stance-foot root trajectory still supply foot placement. The existing
+four weights also key the pose cache. The viewer text/data/BSS are
+16,506 / 3,866,502 / 5,254,246 bytes.
+
+In cycle-exact 16 MHz Hatari, 320 frames took 373.25 ms/frame (2.68 FPS)
+against 373.14 ms/frame for the previous viewer. RGB565 pixels differed
+only on approach samples 8 through 38. The patrol matched pixel for pixel.
+[Close-turn timing and captures](docs/performance/phased-turn-2026-11-20.json)
+
+#### Camera-left pass
+
+The close approach holds a straight heading through source gait key 40,
+then arcs right over 72 keys. A cubic heading curve and a shared quintic
+time adjustment for stride, foot-based translation and rotation spread
+the departure over two and a quarter strides. The right step shortens on
+the inside. The first bend advances at most 3.56 degrees per displayed
+pose. Sample 22 brings the skull closest, with the body roughly 12 degrees
+from head-on. The route drives the existing runtime head, trunk and tail
+controller across samples 12 through 69.
+
+There are 150 samples, with a 48-pose lap starting at 102. Route, neutral
+poses plus sparse morphs, and shadow banks are 8,116 / 3,414,000 / 32,036
+bytes. Viewer text/data/BSS are 16,506 / 4,693,894 / 5,254,246 bytes.
+In the 320-frame cycle-exact 16 MHz Hatari workload the viewing build
+averaged 369.9 ms/frame (2.70 FPS). Route and rendered coverage differ
+from the preceding animation. Full restore and band restore matched,
+including 170 repeated lap poses.
+[Camera-left pass timing and captures](docs/performance/left-pass-2026-11-20.json)
+
+#### Continuous forward travel
+
+The route generator smooths the ground-plane hip trajectory over foot
+changes with a five-source-key Gaussian (15 keys to either side). The
+approach blends into the periodic hip trajectory before the first lap.
+An inverse displacement in mesh space keeps the soles on the stance
+trajectory and tapers out up the legs. The exported body and translated
+route share the same yaw convention. Across all displayed intervals,
+including wrap, the minimum hip displacement along the mean forward
+direction is 103.4 model units (4.8 cm at scene scale).
+
+The lap now has 72 poses and starts at sample 111. Sampling increases
+gradually on the return, reducing patrol yaw from 7.5 to 5 degrees per
+pose. The 72-slot CPU pose cache occupies 594,432 bytes plus 864 bytes
+of keys. The DSP commands and mesh format are unchanged. Route, pose
+and shadow banks occupy 9,898 / 4,164,776 / 36,332 bytes. The viewing
+TOS reports 16,506 / 5,451,654 / 5,454,950 bytes of text/data/BSS.
+
+Over 320 frames the viewer averaged 370.1 ms/frame (2.70 FPS) in
+cycle-exact 16 MHz Hatari. The previous path averaged 369.9 ms/frame.
+[Continuous walk timing and captures](docs/performance/steady-walk-2026-11-20.json)
+
+### 6.6g The Blender scene is the source
+
+[`TREX/scene/trex_trail.blend`](TREX/scene/trex_trail.blend) now defines
+the trail. The runtime pose mixing described under "Runtime morph weights"
+and "Runtime pose reuse and direct gait upload" in 6.6f is gone: the 68030
+no longer computes weights, mixes run lists or keeps a pose cache.
+
+**What the scene holds.** The scene uses Blender axes (+X right, +Y away,
++Z up) at 2,150 model units per metre, with the ground at Z = 0.
+- **Mesh:** the TMD mesh, mirrored along its own Z, because every route
+  matrix the demo used has determinant −1.
+- **Animation:** the T-Rex's keyed location and Z rotation, plus one
+  `pose NNN` shape key per displayed sample. Shape keys named `DSP …` are
+  optional DSP morph targets; the seed adds PS1 TANM targets 5–8, all at
+  weight 0.
+- **Lens:** a fixed horizontal-fit camera, 1,320/1,219 pixel focal lengths
+  through the pixel aspect.
+- **Shadow:** a `Ground shadow` plane whose scale gives the ellipse
+  half-axes; its material holds the three ring radii.
+- **Lighting:** the `Falcon DSP shade` node group with world-space light
+  vectors, the ambient, the DSP's fixed tint thresholds and the 16×4 ramp
+  image.
+- **Backdrop:** the RGB565 picture as the world background.
+
+**How it renders.** EEVEE renders emission only, under the Raw view
+transform.
+- **Light:** the material computes `make_triangle_shade` per pixel, from
+  the static PS1 corner normals and the three clamped lights:
+  level = ⌊16·(0.299R + 0.701G)⌋, and tint from (R + ambient)/(G + ambient).
+- **Colour:** it then applies the host's `shade_falcon_color` in integer
+  steps: 5-bit channel × ramp/64 × 3/2, truncated and clamped, never 0 when
+  the texel channel is not, with green shown through the RGB565 word.
+- **Normals:** a geometry-nodes modifier rotates the corner normals to world
+  space. EEVEE's shader Vector Transform returned a constant for that
+  attribute.
+- **Shadow:** the shadow material applies `c − c>>4`, then `c − c>>3` per
+  inner ring, to the backdrop.
+
+**Export.** `make backdrop` runs
+[`tools/blender_export_falcon.py`](tools/blender_export_falcon.py) inside
+Blender. It writes:
+
+| File | Content |
+|---|---|
+| `backdrop_path.bin` | the 16-byte header, then one 52-byte record per sample: Q1.23 matrix, translation, pose offset. The yaw word is gone. |
+| `backdrop_poses.bin` | unique full-body XYZ16 poses |
+| `backdrop_targets.bin` | DSP targets with per-sample Q12 weights |
+| `backdrop_shadow.bin` | the shadow rows, format of 6.6c |
+| `backdrop_lights.inc`, `backdrop_ramp.inc` | light vectors and ramp; `trex_m68030.s` includes them in place of the hand-pasted tables |
+| `backdrop_640x400.bin` | the RGB565 picture |
+
+The shadow rows come from projecting the ellipse as a conic through the
+DSP's projection. Each row is solved at its pixel centre and rounded to
+pixel pairs, as in `shadow_rows`.
+
+**Checks.** The exporter refuses a scene that would not be rendered as
+authored:
+- the mesh, UVs, pages or corner normals differ from the TMD (the Falcon
+  still reads `trex.tmd` and the TIM pages);
+- the camera moves, or has a shift or a fractional focal length;
+- the T-Rex transform is not a pure rotation;
+- a delta, weight or Q1.23 value overflows;
+- the tint thresholds no longer match the DSP's.
+
+The pose is chosen so that base + pose + Σ⌊delta·weight/4096⌋ equals the
+evaluated Blender mesh rounded to model units. It asserts that per vertex
+and per sample.
+
+**DSP targets cost time.** `trail_send_targets` sends each non-zero `DSP …`
+key after the gait pose through the existing `APPLY_ANIMATION_TARGET`
+transaction. It is the PS1 branch's path, run-split by the exporter.
+- Like the gait upload, it runs after the frame's chunks and before FINISH.
+  Nothing overlaps it, so it costs the frame 1:1. Estimate: 7–9 µs per
+  non-zero target vertex, for example about 4–5 ms for a 557-vertex glance.
+- Targets save RAM (8,256 bytes per baked pose), not time. Bake by default;
+  use a `DSP …` key only where the pose bank would not fit.
+- The seeded scene sends none. With zero targets the routine reads one word.
+
+**Memory.** Every pose is baked once:
+
+| | Size |
+|---|---:|
+| `backdrop_poses.bin` | 1,329,216 bytes (161 unique poses) |
+| `backdrop_targets.bin` | 8,910 bytes |
+| `backdrop_path.bin` | 8,388 bytes |
+| `backdrop_shadow.bin` | 37,600 bytes |
+
+Before, the bank was 4,164,776 bytes plus a 594,432-byte BSS cache. The
+viewing TOS header now reads 16,090 / 2,625,830 / 4,861,030 bytes of
+text/data/BSS, down from 16,506 / 4,951,942 / 5,454,950.
+
+**Validation, all on cycle-exact Hatari** (16 MHz, DSP emulated, Videl
+contention, 14 MiB, TOS 4.02).
+
+*Export against the procedural generators.* The seeded scene exports
+exactly what the old generators and host produced:
+- poses equal the 68030's own mixed result for all 161 samples;
+- lens, lights, ramp and backdrop are byte-identical;
+- matrices are within 3 Q1.23 LSB, translations exact;
+- 94 of 8,435 shadow rows move one edge by a pixel pair (rounding ties).
+
+*Framebuffers against the previous build, over 320 frames:*
+- 169 frames are byte-identical;
+- the others differ by 1.4 pixels on average and 38 at most;
+- all 159 post-wrap frames match their lap counterparts.
+
+*Blender against Hatari,* frames 1, 23, 60, 90 and 161:
+- the background including the shadow is exact;
+- silhouette overlap is 0.959–0.987;
+- the mean colour bias is below 0.25 of a 5/6-bit step.
+
+The remaining per-pixel differences inside the model come from texel
+sampling: EEVEE samples perspective-correct, the span rasterizer does not.
+Depth-buffer against painter's-order visibility adds to them.
+
+*Timing, the same 320-frame route and settings:*
+
+| Stage | Before | After |
+|---|---:|---:|
+| Whole frame | 468.6 ms (2.13 FPS) | **462.4 ms (2.16 FPS)** |
+| `set_frame` | 13.7 ms | 6.5 ms |
+
+The other stages are unchanged. These are emulator readings; physical
+Falcon timing is unmeasured.
+
+**Reproduction.** `make backdrop` exports from the scene, then build the
+6.6b targets. `make blender_seed` recreates the scene from the procedural
+generators (`make_backdrop.py`, `make_backdrop_path.py`,
+`make_backdrop_light.py`, via `blender_seed_data.py` and
+`blender_build_scene.py`) and overwrites `TREX/scene`. The comparison tools:
+`blender_check_scene.py` renders chosen frames, and
+`compare_blender_render.py` compares them with an `fbseq.res` capture.
+[Blender-source checks and timing](docs/performance/blender-source-2026-11-20.json)
+
+**DSP capacity for a new model** (computed from the `ds`/`=` allocations in
+`trex_dsp.asm`, ORDERED/SPANSTREAM images):
+- **Banks:** X holds 3V base vertices, 4V camera/projected vertices,
+  2·Nx normals and T prelight words, within 15,242 words (15,142 at HIRES).
+  Y holds 3T indices and 2·Ny normals, within 13,888 words.
+- **Combined:** 7V + 4T + 2N ≤ 29,130.
+- **Free today:** 1,380 X words (1,280 at HIRES) and 2 Y words.
+- **Ceiling at this mesh's proportions:** about 1,440 vertices, 2,850
+  triangles and 3,780 normals. With per-face normals, about 1,540 / 3,050;
+  with one normal per vertex, about 1,690 / 3,340.
+- **Index caps:** V ≤ 2,048 and N ≤ 4,096 (index fields); T ≤ 4,096 in
+  ORDERED images (sort keys).
+- **Constants tied to this mesh:** `TREX_VERTICES`, `TREX_PRIMITIVES`,
+  `NORMAL_TOTAL`/`NORMAL_Y_COUNT`, `CHUNK_UVS_BASE` and the host's TMD and
+  gait sizes are all fixed to it.
+- **Poses** stream into `camera_vertices` and are never stored on the DSP.
+  Their size is a 68030 RAM question: V × 6 bytes per baked pose.
 
 ### 6.7 Texture and CLUT reads
 

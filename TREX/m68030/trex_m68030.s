@@ -91,6 +91,9 @@ SCREEN_HEIGHT		= 400
 	fail	"TREX_HIRES does not support TREX_SSI_HATARI"
 	endc
 	else
+	ifd	TREX_BACKDROP
+	fail	"TREX_BACKDROP needs TREX_HIRES: the picture is 640x400 and fills the screen"
+	endc
 VIDEO_SCREEN_WIDTH	= 256
 VIDEO_SCREEN_HEIGHT	= 224
 SCREEN_WIDTH		= 240
@@ -552,6 +555,9 @@ HOLD_PIVOT_Z		= 1400
 ; the reference the pivot correction is measured against (zero at step 0).
 M273_R02		= -1567
 M273_R22		= 3782
+	ifd	TREX_BACKDROP
+TRAIL_SAMPLE_BYTES	= 52	; matrix, translation, pose byte offset (blender_export_falcon.py)
+	endc
 TANM_FRAME_COUNT	= 274
 TANM_CHOREOGRAPHY_OFFSET	= 47104
 TANM_CHOREOGRAPHY_BYTES	= 64
@@ -1126,6 +1132,10 @@ trex_dummy_frame
 	bne	.no_dsp_bands
 	bsr	dsp_fetch_bands
 .no_dsp_bands
+	ifd	TREX_BACKDROP
+	; The DSP has replaced this page's mesh bounds. Include the host overlay.
+	bsr	mark_ground_shadow
+	endc
 	endc
 	TimeAdd	stat_mark_packets,stat_t_packets
 	ifd	TREX_SSI_SHADOW
@@ -1143,6 +1153,11 @@ trex_dummy_frame
 	; The advance runs here because dsp_set_frame reads animation_frame --
 	; the counter leads the rendered frame by one from now on.
 	addq.l	#1,animation_frame
+	ifd	TREX_BACKDROP
+	cmpi.l	#(backdrop_path_end-backdrop_path)/TRAIL_SAMPLE_BYTES,animation_frame
+	bcs	.animation_advance_ready
+	move.l	backdrop_view,animation_frame
+	else
 	cmpi.l	#TANM_FRAME_COUNT,animation_frame
 	bcs	.animation_advance_ready
 	move.l	#TANM_FRAME_COUNT-1,animation_frame
@@ -1210,6 +1225,7 @@ trex_dummy_frame
 	; survivor and overran the frame budget on the hold's right-edge poses;
 	; the range-restricted sweep is bounded by each survivor's own screen
 	; box and removes the overrun with the arm left on.
+	endc
 .animation_advance_ready
 	TimeMark	stat_mark_setframe
 	bsr	dsp_set_frame
@@ -1979,7 +1995,11 @@ trex_write_framebuffer_debug
 ; N-2, so tools/clear_overlap.py can read off, offline, what each clear
 ; scheme would have to wipe.  Diagnostic only: the GEMDOS traffic costs
 ; emulated time, so NO timing figure may be taken from this build.
+	ifd	TREX_BACKDROP
+FB_SEQUENCE_FRAMES	= 320	; cover the approach, a lap and both pages after wrap
+	else
 FB_SEQUENCE_FRAMES	= 265
+	endc
 trex_fb_sequence_append
 	movem.l	d0-d7/a0-a6,-(sp)
 	move.l	frame_number,d0
@@ -2247,13 +2267,33 @@ dsp_set_frame
 	; PS1 view looks from (0,0,2000) towards the origin, so its screen-space Z
 	; row and translation are folded into the DSP transform here.
 	move.l	animation_frame,d0
+	ifd	TREX_BACKDROP
+	move.l	d0,d1
+	mulu.w	#TRAIL_SAMPLE_BYTES,d1
+	lea	backdrop_path,a3
+	adda.l	d1,a3
+	else
 	lsl.l	#6,d0
 	lea	trex_animation_data+TANM_CHOREOGRAPHY_OFFSET,a4
 	adda.l	d0,a4
+	endc
 
 	move.l	dsp_animation_tx_ptr,a5
 	move.l	a5,a0
 	move.l	#DSP_CMD_SET_ANIMATED_FRAME,(a0)+
+	ifd	TREX_BACKDROP
+	; The 3x3 Q1.23 transform already includes the fixed camera pitch.
+	; Copy it and the three translations into the usual animated-frame command.
+	rept	12
+	move.l	(a3)+,(a0)+
+	endr
+	; The sample's baked XYZ16 pose, exported from the Blender scene.
+	lea	backdrop_poses,a1
+	adda.l	(a3),a1
+	move.l	a1,animation_gait_pose_ptr
+	move.l	backdrop_view+4,(a0)+	; focal X, focal Y
+	move.l	backdrop_view+8,(a0)+
+	else
 	; gait_hold_index is nonzero exactly during the held state (see the hold
 	; branch in trex_dummy_frame), same as the gait-pose override below --
 	; reused here so the matrix source switches to the Y-spin table there too.
@@ -2355,8 +2395,13 @@ dsp_set_frame
 
 	move.l	#PS1_PROJECTION_X,(a0)+
 	move.l	#PS1_PROJECTION_Y,(a0)+
+	endc
 	move.l	#SCREEN_WIDTH/2,(a0)+		; screen centre x
+	ifd	TREX_BACKDROP
+	move.l	backdrop_view+12,(a0)+		; optical centre y
+	else
 	move.l	#SCREEN_HEIGHT/2,(a0)+		; screen centre y
+	endc
 	move.l	#NEAR_PLANE,(a0)+		; near distance
 
 	; Camera-space light direction.  Sending it per frame rather than baking
@@ -2368,6 +2413,7 @@ dsp_set_frame
 	move.l	(a3)+,(a0)+
 	dbra	d7,.copy_light_word
 
+	ifnd	TREX_BACKDROP
 	; Keep the extracted non-visual state visible to future audio/scene code.
 	move.l	a4,animation_choreo_record
 	moveq	#0,d0
@@ -2379,6 +2425,7 @@ dsp_set_frame
 	moveq	#0,d0
 	move.w	TANM_CHOREO_ACTIVE_MASK(a4),d0
 	move.l	d0,animation_active_mask
+	endc
 
 	; BEGIN is deliberately a small acknowledged transaction.  TOS 4.02's
 	; Dsp_BlkUnpacked source walk wraps at a 64-KiB host-address boundary;
@@ -2403,6 +2450,7 @@ dsp_set_frame
 	; gait_hold_index is nonzero only once the hold state (trex_dummy_frame)
 	; has started advancing it; that takes priority over the now-frozen
 	; choreography record's own field so the walk cycle keeps looping there.
+	ifnd	TREX_BACKDROP
 	move.l	gait_hold_index,d0
 	bne	.dsp_set_frame_gait_selected
 	moveq	#0,d0
@@ -2412,6 +2460,7 @@ dsp_set_frame
 	lea	trex_animation_data+TANM_GAIT_DATA_OFFSET,a1
 	adda.l	d0,a1
 	move.l	a1,animation_gait_pose_ptr
+	endc
 	clr.l	animation_chunk_first
 .dsp_set_frame_gait_chunk
 	move.l	animation_chunk_first,d0
@@ -2434,6 +2483,12 @@ dsp_set_frame
 	cmpi.l	#TREX_VERTICES,animation_chunk_first
 	bcs	.dsp_set_frame_gait_chunk
 
+	ifd	TREX_BACKDROP
+	bsr	trail_send_targets
+	tst.l	d0
+	bne	.dsp_set_frame_shadow
+	endc
+	ifnd	TREX_BACKDROP
 	; Targets 0..3 are already combined in the gait pose; target 4 is unused
 	; by autoplay.  Send only non-zero targets 5..8, retaining the original
 	; raw deltas and signed Q12 weights for the DSP.
@@ -2500,6 +2555,7 @@ dsp_set_frame
 	tst.l	d0
 	bne	.dsp_set_frame_shadow
 
+	endc
 	; FINISH is sent fire-and-forget: the DSP morphs, transforms and
 	; projects the 1,376-vertex pose while the CPU rasterizes the PREVIOUS
 	; frame, and dsp_finish_frame_wait collects the two ack words at the
@@ -2541,13 +2597,93 @@ dsp_finish_frame_wait
 	moveq	#0,d0
 	rts
 
+	ifd	TREX_BACKDROP
+; Send this sample's non-zero DSP morph targets after its pose. The table is
+; backdrop_targets.bin from blender_export_falcon.py: target count, sample
+; count, one 32-bit run-list offset per target, sample-major signed Q12
+; weights, then per target its runs (first vertex, vertex count, XYZ16
+; deltas) ending in a zero count -- shape keys named "DSP ..." in the scene.
+; Returns D0 = 0, or nonzero when a target transaction failed.
+trail_send_targets
+	movem.l	d4-d6/a2-a4,-(sp)
+	moveq	#0,d0
+	lea	backdrop_targets,a2
+	moveq	#0,d4
+	move.w	(a2),d4			; target count
+	beq	.done
+	lea	4(a2),a3		; run-list offsets
+	move.l	d4,d1
+	lsl.l	#2,d1
+	lea	(a3,d1.l),a4		; sample 0's weights
+	move.l	animation_frame,d1
+	mulu.w	d4,d1
+	add.l	d1,d1
+	adda.l	d1,a4			; this sample's weights
+	subq.w	#1,d4
+.target
+	move.w	(a4)+,d5		; signed Q12 weight; zero sends nothing
+	beq	.next_target
+	move.l	a2,a1
+	adda.l	(a3),a1
+.run
+	moveq	#0,d1
+	move.w	(a1)+,d1		; first vertex
+	moveq	#0,d2
+	move.w	(a1)+,d2		; vertex count
+	beq	.next_target
+	move.l	d2,d6
+	mulu.w	#6,d6
+	add.l	a1,d6			; the next run
+	move.w	d5,d0
+	ext.l	d0
+	movem.l	d4-d6/a2-a4,-(sp)
+	bsr	animation_send_target
+	movem.l	(sp)+,d4-d6/a2-a4
+	tst.l	d0
+	bne	.done
+	move.l	d6,a1
+	bra	.run
+.next_target
+	addq.l	#4,a3
+	dbra	d4,.target
+	moveq	#0,d0
+.done
+	movem.l	(sp)+,d4-d6/a2-a4
+	rts
+	endc
+
 animation_send_gait_chunk
-	; D0 = first vertex, D1 = vertex count, A1 = XYZ16 source.
+	; D0 = first vertex, D1 = vertex count, A1 = consecutive XYZ16 deltas.
 	move.l	dsp_animation_tx_ptr,a5
 	move.l	a5,a0
 	move.l	#DSP_CMD_LOAD_ANIMATION_GAIT,(a0)+
 	move.l	d0,(a0)+
 	move.l	d1,(a0)+
+	ifd	TREX_BACKDROP
+	; Expand directly into the host port, retaining TXDE on every word.
+	move.l	a1,a2
+	move.w	d1,d7
+	add.w	d7,d7
+	add.w	d1,d7
+	subq.w	#1,d7
+	move.l	a5,a0
+	moveq	#3,d0
+	moveq	#0,d1
+	bsr	dsp_block_handshake
+	lea	DSP_HOST_ISR,a0
+.stream
+	move.w	(a2)+,d0
+	ext.l	d0
+.ready
+	btst.b	#DSP_HOST_ISR_TXDE,(a0)
+	beq	.ready
+	move.l	d0,2(a0)
+	dbra	d7,.stream
+.reply
+	btst.b	#DSP_HOST_ISR_RXDF,(a0)
+	beq	.reply
+	move.l	2(a0),dsp_rx_buffer
+	else
 	move.l	d1,d7
 	subq.w	#1,d7
 	bsr	animation_expand_delta_stream
@@ -2559,6 +2695,7 @@ animation_send_gait_chunk
 	lea	dsp_rx_buffer,a1
 	moveq	#1,d1
 	bsr	dsp_block_handshake
+	endc
 	cmpi.l	#DSP_ACK_ANIMATION_GAIT,dsp_rx_buffer
 	bne	animation_send_failed
 	moveq	#0,d0
@@ -4678,7 +4815,11 @@ SPAN_STREAM_BYTES = 512*1024
 ; per build; it was 160 for both before (7.4g).  The balance point belongs
 ; to the machine that runs it; a physical Falcon will want its own figure.
 	ifd	TREX_HIRES
+	ifd	TREX_BACKDROP
+SPAN_STREAM_SHARE = 164
+	else
 SPAN_STREAM_SHARE = 176
+	endc
 	else
 SPAN_STREAM_SHARE = 168
 	endc
@@ -5499,6 +5640,24 @@ gpu_open
 	subq.l	#1,d0
 	bne	.gpu_clear_screen_buffers
 
+	ifd	TREX_BACKDROP
+	; The backdrop (6.6b) is the background of both buffers from the start;
+	; the frame clear below then only ever restores what a frame drew over.
+	tst.l	backdrop_enabled
+	beq	.gpu_backdrop_done
+	move.l	video_screen_base,a0
+	moveq	#1,d1
+.gpu_backdrop_page
+	lea	backdrop_image,a1
+	move.l	#(SCREEN_BUFFER_BYTES/4),d0
+.gpu_backdrop_copy
+	move.l	(a1)+,(a0)+
+	subq.l	#1,d0
+	bne	.gpu_backdrop_copy
+	dbra	d1,.gpu_backdrop_page
+.gpu_backdrop_done
+	endc
+
 	; Both buffers are provably background now, so both delta-clear band
 	; tables are empty.  They already assemble as DC_EMPTY in the data
 	; section, which is what makes a cold start correct with no runtime
@@ -5663,6 +5822,71 @@ video_set_base
 	move.b	d0,$ffff8201.w			; bits 23..16
 	rts
 
+	ifd	TREX_BACKDROP
+; Each row descriptor is (byte column, longword count minus one). Three
+; nested ellipses attenuate the existing ground texture beneath the animal.
+; Drawing before the first mesh chunk keeps the feet in front of the shadow.
+draw_ground_shadow
+	tst.l	backdrop_enabled
+	beq	.done
+	movem.l	d0-d7/a0-a2,-(sp)
+	lea	backdrop_shadows,a0
+	move.l	animation_frame,d0
+	adda.l	(a0,d0.l*4),a0
+	move.l	a0,ground_shadow_box
+	addq.l	#8,a0
+	moveq	#2,d7
+	moveq	#4,d5
+	move.l	#$08610861,d4		; both RGB565 words divided channelwise by 16
+.ring
+	moveq	#0,d0
+	move.w	(a0)+,d0
+	mulu.w	#FRAMEBUFFER_STRIDE,d0
+	move.l	render_base,a1
+	adda.l	d0,a1
+	move.w	(a0)+,d6
+	bmi	.next_ring		; this ring is below the close-up's frame
+.row
+	move.w	(a0)+,d0
+	lea	(a1,d0.w),a2
+	move.w	(a0)+,d3
+.pixel_pair
+	move.l	(a2),d1
+	move.l	d1,d2
+	lsr.l	d5,d2
+	and.l	d4,d2
+	sub.l	d2,d1
+	move.l	d1,(a2)+
+	dbra	d3,.pixel_pair
+	adda.w	#FRAMEBUFFER_STRIDE,a1
+	dbra	d6,.row
+.next_ring
+	moveq	#3,d5
+	move.l	#$18e318e3,d4		; 1/8 additional attenuation in each inner ring
+	dbra	d7,.ring
+	movem.l	(sp)+,d0-d7/a0-a2
+.done
+	rts
+
+mark_ground_shadow
+	tst.l	backdrop_enabled
+	beq	.done
+	tst.l	delta_clear_enabled
+	beq	.done
+	move.l	ground_shadow_box,a0
+	moveq	#0,d2
+	moveq	#0,d3
+	move.w	(a0)+,d0		; x min/max compared as words
+	move.w	(a0)+,d1
+	move.w	(a0)+,d2		; first/last row inclusive
+	move.w	(a0)+,d3
+	cmp.w	d2,d3
+	blt	.done
+	bra	delta_mark_box
+.done
+	rts
+	endc
+
 gpu_clear_ot
 	addq.l	#1,gpu_call_count
 	lea	ordering_table,a0
@@ -5689,6 +5913,32 @@ gpu_clear_ot
 	tst.l	delta_clear_enabled
 	bne	.clear_delta
 
+	ifd	TREX_BACKDROP
+	; With a backdrop the full clear is a full copy of the picture (6.6b).
+	; It is the reference arm of the band restore, not the shipped path.
+	tst.l	backdrop_enabled
+	beq	.clear_black
+	move.l	a1,-(sp)
+	move.l	render_base,a0
+	lea	backdrop_image,a1
+	move.w	#SCREEN_HEIGHT-1,d2
+.backdrop_row
+	move.w	#(SCREEN_WIDTH/2)-1,d1
+.backdrop_loop
+	move.l	(a1)+,(a0)+
+	dbra	d1,.backdrop_loop
+	tst.l	clear_service_enabled
+	beq	.backdrop_row_next
+	btst.b	#DSP_HOST_ISR_RXDF,DSP_HOST_ISR
+	beq	.backdrop_row_next
+	bsr	clear_service_chunk
+.backdrop_row_next
+	dbra	d2,.backdrop_row
+	move.l	(sp)+,a1
+	bra	.clear_fb_done
+.clear_black
+	endc
+
 	move.l	render_base,a0
 	moveq	#0,d0
 	move.w	#SCREEN_HEIGHT-1,d2
@@ -5714,6 +5964,9 @@ gpu_clear_ot
 	bsr	delta_clear_bands
 
 .clear_fb_done
+	ifd	TREX_BACKDROP
+	bsr	draw_ground_shadow
+	endc
 	; The owner-id bitmap shadows the same window and needs the same wipe:
 	; without it the previous frame's ranks survive under this frame's
 	; background and every visibility count is wrong.
@@ -5760,6 +6013,13 @@ gpu_clear_ot
 ; time it changes.
 delta_clear_bands
 	movem.l	d1-d7/a1-a2,-(sp)
+	ifd	TREX_BACKDROP
+	; A4 = backdrop_image - render_base: added to a screen address it gives
+	; the same pixel of the picture (6.6b).
+	movem.l	a3-a4,-(sp)
+	lea	backdrop_image,a4
+	suba.l	render_base,a4
+	endc
 	move.l	render_base,d0
 	sub.l	#screen_buffer_raw,d0
 	lea	dc_band_table,a1
@@ -5816,6 +6076,23 @@ delta_clear_bands
 	add.w	#VIDEO_SCREEN_STRIDE,d7		; row remainder step, 32..508
 	subq.w	#1,d6
 	moveq	#DC_BAND_ROWS-1,d1
+	ifd	TREX_BACKDROP
+	; Restore the picture instead of writing black: the same rows and the
+	; same longwords, read from the backdrop at the same screen position.
+	tst.l	backdrop_enabled
+	beq	.dcb_row
+	move.l	a2,a3
+	adda.l	a4,a3
+.dcb_bg_row
+	move.w	d6,d5
+.dcb_bg_lw
+	move.l	(a3)+,(a2)+
+	dbra	d5,.dcb_bg_lw
+	adda.w	d7,a2
+	adda.w	d7,a3
+	dbra	d1,.dcb_bg_row
+	bra	.dcb_next
+	endc
 .dcb_row
 	move.w	d6,d5
 .dcb_lw
@@ -5835,6 +6112,9 @@ delta_clear_bands
 .dcb_band_next
 	endc
 	dbra	d2,.dcb_band
+	ifd	TREX_BACKDROP
+	movem.l	(sp)+,a3-a4
+	endc
 	movem.l	(sp)+,d1-d7/a1-a2
 	rts
 
@@ -7075,7 +7355,8 @@ delta_mark_packet
 .dm_bot_ok
 	subq.l	#1,d3				; last row, inclusive
 	cmp.l	d2,d3
-	blt	.dm_out				; nothing on screen
+	blt	delta_mark_done			; nothing on screen
+delta_mark_box
 	lsr.l	#DC_BAND_SHIFT,d2		; first band (d2 is >= 0 by now)
 	lsr.l	#DC_BAND_SHIFT,d3		; last band
 	sub.l	d2,d3				; band count - 1
@@ -7093,7 +7374,7 @@ delta_mark_packet
 .dm_band_hi
 	addq.l	#4,a1
 	dbra	d3,.dm_band
-.dm_out
+delta_mark_done
 	rts
 
 
@@ -8616,8 +8897,13 @@ trex_dsp_lod_path
 	; mark as part of the triangle number, so the plain draw-order image
 	; lives under TREXORDR.LOD and never under these names.
 	ifd	TREX_HIRES
+	ifd	TREX_BACKDROP
+	; The backdrop build (6.6b): the HIRES=1 image without the depth cue.
+	dc.b	'TREXBGND.LOD',0
+	else
 	; 640x400 and the three-unit span header: only the HIRES=1 image.
 	dc.b	'TREXHIRS.LOD',0
+	endc
 	else
 	ifd	TREX_RELEASE
 	dc.b	'TREX.LOD',0
@@ -9119,9 +9405,18 @@ trex_corner_normal_data_end
 
 ; TANM v2: exact 274-frame PS1 morph weights, coordinate matrices,
 ; translations, audio-fade state, and 46 deduplicated full-body gait poses.
+	ifd	TREX_BACKDROP
+; Baked XYZ16 poses and DSP morph targets of the Blender scene (6.6g).
+backdrop_poses
+	incbin	"TREX/model/backdrop_poses.bin"
+backdrop_targets
+	incbin	"TREX/model/backdrop_targets.bin"
+	even
+	else
 trex_animation_data
 	incbin	"TREX/model/trex_animation.bin"
 trex_animation_data_end
+	endc
 
 ; NOT pinned, and measured to stay that way: an eleven-point phase scan
 ; over a cnop+pad here (4-KiB raster first, then the full 256-byte cache
@@ -9241,6 +9536,14 @@ texture_page_opaque_clut_table
 ; the PS1's per-channel clamp makes them.  Cells no face ever reaches take their
 ; nearest neighbour's value.
 shade_ramp_table
+	ifd	TREX_BACKDROP
+	; The backdrop build's own ramp (OPTIMIZATION.md 6.6c): soft daylight
+	; in a misty forest instead of the PS1's pink key.  Tint 0 is a face lit
+	; by the sky or the frontal fill, 1 one in shade, 2 and 3 one lit from
+	; the bare earth. The cool shade floor keeps detail through the turn.
+	; Exported from the scene's ramp image by tools/blender_export_falcon.py.
+	include	"TREX/model/backdrop_ramp.inc"
+	else
 	dc.w	32,29,29	; T0 L 0  R/G 1.36  R/G 1.10
 	dc.w	32,29,29	; T0 L 1  R/G 1.36  R/G 1.10
 	dc.w	32,29,29	; T0 L 2  R/G 1.36  R/G 1.10
@@ -9305,6 +9608,7 @@ shade_ramp_table
 	dc.w	64,44,44	; T3 L13  R/G 1.72  R/G 1.45
 	dc.w	64,44,44	; T3 L14  R/G 1.72  R/G 1.45
 	dc.w	64,44,44	; T3 L15  R/G 1.72  R/G 1.45
+	endc
 
 ; The three lights Demo One's own setup routine (0x80127764) installs, each
 ; stored twice: once scaled for the RED channel and once for GREEN, which
@@ -9331,6 +9635,14 @@ shade_ramp_table
 ; face's own light colour: its luminance picks the brightness level, its R/G
 ; ratio picks the tint class.
 dsp_light_direction
+	ifd	TREX_BACKDROP
+	; The backdrop build's light set (6.6d), all three lights replaced: sky
+	; from above, a fill from the camera, a bounce from the forest floor.
+	; "Red" and "green" are weights here, not colours: equal for sky and
+	; fill, four to one for the bounce, so the DSP's R/G classes tell which
+	; light a face is under and the ramp above gives that light its colour.
+	include	"TREX/model/backdrop_lights.inc"
+	else
 	ifd	TREX_HIRES
 	; On request, each light 15 degrees higher than the source's (azimuth
 	; and length kept): key 44.4 -> 59.4, back 26.1 -> 41.1, fill -11.1 ->
@@ -9352,6 +9664,7 @@ dsp_light_direction
 	dc.l	$00f6282d,$0009d7d3,$0031371e	; green fill
 	endc
 	dc.l	$002aa800,$00199800		; PS1 ambient, red and green
+	endc
 
 present_enabled
 	dc.l	1
@@ -9765,6 +10078,26 @@ fps_font
 	even
 	endc
 
+	ifd	TREX_BACKDROP
+; View header, transform and model-space pose offset per trail sample (blender_export_falcon.py).
+backdrop_view
+	incbin	"TREX/model/backdrop_path.bin"
+backdrop_path_end
+backdrop_path = backdrop_view+16
+backdrop_shadows
+	incbin	"TREX/model/backdrop_shadow.bin"
+; 1 = the background is the picture below and the frame clear restores it;
+; 0 = black, as without the define.  A data longword so
+; tools/patch_data_flag.py compares both at one linked layout (6.6b).
+backdrop_enabled
+	dc.l	1
+; 640x400 Falcon true-colour words, row by row, from tools/make_backdrop.py.
+; It is last in the data section so nothing else in it moves, and its
+; 512,000 bytes are a whole number of 4,096-byte pages, so the pinned buffers
+; in BSS keep their page offsets.
+backdrop_image
+	incbin	"TREX/textures/backdrop_640x400.bin"
+	endc
 
 	bss
 
@@ -9849,6 +10182,10 @@ STAT_LONGS		= (stat_block_end-stat_block)/4
 
 frame_number
 	ds.l	1
+	ifd	TREX_BACKDROP
+ground_shadow_box
+	ds.l	1
+	endc
 animation_frame
 	ds.l	1
 animation_audio_volume
@@ -9859,6 +10196,7 @@ animation_active_mask
 	ds.l	1
 animation_choreo_record
 	ds.l	1
+
 animation_gait_pose_ptr
 	ds.l	1
 ; Zero until the hold state starts, then the walk-cycle pose index (14..45)

@@ -1,0 +1,199 @@
+{
+  "date": "2026-11-19",
+  "scene": "Fixed-camera dinosaur trail",
+  "hardware": "Unmeasured on physical Falcon030",
+  "emulator": {
+    "build": "Patched Hatari 2.6.1-devel, F030Arcade fork",
+    "sha256": "e0894bfc47761316ed09ef91e79ea7da57b3a42040ad96c6402a8358b207fec5",
+    "tos402_sha256": "b567366bf2a2201bf39d6e0396affac81ffba15a468cb3ad600d41e1112cdeeb",
+    "machine": "Falcon, 16 MHz 68030, cycle-exact, MMU off, data cache on, DSP emulated, RGB, Videl contention on, 14 MiB ST-RAM",
+    "timer": "Emulated 200 Hz elapsed counter. Viewing timing enables stats_flush_enabled on a copy of the viewing TOS."
+  },
+  "files_sha256": {
+    "TREX/m68030/trex_hires_bg_run.tos": "bc6eb6c255e0f1ebe73ff9a141b60fd2774a023b540b377a084ebddb72ce778a",
+    "TREX/m68030/TREXBGND.LOD": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3",
+    "TREX/m68030/trex_hires_bg.tos": "a5397896230718c82c4d8ad354d426cfbd50116ea3d5f854d4b1ea95b180a383",
+    "TREX/m68030/trex_hires_bg_fbseq.tos": "c342c666fee43cbef8b0942a751e4f2d07eaf33daf3d398ba3d760d8aa278649",
+    "TREX/model/trex.o3d": "d1e5b3ab01f33b62a54546cf296f7c0e2fe151d70f7fc64d6d7815d9d5ea55ae",
+    "TREX/model/trex_animation.bin": "09f2626ef46051a045ad5282db9d18533dac4f718bd8748fb317ed4bdb88c1c9",
+    "TREX/model/backdrop_path.bin": "cc364b9d832d8f681aea19a9eaf9e7615a5014b74f78e4dbef0b8cdfafe79beb",
+    "TREX/model/backdrop_shadow.bin": "39bfee2925b9334ebbf7b03910f5e27f8044a88a11dfe46daf3bb99a4a086b7c",
+    "TREX/textures/backdrop_640x400.bin": "62221bdb59ab3bc26b9ff7e1c6bab06acc952294a3bcbd49fd50e23e2b80fc24",
+    "TREX/textures/backdrop_trail.jpg": "fea1204eeeadc839d04188bef467d9813b9b14a2924b7668339865b815b0fd9a",
+    "TREX/textures/trex_texture_page_10.tim": "12b518e8dcbcdae2bd5f98632969b287ac1a37d7e5ec28de1e1349ce70bf0457",
+    "TREX/textures/trex_texture_page_12.tim": "c148bbb856f04750aadf99d7e2c52e13e8fb9fd5fb6fceea4ee4df9abeeb9644",
+    "TREX/textures/trex_texture_page_14.tim": "1411653c050c208d130a69be7b2a57e8f08196d77167f6dabed00b4aa5423ba4",
+    "TREX/textures/trex_texture_page_26.tim": "c7d0af2b2b2683699a2c7d5280f00b07e382ef3cd25e54aa6d0473f967ed36a8",
+    "TREX/textures/trex_texture_page_28.tim": "1b9b942e0814b5107b44c0086f0670990f3cfe7b66e12e2b7a2fd5b23db17438",
+    "TREX/textures/trex_texture_page_30.tim": "1e79b7a8272184bb55ef514acc85ded7cb998588be491e4e15a54d704bf0376e"
+  },
+  "timing": {
+    "original_backdrop_dsp_same_trail_share176": {
+      "frames": 320,
+      "elapsed_ms": 129605,
+      "ms_per_frame": 405.015625,
+      "fps": 2.469041,
+      "host_sha256": "75f1e5b832b37a84ec3e9e89175c4e62be39bac93f367d6fbf673859a9a61121",
+      "dsp_sha256": "e5adae986d9b100f00c5e2f64f0685f4471c086faaab7ab2bf03359197fde300"
+    },
+    "viewing_share_sweep": {
+      "128": {
+        "frames": 320,
+        "elapsed_ms": 128285,
+        "ms_per_frame": 400.890625,
+        "fps": 2.494446,
+        "host_sha256": "191e58354aa568a283ed07badf9cf30deb80f766e28b08dc5d50ec5d8a40b067",
+        "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+      },
+      "144": {
+        "frames": 320,
+        "elapsed_ms": 121925,
+        "ms_per_frame": 381.015625,
+        "fps": 2.624564,
+        "host_sha256": "3363efdfc540cc0efcdffe6263611630fe8e9d73532eca403ec15ba077587f00",
+        "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+      },
+      "152": {
+        "frames": 320,
+        "elapsed_ms": 120075,
+        "ms_per_frame": 375.234375,
+        "fps": 2.665001,
+        "host_sha256": "edf0c6b6364bf8a7cf6de27fee6dac7aef279779d6a974489677170ec5ea2938",
+        "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+      },
+      "156": {
+        "frames": 320,
+        "elapsed_ms": 119540,
+        "ms_per_frame": 373.5625,
+        "fps": 2.676928,
+        "host_sha256": "3805df5deac7525026d6aef205d8ba3ec9f996bf5c1b732440dac50d34026b5d",
+        "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+      },
+      "160": {
+        "frames": 320,
+        "elapsed_ms": 119160,
+        "ms_per_frame": 372.375,
+        "fps": 2.685465,
+        "host_sha256": "209544bf096e19b5b0c13d37d315c40d14d2b1c434d22dc39278d77fe1d1a084",
+        "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+      },
+      "164": {
+        "frames": 320,
+        "elapsed_ms": 119175,
+        "ms_per_frame": 372.421875,
+        "fps": 2.685127,
+        "host_sha256": "c466b28cdeeb4a9fd42f3822ea218385a03bb3c87bb50a65d9a2419d6ab5be59",
+        "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+      },
+      "168": {
+        "frames": 320,
+        "elapsed_ms": 119345,
+        "ms_per_frame": 372.953125,
+        "fps": 2.681302,
+        "host_sha256": "51c86fcc5e248aacfedce8b0b523e037dd2502720e84d2e66db987b0c99705f4",
+        "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+      },
+      "176": {
+        "frames": 320,
+        "elapsed_ms": 120095,
+        "ms_per_frame": 375.296875,
+        "fps": 2.664557,
+        "host_sha256": "75f1e5b832b37a84ec3e9e89175c4e62be39bac93f367d6fbf673859a9a61121",
+        "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+      },
+      "192": {
+        "frames": 320,
+        "elapsed_ms": 121730,
+        "ms_per_frame": 380.40625,
+        "fps": 2.628769,
+        "host_sha256": "0a18fb20660e29bb07d22baf68c2439e60ec69e475eade1bbfc66b39b206a6ea",
+        "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+      },
+      "208": {
+        "frames": 320,
+        "elapsed_ms": 123020,
+        "ms_per_frame": 384.4375,
+        "fps": 2.601203,
+        "host_sha256": "afccd825c879d0b94ce4f0dbf3b813701f0e5f165f2336c685ada61761342afb",
+        "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+      }
+    },
+    "shipped_share": 160,
+    "viewing_confirmation": {
+      "frames": 320,
+      "elapsed_ms": 119170,
+      "ms_per_frame": 372.40625,
+      "fps": 2.68524,
+      "host_sha256": "209544bf096e19b5b0c13d37d315c40d14d2b1c434d22dc39278d77fe1d1a084",
+      "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+    },
+    "diagnostic": {
+      "frames": 320,
+      "elapsed_ms": 119130,
+      "ms_per_frame": 372.28125,
+      "fps": 2.686141,
+      "host_sha256": "a5397896230718c82c4d8ad354d426cfbd50116ea3d5f854d4b1ea95b180a383",
+      "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3"
+    },
+    "viewing_cumulative_ms_at_frame_count": {
+      "48": 19745,
+      "72": 30375,
+      "144": 56715,
+      "272": 102610,
+      "320": 119170
+    }
+  },
+  "verification": {
+    "frames": 320,
+    "route_samples": 272,
+    "loop_start": 144,
+    "loop_frames": 128,
+    "repeat_frames_checked": 48,
+    "rgb565_bytes": 163840000,
+    "identical_rgb565_sha256": "489a74d8db31169d053ca30dd9b86638c86574ef40f1b8701289653d9c435f61",
+    "arms": [
+      "previous DSP, full restore, share 176",
+      "optimized DSP, band restore, share 176",
+      "optimized DSP, band restore, shipped share 160"
+    ],
+    "head": {
+      "minimum_distinct_pixels": 120,
+      "at_frame": 109
+    },
+    "torso": {
+      "minimum_distinct_pixels": 1464,
+      "at_frame": 122
+    },
+    "diagnostic_mesh_removals": {
+      "head_triangles": 1040,
+      "torso_triangles": 291
+    },
+    "projected_subset_bounds_xyxy": {
+      "head": [
+        33,
+        27,
+        618,
+        384
+      ],
+      "torso": [
+        106,
+        3,
+        577,
+        352
+      ]
+    },
+    "capture_frames_zero_based": {
+      "trex-trail-close.png": 52,
+      "trex-trail-turn.png": 61
+    },
+    "nonbackdrop_host_identical_rebuilds": {
+      "trex_m68030": "10a2c9f035a2bb28b9db367594e75b9c0026ccad8ad01f50db3b948d2673d047",
+      "trex_hires": "71b9198e56a952e85400e66fbdd84eaaab52164fb6af8ac7eea8617d01f3dd97"
+    }
+  },
+  "backdrop_art": {
+    "source": "TREX/textures/backdrop_trail.jpg",
+    "tool": "Built-in ImageGen, editing the jungle clearing artwork",
+    "final_prompt": "Revise this background plate for a colorful prehistoric dinosaur game. The current flat clearing looks bulldozed with repeated flat horizontal texture and symmetrical borders. Replace that floor and reframe from a fixed elevated hillside lookout looking diagonally DOWN over the nearby forest floor. Ground takes up the lower THREE QUARTERS of the picture; far bank and distant forest are in the upper quarter, no long straight horizon or straight horizontal treeline. A big, gently curving worn dinosaur trail widens into an organic open area where a large animal can turn around. Center is unobstructed walkable earth: painterly natural broad irregular patches of damp umber, warm ochre sand, rusty clay and soft slate silt, a few faint irregular tracks, varied scales, no tiling, no linear striations, no uniform gravel or repetitive pebbles, no geometric pattern. Create distinct asymmetric colorful EDGE vignettes: at lower left a low reddish weathered rock outcrop and copper-orange, red and golden prehistoric bromeliads with chartreuse moss; right margin an exposed twisting root, plum-magenta fern fronds, turquoise lichen on shale. Rich layered emerald and teal canopy, mist and a small subtle rainbow over the distant forest in upper strip. Soft daylight from above/front-left. Keep edge clusters low and confined to outermost edges, especially avoid crossing the open ground with flowers and rocks. Preserve a clear walkable path across middle 80% of width between 25% and 92% of image height. Environment only, no animals, no people, no dinosaur, text or UI. Visually rich, grounded and photographic, strong natural colours, landscape 16:10."
+  }
+}
