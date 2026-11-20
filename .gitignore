@@ -5,6 +5,8 @@ tools/vlink/
 *.tos
 *.res
 *.status
+# Per-model and per-configuration rebuild stamps (Makefile MODEL_STAMP).
+*.stamp
 TREX/m68030/ssihatri.sta
 *.pkt
 *.dbg

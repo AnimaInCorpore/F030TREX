@@ -56,8 +56,8 @@ TANM_TARGETS = {5: (0, 147, 34528), 6: (0, 557, 35412), 7: (78, 12, 38756), 8: (
 
 
 # --------------------------------------------------------------------- mesh
-def read_tmd():
-    data = TMD.read_bytes()
+def read_tmd(path=TMD):
+    data = Path(path).read_bytes()
     table = 12
     vert_top, vert_n, norm_top, norm_n, prim_top, prim_n, _ = struct.unpack_from("<7I", data, table)
     vertices = np.frombuffer(data, "<i2", vert_n * 4, table + vert_top).reshape(-1, 4)[:, :3]

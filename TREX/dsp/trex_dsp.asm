@@ -122,8 +122,9 @@ ORDERED_PLAIN equ ORDERED-SPANSTREAM
 	FAIL	'SPANSTREAM owns the SSI transmitter; build the SSI probes apart'
 	ENDIF
 
-TREX_VERTICES	= 1376
-TREX_PRIMITIVES	= 2724
+; TREX_VERTICES and TREX_PRIMITIVES come from dspconf.inc, with NORMAL_TOTAL
+; and NORMAL_Y_COUNT below: the Makefile writes them from the MODEL_DIR's
+; model.mk (1376 / 2724 / 3610 / 2857 for the T-Rex).
 ; Render target size.  Must match SCREEN_WIDTH/SCREEN_HEIGHT on the host: the
 ; bounding-box rejection below uses them to drop fully off-screen triangles.
 ; 240 since the host presents through a 256-pixel-wide Videl mode whose wide
@@ -229,9 +230,7 @@ TRI_OCCLUDER_BIT	= 23
 ; 24 bits and saturates to $7FFFFF, every other value passes unchanged.
 ; The packing frees 3,610 X words, which hold prelight_table; 2,857 normals
 ; fill the Y window to its last-but-two word (5,714 words).
-NORMAL_TOTAL	= 3610
 NORMAL_WORDS	= 2
-NORMAL_Y_COUNT	= 2857
 NORMAL_X_COUNT	= NORMAL_TOTAL-NORMAL_Y_COUNT
 ; Where the BUILD chunk buffers start in X.  prelight_table ends below it and
 ; the gap is padded, so chunk_uvs, triangle_out, the phase-local light copy,

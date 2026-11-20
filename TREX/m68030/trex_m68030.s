@@ -133,10 +133,15 @@ DC_PAGE_BYTES		= DC_BANDS*DC_ENTRY
 ; itself -- no separate valid bit and no extra test in either loop.
 DC_EMPTY		= (SCREEN_WIDTH<<16)+$8000
 
-TREX_VERTICES		= 1376
-TREX_NORMALS		= 3610
-
-TREX_PRIMITIVES		= 2724
+; Mesh sizes and TMD offsets of the model being built: TREX/model/model.inc
+; for the T-Rex, or the model.inc that tools/blender_export_model.py writes
+; into another MODEL_DIR (found through vasm's -I path, see the Makefile).
+	include	"model.inc"
+	ifnd	TREX_BACKDROP
+	if	MODEL_PS1_TREX=0
+	fail	"the PS1 choreography (trex_animation.bin) needs the T-Rex model; build a backdrop target"
+	endc
+	endc
 
 ; 2048 buckets rather than 1024: with the shift below the sequence maximum
 ; is 250,002, which would leave only 4.5 % headroom in a 1024-entry table.
@@ -573,7 +578,6 @@ TANM_TARGET_5_DELTA	= 34528
 TANM_TARGET_6_DELTA	= 35412
 TANM_TARGET_7_DELTA	= 38756
 TANM_TARGET_8_DELTA	= 38828
-TMD_VERTEX_DATA_OFFSET	= $125d8
 ; One displayed frame, and exactly that: both monitor types now scan the same
 ; 256x224 true-colour buffer, so there is no larger-of-the-two allowance left
 ; (153,600 bytes down to 114,688, twice over for the two buffers).
@@ -752,10 +756,8 @@ DSP_TX_BUFFER_WORDS	= DSP_ANIMATION_WORDS
 ; One unit object-space face normal per triangle.
 ; The complete PS1 corner-normal table from the TMD, Q12 to 1.23-converted
 ; at upload.  Its size is a property of the source TMD.
-TREX_TMD_NORMALS	= 3610
-; File offset of the TMD normal block (object-table normal_top $150CC plus
-; the 12-byte header), hard-coded like TMD_VERTEX_DATA_OFFSET above.
-TMD_NORMAL_DATA_OFFSET	= $150d8
+; TREX_TMD_NORMALS and TMD_NORMAL_DATA_OFFSET (object-table normal_top plus
+; the 12-byte header) come from model.inc with the vertex offset.
 ; Two packed words per normal since the DSP's two-word normal table
 ; (trex_dsp.asm, NORMAL_WORDS): the transaction is 7,222 words where it was
 ; 10,832.  The transmit buffer keeps its old three-word allocation so the
@@ -9364,12 +9366,12 @@ texture_table
 ; Original PS1 assets.  The six TIM files are the native 8-bit indexed pages;
 ; the derived PNG atlas is intentionally not embedded in this target.
 trex_tmd_data
-	incbin	"TREX/model/trex.tmd"
+	incbin	"trex.tmd"
 trex_tmd_data_end
 
 ; Big-endian host-side model representation used to build DSP input streams.
 trex_o3d_data
-	incbin	"TREX/model/trex.o3d"
+	incbin	"trex.o3d"
 trex_o3d_data_end
 
 	even
@@ -9379,7 +9381,7 @@ trex_o3d_data_end
 ; O3D by tools/o3d2facenormals.js, which is also where the winding convention
 ; is documented.
 trex_face_normal_data
-	incbin	"TREX/model/trex_facenormals.bin"
+	incbin	"trex_facenormals.bin"
 trex_face_normal_data_end
 
 	even
@@ -9388,7 +9390,7 @@ trex_face_normal_data_end
 ; The 136 untextured primitives are the eyes: 120 in the PS1's (255,230,110)
 ; and 16 in (35,30,0).
 trex_face_colour_data
-	incbin	"TREX/model/trex_facecolors.bin"
+	incbin	"trex_facecolors.bin"
 trex_face_colour_data_end
 
 	even
@@ -9398,7 +9400,7 @@ trex_face_colour_data_end
 ; triangle-index upload with the vertex indices; the normals themselves go up
 ; straight from the TMD block.
 trex_corner_normal_data
-	incbin	"TREX/model/trex_cornernormals.bin"
+	incbin	"trex_cornernormals.bin"
 trex_corner_normal_data_end
 
 	even
@@ -9408,9 +9410,9 @@ trex_corner_normal_data_end
 	ifd	TREX_BACKDROP
 ; Baked XYZ16 poses and DSP morph targets of the Blender scene (6.6g).
 backdrop_poses
-	incbin	"TREX/model/backdrop_poses.bin"
+	incbin	"backdrop_poses.bin"
 backdrop_targets
-	incbin	"TREX/model/backdrop_targets.bin"
+	incbin	"backdrop_targets.bin"
 	even
 	else
 trex_animation_data
@@ -9427,27 +9429,27 @@ trex_animation_data_end
 ; the unpinned raster state cells that shift along with it.  Roadmap item
 ; 16 records where the sensitivity actually lives.
 trex_texture_page_10
-	incbin	"TREX/textures/trex_texture_page_10.tim"
+	incbin	"trex_texture_page_10.tim"
 trex_texture_page_10_end
 
 trex_texture_page_12
-	incbin	"TREX/textures/trex_texture_page_12.tim"
+	incbin	"trex_texture_page_12.tim"
 trex_texture_page_12_end
 
 trex_texture_page_14
-	incbin	"TREX/textures/trex_texture_page_14.tim"
+	incbin	"trex_texture_page_14.tim"
 trex_texture_page_14_end
 
 trex_texture_page_26
-	incbin	"TREX/textures/trex_texture_page_26.tim"
+	incbin	"trex_texture_page_26.tim"
 trex_texture_page_26_end
 
 trex_texture_page_28
-	incbin	"TREX/textures/trex_texture_page_28.tim"
+	incbin	"trex_texture_page_28.tim"
 trex_texture_page_28_end
 
 trex_texture_page_30
-	incbin	"TREX/textures/trex_texture_page_30.tim"
+	incbin	"trex_texture_page_30.tim"
 trex_texture_page_30_end
 
 ; One host-owned byte per source triangle.  A value of one permits the
@@ -9456,7 +9458,7 @@ trex_texture_page_30_end
 ; block's unpinned phase.  tools/o3d2opaque.js owns the proof and
 ; tools/opaque_selftest.py cross-checks recorded rasterizer drops.
 trex_opaque_triangle_data
-	incbin	"TREX/model/trex_opaque.bin"
+	incbin	"trex_opaque.bin"
 trex_opaque_triangle_data_end
 
 	even
@@ -9542,7 +9544,7 @@ shade_ramp_table
 	; by the sky or the frontal fill, 1 one in shade, 2 and 3 one lit from
 	; the bare earth. The cool shade floor keeps detail through the turn.
 	; Exported from the scene's ramp image by tools/blender_export_falcon.py.
-	include	"TREX/model/backdrop_ramp.inc"
+	include	"backdrop_ramp.inc"
 	else
 	dc.w	32,29,29	; T0 L 0  R/G 1.36  R/G 1.10
 	dc.w	32,29,29	; T0 L 1  R/G 1.36  R/G 1.10
@@ -9641,7 +9643,7 @@ dsp_light_direction
 	; "Red" and "green" are weights here, not colours: equal for sky and
 	; fill, four to one for the bounce, so the DSP's R/G classes tell which
 	; light a face is under and the ramp above gives that light its colour.
-	include	"TREX/model/backdrop_lights.inc"
+	include	"backdrop_lights.inc"
 	else
 	ifd	TREX_HIRES
 	; On request, each light 15 degrees higher than the source's (azimuth
@@ -10081,11 +10083,11 @@ fps_font
 	ifd	TREX_BACKDROP
 ; View header, transform and model-space pose offset per trail sample (blender_export_falcon.py).
 backdrop_view
-	incbin	"TREX/model/backdrop_path.bin"
+	incbin	"backdrop_path.bin"
 backdrop_path_end
 backdrop_path = backdrop_view+16
 backdrop_shadows
-	incbin	"TREX/model/backdrop_shadow.bin"
+	incbin	"backdrop_shadow.bin"
 ; 1 = the background is the picture below and the frame clear restores it;
 ; 0 = black, as without the define.  A data longword so
 ; tools/patch_data_flag.py compares both at one linked layout (6.6b).
@@ -10096,7 +10098,7 @@ backdrop_enabled
 ; 512,000 bytes are a whole number of 4,096-byte pages, so the pinned buffers
 ; in BSS keep their page offsets.
 backdrop_image
-	incbin	"TREX/textures/backdrop_640x400.bin"
+	incbin	"backdrop_640x400.bin"
 	endc
 
 	bss

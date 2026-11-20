@@ -1,6 +1,10 @@
 """Export the Falcon trail assets from the Blender source scene (OPTIMIZATION.md 6.6g).
 
-Run: blender -b TREX/scene/trex_trail.blend --python tools/blender_export_falcon.py -- <model dir> <backdrop.bin>
+Run: blender -b TREX/scene/trex_trail.blend --python tools/blender_export_falcon.py -- <model dir> <backdrop.bin> [object]
+
+<model dir> holds the model's trex.tmd (TREX/model for the PS1 T-Rex, or a
+directory written by tools/blender_export_model.py); the trail assets are
+written beside it. [object] is the animated mesh, "T-Rex" by default.
 
 The scene is the reference; the 640x400 backdrop build reproduces it. Per
 displayed sample n (Blender frame frame_start + n):
@@ -23,9 +27,10 @@ Deformation that is not a "DSP ..." shape key (the pose cache, an armature,
 other shape keys) is baked into the per-sample pose. The pose is chosen so
 that base + pose + sum(floor(delta * weight / 4096)) -- the DSP's own
 arithmetic -- equals Blender's evaluated mesh rounded to model units, which
-the script checks for every vertex of every sample. The mesh, UVs, pages and
-corner normals must still be the TMD's: the Falcon reads those from
-trex.tmd and the TIM pages, and the script refuses to export otherwise.
+the script checks for every vertex of every sample. The mesh, UVs and
+corner normals must still be the model directory's TMD: the Falcon reads
+those from trex.tmd and the TIM pages, and the script refuses to export
+otherwise (re-export the model after changing them).
 """
 import math
 import struct
@@ -42,6 +47,7 @@ from blender_seed_data import PAGES, read_tmd  # noqa: E402
 args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 MODEL = Path(args[0]) if args else ROOT / "TREX/model"
 BACKDROP = Path(args[1]) if len(args) > 1 else ROOT / "TREX/textures/backdrop_640x400.bin"
+OBJECT = args[2] if len(args) > 2 else "T-Rex"
 DSP_THRESHOLDS = (1.378, 1.529, 1.649)        # trex_dsp.asm tint classes
 TO_BLENDER = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], float)
 MIRROR = np.diag([1.0, -1.0, 1.0])
@@ -74,7 +80,7 @@ laps = [m.frame for m in scene.timeline_markers if m.name == "lap"]
 if len(laps) != 1 or not first <= laps[0] <= last:
     fail("need exactly one timeline marker named 'lap' inside the frame range")
 lap = laps[0] - first
-trex, shadow, camera = bpy.data.objects["T-Rex"], bpy.data.objects["Ground shadow"], scene.camera
+trex, shadow, camera = bpy.data.objects[OBJECT], bpy.data.objects["Ground shadow"], scene.camera
 
 # ------------------------------------------------------------------ lens
 cam = camera.data
@@ -100,30 +106,37 @@ to_camera = CAMERA_AXES @ cam_rotation.T     # world direction -> PS1 camera spa
 
 
 # ------------------------------------------------------------------ mesh check
-base, normals, triangles = read_tmd()
+base, normals, triangles = read_tmd(MODEL / "trex.tmd")
 mesh = trex.data
-if len(mesh.vertices) != len(base) or len(mesh.polygons) != len(triangles):
-    fail("the T-Rex mesh no longer has the TMD's vertex and triangle counts")
-rest = np.array([v.co[:] for v in mesh.vertices]) / scale @ LOCAL   # mesh axes -> PS1
-if np.abs(rest - base).max() > 0.01:
-    fail("the T-Rex rest mesh differs from the TMD base vertices")
-pages = sorted({t["page"] for t in triangles if t["page"] is not None})
-uv_layer = mesh.uv_layers["PS1 UV"].data
-normal_layer = mesh.attributes["ps1_normal"].data
-for poly, triangle in zip(mesh.polygons, triangles):
+# The rest mesh as blender_export_model.py saw it: basis shape, modifiers on.
+saved = (trex.show_only_shape_key, trex.active_shape_key_index)
+trex.show_only_shape_key, trex.active_shape_key_index = True, 0
+rest_mesh = bpy.data.meshes.new_from_object(trex.evaluated_get(bpy.context.evaluated_depsgraph_get()))
+trex.show_only_shape_key, trex.active_shape_key_index = saved
+if len(rest_mesh.vertices) != len(base) or len(rest_mesh.polygons) != len(triangles):
+    fail("%s no longer matches %s's vertex and triangle counts" % (OBJECT, MODEL / "trex.tmd"))
+rest = np.array([v.co[:] for v in rest_mesh.vertices]) / scale @ LOCAL   # mesh axes -> PS1
+if np.abs(rest - base).max() > 0.51:
+    fail("the rest mesh differs from the model's TMD vertices; re-export the model")
+uv_layer = rest_mesh.uv_layers.active.data if rest_mesh.uv_layers.active else None
+if "ps1_normal" in rest_mesh.attributes:
+    corner_normals = np.array([d.vector[:] for d in rest_mesh.attributes["ps1_normal"].data]) @ LOCAL
+else:
+    corner_normals = np.array([n.vector[:] for n in rest_mesh.corner_normals]) @ LOCAL
+    corner_normals /= np.linalg.norm(corner_normals, axis=1, keepdims=True)
+corner_q12 = np.clip(np.rint(corner_normals * 4096), -4096, 4096)
+for poly, triangle in zip(rest_mesh.polygons, triangles):
     if list(poly.vertices) != list(triangle["vertices"]):
         fail("triangle %d changed its vertices" % poly.index)
-    page = triangle["page"]
-    if poly.material_index != (pages.index(page) if page is not None else len(pages)):
-        fail("triangle %d changed its material" % poly.index)
     for corner, loop in enumerate(poly.loop_indices):
-        if page is not None:
+        if triangle["page"] is not None and uv_layer is not None:
             u, v = triangle["uv"][corner]
-            if max(abs(uv_layer[loop].uv[0] * 256 - u), abs((1 - uv_layer[loop].uv[1]) * 256 - v)) > 1e-3:
+            pu, pv = uv_layer[loop].uv[0] * 256, (1 - uv_layer[loop].uv[1]) * 256
+            if max(abs(min(255, max(0, round(pu))) - u), abs(min(255, max(0, round(pv))) - v)) > 0:
                 fail("triangle %d changed its UVs" % poly.index)
-        normal = np.array(normal_layer[loop].vector) @ LOCAL
-        if np.abs(normal - normals[triangle["normals"][corner]]).max() > 1e-4:
+        if np.abs(corner_q12[loop] - np.rint(normals[triangle["normals"][corner]] * 4096)).max() > 0:
             fail("triangle %d changed its corner normals" % poly.index)
+bpy.data.meshes.remove(rest_mesh)
 
 # DSP targets: shape keys named "DSP ...", static deltas in model units.
 keys = mesh.shape_keys.key_blocks if mesh.shape_keys else []
@@ -132,6 +145,8 @@ targets = []
 for key in keys[1:]:
     if not key.name.startswith("DSP "):
         continue
+    if len(mesh.vertices) != len(base):
+        fail("DSP target %r: a topology modifier changes the vertex order; apply it first" % key.name)
     if key.relative_key != reference:
         fail("DSP target %r must be relative to the basis" % key.name)
     co = np.array([v.co[:] for v in key.data]) - np.array([v.co[:] for v in reference.data])
@@ -213,6 +228,9 @@ for sample in range(count):
     shaped = evaluated.to_mesh()
     model = np.rint(np.array([v.co[:] for v in shaped.vertices]) / scale @ LOCAL).astype(np.int64)
     evaluated.to_mesh_clear()
+    if len(model) != len(base):
+        fail("the mesh topology changes at frame %d (apply a Decimate or other topology "
+             "modifier before animating)" % scene.frame_current)
     weights, frame_words = [], 0
     composed = base.astype(np.int64).copy()
     for target in targets:

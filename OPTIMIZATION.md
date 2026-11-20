@@ -8546,11 +8546,103 @@ generators (`make_backdrop.py`, `make_backdrop_path.py`,
   with one normal per vertex, about 1,690 / 3,340.
 - **Index caps:** V ≤ 2,048 and N ≤ 4,096 (index fields); T ≤ 4,096 in
   ORDERED images (sort keys).
-- **Constants tied to this mesh:** `TREX_VERTICES`, `TREX_PRIMITIVES`,
-  `NORMAL_TOTAL`/`NORMAL_Y_COUNT`, `CHUNK_UVS_BASE` and the host's TMD and
-  gait sizes are all fixed to it.
+- **Constants tied to this mesh:** section 6.6h moves `TREX_VERTICES`,
+  `TREX_PRIMITIVES`, `NORMAL_TOTAL`/`NORMAL_Y_COUNT` and the host's TMD
+  offsets into a per-model description. `CHUNK_UVS_BASE` and the T-Rex-only
+  TANM gait sizes stay fixed.
 - **Poses** stream into `camera_vertices` and are never stored on the DSP.
   Their size is a 68030 RAM question: V × 6 bytes per baked pose.
+
+### 6.6h Any Blender model as a model directory
+
+A model is now a directory, chosen with `make MODEL_DIR=<dir>`. The default,
+`TREX/model`, is the PS1 T-Rex. The directory holds:
+- `model.mk` and `model.inc`: the mesh sizes for make, the DSP and the host;
+- `trex.tmd` and `trex.obj`, with the O3D and the per-polygon sidecars that
+  `make` derives from them;
+- the six `trex_texture_page_NN.tim` pages (in `TREX/textures` for the
+  T-Rex);
+- the trail scene's `backdrop_*` assets.
+
+The file names stay those of the T-Rex, so the host, the DSP program and
+the node tools read any model unchanged.
+
+**Exporting a model.** [`tools/blender_export_model.py`](tools/blender_export_model.py)
+writes a directory from any Blender mesh:
+- **Mesh:** the basis shape with its modifiers applied, triangulated.
+  Decimate in Blender to meet the budget.
+- **Normals:** taken from a `ps1_normal` corner attribute or from Blender's
+  own, and deduplicated in Q12.
+- **Textures:** the first image of each material becomes a 256×256 page,
+  at most six. Each is quantized to 15-bit colour and at most 256 CLUT
+  entries; alpha below one half becomes the transparent word 0, and opaque
+  black becomes `$8000`.
+- **Untextured triangles:** a material without an image gives mode-`0x30`
+  triangles in `ps1_colour` or the base colour.
+- **UVs:** must lie within 0–1, because pages do not tile.
+
+`blender_export_falcon.py` now takes the model directory and the object
+name. It checks the scene's rest mesh, UVs and Q12 corner normals against
+that directory's TMD, and refuses a topology that changes during the
+animation. `make model_export BLEND=… MODEL_OBJECT=… MODEL_DIR=…` runs both
+exporters.
+
+**Build plumbing.**
+- **Host:** every vasm call gets `-I$(MODEL_DIR) -I$(MODEL_TEXTURES)`. The
+  host includes `model.inc` and `incbin`s the model and scene files by bare
+  name; only the T-Rex's `trex_animation.bin` keeps its fixed path. A build
+  without `TREX_BACKDROP` fails at assembly unless `MODEL_PS1_TREX` is 1,
+  because the PS1 choreography only fits the T-Rex.
+- **DSP:** the four mesh constants moved from `trex_dsp.asm` into the
+  generated `dspconf.inc`. Images of other models carry the tag and the four
+  sizes in their name, so a re-export with new counts reassembles.
+- **Rebuilds:** a per-model stamp rebuilds every host object when
+  `MODEL_DIR` changes.
+
+**Budget.** The exporter fills Y with normals first:
+Ny = min(N − 1, ⌊(13,888 − 3T)/2⌋). It then requires
+7V + T + 2(N − Ny) ≤ 14,647, the X window below `CHUNK_UVS_BASE` in the
+640×400 images, plus V ≤ 2,048 and N, T ≤ 4,096. Both banks keep at least one
+normal, because the assembler rejects `ds 0`. The DSP assembler checks the X
+layout again.
+
+**Finding: the T-Rex's normals deduplicate.** Its 3,610 TMD corner normals
+hold only 1,373 distinct Q12 values. Exported through this path, the T-Rex
+uses 12,358 of 14,647 X words and 10,916 of 13,888 Y words. That leaves room
+for roughly 300 more vertices at the same proportions, or a second mesh of a
+few hundred triangles.
+
+**Validation.**
+
+*Default builds.* The five T-Rex TOS files and the three DSP images are
+byte-identical to those before the change: `trex_m68030.tos`,
+`trex_hires.tos`, the three backdrop executables, `trex_dsp.lod`,
+`TREXHIRS.LOD` and `TREXBGND.LOD`.
+
+*Round trip.* `TREX/scene/trex_trail.blend`'s T-Rex, exported with
+`blender_export_model.py`, gives:
+- the original O3D polygon stream: same order, vertices, texture words and
+  colour words, all 2,724 polygons;
+- byte-identical face-normal, face-colour and opaque sidecars;
+- byte-identical trail assets from the scene exporter;
+- only the corner-normal table and its indices differ, from the
+  deduplication.
+
+*Round-trip framebuffers.* The round-trip directory built with
+`make MODEL_DIR=…` and captured over 320 cycle-exact Hatari frames is
+byte-identical to the committed build in every frame. The first export
+missed that: it renormalized the corner normals, and the TMD's Q12 normals
+are not exactly unit length. 96 of them rounded differently and changed the
+shading of four frames, by 131–415 pixels each. A `ps1_normal` attribute is
+now taken as-is; only Blender's own normals are normalized.
+
+*Timing.* The 320-frame viewing run of that first export measured 462.2
+ms/frame, against 462.4 for the committed build, on the same cycle-exact
+Hatari settings. Emulator only; physical Falcon timing is unmeasured.
+
+*What is not covered.* Nothing yet tests a model other than the T-Rex.
+That needs a scene built around a new mesh: decimation, quantized
+textures, and an animation authored as shape keys or an armature.
 
 ### 6.7 Texture and CLUT reads
 

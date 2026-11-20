@@ -220,6 +220,16 @@ pages and corner normals stay the TMD's; the exporter refuses a scene that
 changed them. See [OPTIMIZATION.md 6.6g](OPTIMIZATION.md#66g-the-blender-scene-is-the-source)
 for the pipeline, its checks and the cost of DSP targets.
 
+**Other models.** `tools/blender_export_model.py` turns any Blender mesh
+into a model directory with the same file formats as the T-Rex: a TMD, an
+OBJ, six 8-bit texture pages, and the mesh sizes for the host and the DSP.
+It checks the model against the DSP's memory, about 1,400–1,700 vertices
+depending on the normals. `make MODEL_DIR=<dir> trex_m68030_hires_backdrop_run`
+then builds that model's trail scene. Start from a copy of
+`trex_trail.blend`, swap in the model and animate it, then run
+`make model_export BLEND=<file> MODEL_OBJECT=<name> MODEL_DIR=<dir>`.
+See [OPTIMIZATION.md 6.6h](OPTIMIZATION.md#66h-any-blender-model-as-a-model-directory).
+
 The figures in the rest of
 this paragraph are the previous pipeline's. Over the 265-frame prefix its full-mesh **diagnostic** build
 measured **433.7 ms / 2.31 FPS**, and `TREX.TOS` measures **431.1 ms /

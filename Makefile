@@ -1,4 +1,17 @@
 DOSBOX=dosbox
+# The model (and its trail scene) to build: a directory with model.mk,
+# model.inc, the TMD/OBJ/TIM sources and the scene's backdrop_* assets.
+# TREX/model is the PS1 T-Rex; tools/blender_export_model.py writes the same
+# set for any Blender model (OPTIMIZATION.md 6.6h). Host sources find the
+# files through vasm's include path, the DSP gets the sizes in dspconf.inc.
+MODEL_DIR=./TREX/model
+-include $(MODEL_DIR)/model.mk
+VASM_MODEL=-I$(MODEL_DIR) -I$(MODEL_TEXTURES)
+MODEL_KEY=$(if $(MODEL_TAG),$(MODEL_TAG),trex)
+# Names the DSP image of a non-T-Rex model; it carries the sizes, so a re-exported
+# model with other counts gets a fresh dspconf.inc and image.
+MODEL_ID=$(if $(MODEL_TAG),$(MODEL_TAG)$(MODEL_VERTICES)v$(MODEL_PRIMITIVES)t$(MODEL_NORMALS)n$(MODEL_NORMAL_Y)y)
+MODEL_STAMP=./TREX/m68030/build/model-$(MODEL_KEY).stamp
 # Assemble the DSP-side SSI transport probe (CMD_SSI_STREAM) into the .lod.
 # It costs P memory the renderer needs, so the shipping and measurement builds
 # leave it out; the SSI bring-up targets set it to 1.  See trex_dsp.asm's
@@ -77,7 +90,7 @@ NOFOG=0
 # asking for one variant could silently leave you the previous one.
 # SPANSTREAM appends a letter instead of a ninth digit, so every identity
 # written down before it existed still names the same image.
-DSPCONF_ID=$(SSIPROBE)$(WINPROBE)$(PIOBURST)$(PREPASSDIAG)$(OBJLIGHTS)$(PRELIGHT)$(PHASEPROBE)$(ORDERED)$(if $(filter 1,$(SPANSTREAM)),s)$(if $(filter 1,$(HIRES)),i)$(if $(filter 1,$(NOFOG)),n)
+DSPCONF_ID=$(SSIPROBE)$(WINPROBE)$(PIOBURST)$(PREPASSDIAG)$(OBJLIGHTS)$(PRELIGHT)$(PHASEPROBE)$(ORDERED)$(if $(filter 1,$(SPANSTREAM)),s)$(if $(filter 1,$(HIRES)),i)$(if $(filter 1,$(NOFOG)),n)$(MODEL_ID)
 DSPCONF_STAMP=./TREX/dsp/build/dspconf-$(DSPCONF_ID).stamp
 # Each configuration assembles to its own image, so asking for one names a file
 # that either exists (and is current) or does not (and is built).  Existence is
@@ -95,7 +108,7 @@ PHASE_LOD=./TREX/dsp/build/trex_dsp-00001110-$(DSPSRC_ID).lod
 # ./TREX/dsp/trex_dsp.lod, so a variant build can never leave the wrong image
 # in the tree for `make measure` or a release to pick up.
 DSPCONF_DEFAULT_ID=00001101s
-DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\nPRELIGHT\tequ\t%s\nPHASEPROBE\tequ\t%s\nORDERED\tequ\t%s\nSPANSTREAM\tequ\t%s\nHIRES\tequ\t%s\nNOFOG\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' '$(PRELIGHT)' '$(PHASEPROBE)' '$(ORDERED)' '$(SPANSTREAM)' '$(HIRES)' '$(NOFOG)' > ./TREX/dsp/build/dspconf.inc
+DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\nPRELIGHT\tequ\t%s\nPHASEPROBE\tequ\t%s\nORDERED\tequ\t%s\nSPANSTREAM\tequ\t%s\nHIRES\tequ\t%s\nNOFOG\tequ\t%s\nTREX_VERTICES\tequ\t%s\nTREX_PRIMITIVES\tequ\t%s\nNORMAL_TOTAL\tequ\t%s\nNORMAL_Y_COUNT\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' '$(PRELIGHT)' '$(PHASEPROBE)' '$(ORDERED)' '$(SPANSTREAM)' '$(HIRES)' '$(NOFOG)' '$(MODEL_VERTICES)' '$(MODEL_PRIMITIVES)' '$(MODEL_NORMALS)' '$(MODEL_NORMAL_Y)' > ./TREX/dsp/build/dspconf.inc
 # Extra flags for the DSP assembly run.  Plain DOSBox needs none.  DOSBox-X
 # opens a working-folder prompt and a menu on macOS and then never reaches
 # BUILD.BAT, so it needs:
@@ -201,6 +214,12 @@ $(DSPCONF_STAMP): | create_dirs
 	@touch $@
 
 dspconf: $(DSPCONF_STAMP)
+
+# One stamp per model directory, as for the DSP configuration: switching
+# MODEL_DIR replaces it, so every host object rebuilds against the new model.
+$(MODEL_STAMP): $(MODEL_DIR)/model.mk $(MODEL_DIR)/model.inc | create_dirs
+	@rm -f ./TREX/m68030/build/model-*.stamp
+	@touch $@
 
 trex_dsp_camlights: create_dirs
 	@command -v $(DOSBOX) >/dev/null 2>&1 || { echo "DOSBOX ($(DOSBOX)) not found"; exit 1; }
@@ -461,13 +480,13 @@ measure_split_run:
 	  --harddrive . --auto 'C:\TREX_M68.TOS' --run-vbls $(VBLS) >/dev/null 2>&1
 
 ./TREX/m68030/build/trex_profile_nopix.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) $< -quiet -Felf -m68030 -DTREX_PROFILE_NO_PIXELS -o $@ -L ./TREX/m68030/build/trex_profile_nopix.lst
+	$(VASM) $(VASM_MODEL) $< -quiet -Felf -m68030 -DTREX_PROFILE_NO_PIXELS -o $@ -L ./TREX/m68030/build/trex_profile_nopix.lst
 
 ./TREX/m68030/trex_profile_nopix.tos: ./TREX/m68030/build/trex_profile_nopix.o ./TREX/m68030/build/ssi_dma4.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 ./TREX/m68030/build/trex_profile_norows.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) $< -quiet -Felf -m68030 -DTREX_PROFILE_NO_ROWS -o $@ -L ./TREX/m68030/build/trex_profile_norows.lst
+	$(VASM) $(VASM_MODEL) $< -quiet -Felf -m68030 -DTREX_PROFILE_NO_ROWS -o $@ -L ./TREX/m68030/build/trex_profile_norows.lst
 
 ./TREX/m68030/trex_profile_norows.tos: ./TREX/m68030/build/trex_profile_norows.o ./TREX/m68030/build/ssi_dma4.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
@@ -490,49 +509,49 @@ $(VASM): ./tools/vasm
 $(VLINK): ./tools/vlink
 	cd ./tools/vlink/ && $(MAKE)
 
-./TREX/model/trex.o3d: ./TREX/model/trex.obj ./tools/wavefront2object.js
+$(MODEL_DIR)/trex.o3d: $(MODEL_DIR)/trex.obj ./tools/wavefront2object.js
 	node tools/wavefront2object.js $< $@
 
 # Per-polygon geometric normals for the flat-shading stage.  Derived from the
 # O3D rather than the OBJ so the order matches the BSP-sorted polygon stream
 # the M68030 front end already streams to the DSP.
-./TREX/model/trex_facenormals.bin: ./TREX/model/trex.o3d ./tools/o3d2facenormals.js
+$(MODEL_DIR)/trex_facenormals.bin: $(MODEL_DIR)/trex.o3d ./tools/o3d2facenormals.js
 	node tools/o3d2facenormals.js $< $@
 
 # Per-polygon base colours, reordered from the TMD into O3D polygon order.
-./TREX/model/trex_facecolors.bin: ./TREX/model/trex.o3d ./TREX/model/trex.tmd ./tools/o3d2facecolors.js
-	node tools/o3d2facecolors.js ./TREX/model/trex.o3d ./TREX/model/trex.tmd $@
+$(MODEL_DIR)/trex_facecolors.bin: $(MODEL_DIR)/trex.o3d $(MODEL_DIR)/trex.tmd ./tools/o3d2facecolors.js
+	node tools/o3d2facecolors.js $(MODEL_DIR)/trex.o3d $(MODEL_DIR)/trex.tmd $@
 
 # Three TMD normal indices per polygon (Gouraud corner shading): the O3D
 # discarded two of the source's three; this recovers them by vertex-set match.
-./TREX/model/trex_cornernormals.bin: ./TREX/model/trex.o3d ./TREX/model/trex.tmd ./tools/tmd2cornernormals.js
-	node tools/tmd2cornernormals.js ./TREX/model/trex.o3d ./TREX/model/trex.tmd $@
+$(MODEL_DIR)/trex_cornernormals.bin: $(MODEL_DIR)/trex.o3d $(MODEL_DIR)/trex.tmd ./tools/tmd2cornernormals.js
+	node tools/tmd2cornernormals.js $(MODEL_DIR)/trex.o3d $(MODEL_DIR)/trex.tmd $@
 
-TREX_TEXTURE_DEPS = ./TREX/textures/trex_texture_page_10.tim \
-	./TREX/textures/trex_texture_page_12.tim \
-	./TREX/textures/trex_texture_page_14.tim \
-	./TREX/textures/trex_texture_page_26.tim \
-	./TREX/textures/trex_texture_page_28.tim \
-	./TREX/textures/trex_texture_page_30.tim
+TREX_TEXTURE_DEPS = $(MODEL_TEXTURES)/trex_texture_page_10.tim \
+	$(MODEL_TEXTURES)/trex_texture_page_12.tim \
+	$(MODEL_TEXTURES)/trex_texture_page_14.tim \
+	$(MODEL_TEXTURES)/trex_texture_page_26.tim \
+	$(MODEL_TEXTURES)/trex_texture_page_28.tim \
+	$(MODEL_TEXTURES)/trex_texture_page_30.tim
 
 # One host-owned byte per source triangle.  A set byte proves that every
 # conservatively reachable palette word is non-zero, so a normal textured
 # packet may use the flag-free 16-bit CLUT.  This never widens the DSP record.
-./TREX/model/trex_opaque.bin: ./TREX/model/trex.o3d ./tools/o3d2opaque.js $(TREX_TEXTURE_DEPS)
-	node tools/o3d2opaque.js $< ./TREX/textures $@
+$(MODEL_DIR)/trex_opaque.bin: $(MODEL_DIR)/trex.o3d ./tools/o3d2opaque.js $(TREX_TEXTURE_DEPS)
+	node tools/o3d2opaque.js $< $(MODEL_TEXTURES) $@
 
-TREX_MESH_DEPS = ./TREX/model/trex.o3d ./TREX/model/trex_facenormals.bin \
-	./TREX/model/trex_facecolors.bin ./TREX/model/trex_cornernormals.bin \
-	./TREX/model/trex_opaque.bin
+TREX_MESH_DEPS = $(MODEL_DIR)/trex.o3d $(MODEL_DIR)/trex_facenormals.bin \
+	$(MODEL_DIR)/trex_facecolors.bin $(MODEL_DIR)/trex_cornernormals.bin \
+	$(MODEL_DIR)/trex_opaque.bin $(MODEL_DIR)/trex.tmd $(TREX_TEXTURE_DEPS) $(MODEL_STAMP)
 
 ./TREX/m68030/build/trex_m68030.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) $< -quiet -Felf -m68030 -o $@ -L ./TREX/m68030/build/trex_m68030.lst
+	$(VASM) $(VASM_MODEL) $< -quiet -Felf -m68030 -o $@ -L ./TREX/m68030/build/trex_m68030.lst
 
 ./TREX/m68030/build/ssi_dma.o: ./TREX/m68030/ssi_dma.s ./src/xbios.s
-	$(VASM) $< -quiet -Felf -m68030 -o $@ -L ./TREX/m68030/build/ssi_dma.lst
+	$(VASM) $(VASM_MODEL) $< -quiet -Felf -m68030 -o $@ -L ./TREX/m68030/build/ssi_dma.lst
 
 ./TREX/m68030/build/trex_ssi_dma.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_dma.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_SSI_DMA -o $@ -L ./TREX/m68030/build/trex_ssi_dma.lst
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_SSI_DMA -o $@ -L ./TREX/m68030/build/trex_ssi_dma.lst
 
 ./TREX/m68030/trex_ssi_dma.tos: ./TREX/m68030/build/trex_ssi_dma.o ./TREX/m68030/build/ssi_dma.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
@@ -544,7 +563,7 @@ TREX_MESH_DEPS = ./TREX/model/trex.o3d ./TREX/model/trex_facenormals.bin \
 trex_m68030_prestep: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_prestep.tos ./TREX/m68030/trex_dsp.lod
 
 ./TREX/m68030/build/trex_prestep.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_PRESTEP_INCREMENTAL -o $@ -L ./TREX/m68030/build/trex_prestep.lst
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_PRESTEP_INCREMENTAL -o $@ -L ./TREX/m68030/build/trex_prestep.lst
 
 ./TREX/m68030/trex_prestep.tos: ./TREX/m68030/build/trex_prestep.o ./TREX/m68030/build/ssi_dma4.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
@@ -555,7 +574,7 @@ trex_m68030_prestep: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_prestep.tos
 trex_m68030_stream_probe: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_stream.tos trex_dsp_legacy
 
 ./TREX/m68030/build/trex_stream.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_STREAM_PROBE -o $@ -L ./TREX/m68030/build/trex_stream.lst
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_STREAM_PROBE -o $@ -L ./TREX/m68030/build/trex_stream.lst
 
 ./TREX/m68030/trex_stream.tos: ./TREX/m68030/build/trex_stream.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
@@ -580,7 +599,7 @@ trex_m68030_legacy: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_legacy.tos t
 trex_m68030_span: trex_m68030
 
 ./TREX/m68030/build/ssi_dma4.o: ./TREX/m68030/ssi_dma.s ./src/xbios.s
-	$(VASM) $< -quiet -Felf -m68030 -DTREX_SSI_TRACKS4 -o $@ -L ./TREX/m68030/build/ssi_dma4.lst
+	$(VASM) $(VASM_MODEL) $< -quiet -Felf -m68030 -DTREX_SSI_TRACKS4 -o $@ -L ./TREX/m68030/build/ssi_dma4.lst
 
 # Plain draw-order pair (OPTIMIZATION.md 4.1f/4.1g), the A/B reference of the
 # span stream: every survivor a span-setup record over the host port.
@@ -599,7 +618,7 @@ trex_m68030_plain: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_plain.tos tre
 # (-DTREX_DELTA_DSP, delta_clear_enabled = 2, OPTIMIZATION.md 2.5b/2.5c);
 # patch the longword to 1 for 68030 marking or 0 for the full clear.
 # trex_hires.tos loads TREXHIRS.LOD and no other image.
-HIRES_LOD=./TREX/dsp/build/trex_dsp-00001101si-$(DSPSRC_ID).lod
+HIRES_LOD=./TREX/dsp/build/trex_dsp-00001101si$(MODEL_ID)-$(DSPSRC_ID).lod
 .PHONY: trex_dsp_hires trex_m68030_hires
 trex_dsp_hires: create_dirs
 	@$(MAKE) --no-print-directory SSIPROBE=0 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=1 PRELIGHT=1 PHASEPROBE=0 ORDERED=1 SPANSTREAM=1 HIRES=1 trex_dsp
@@ -608,7 +627,7 @@ trex_dsp_hires: create_dirs
 trex_m68030_hires: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires.tos trex_dsp_hires
 
 ./TREX/m68030/build/trex_hires.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_DELTA_DSP -o $@ -L ./TREX/m68030/build/trex_hires.lst
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_DELTA_DSP -o $@ -L ./TREX/m68030/build/trex_hires.lst
 
 ./TREX/m68030/trex_hires.tos: ./TREX/m68030/build/trex_hires.o ./TREX/m68030/build/ssi_dma4.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
@@ -622,7 +641,7 @@ trex_m68030_hires: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires.tos tre
 trex_m68030_hires_run: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires_run.tos trex_dsp_hires
 
 ./TREX/m68030/build/trex_hires_run.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_DELTA_DSP -DTREX_RUN -o $@ -L ./TREX/m68030/build/trex_hires_run.lst
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_DELTA_DSP -DTREX_RUN -o $@ -L ./TREX/m68030/build/trex_hires_run.lst
 
 ./TREX/m68030/trex_hires_run.tos: ./TREX/m68030/build/trex_hires_run.o ./TREX/m68030/build/ssi_dma4.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
@@ -633,7 +652,7 @@ trex_m68030_hires_run: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires_run
 trex_m68030_hires_fbseq: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires_fbseq.tos trex_dsp_hires
 
 ./TREX/m68030/build/trex_hires_fbseq.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_FB_SEQUENCE -o $@ -L ./TREX/m68030/build/trex_hires_fbseq.lst
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_FB_SEQUENCE -o $@ -L ./TREX/m68030/build/trex_hires_fbseq.lst
 
 ./TREX/m68030/trex_hires_fbseq.tos: ./TREX/m68030/build/trex_hires_fbseq.o ./TREX/m68030/build/ssi_dma4.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
@@ -644,8 +663,8 @@ trex_m68030_hires_fbseq: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires_f
 # one, the viewing one (-DTREX_RUN, no disk traffic) and the frame-sequence
 # probe that gates the band restore.  They load TREXBGND.LOD and no other
 # image: the HIRES=1 image without the depth cue (NOFOG=1).
-BACKDROP_BIN=./TREX/textures/backdrop_640x400.bin
-BACKDROP_LOD=./TREX/dsp/build/trex_dsp-00001101sin-$(DSPSRC_ID).lod
+BACKDROP_BIN=$(MODEL_TEXTURES)/backdrop_640x400.bin
+BACKDROP_LOD=./TREX/dsp/build/trex_dsp-00001101sin$(MODEL_ID)-$(DSPSRC_ID).lod
 .PHONY: trex_m68030_hires_backdrop trex_m68030_hires_backdrop_run trex_m68030_hires_backdrop_fbseq backdrop trex_dsp_backdrop
 trex_dsp_backdrop: create_dirs
 	@$(MAKE) --no-print-directory SSIPROBE=0 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=1 PRELIGHT=1 PHASEPROBE=0 ORDERED=1 SPANSTREAM=1 HIRES=1 NOFOG=1 trex_dsp
@@ -657,11 +676,24 @@ trex_dsp_backdrop: create_dirs
 # generators and OVERWRITES TREX/scene -- only to start over.
 BACKDROP_SCENE=./TREX/scene/trex_trail.blend
 BACKDROP_SEED=./blender/seed
-BACKDROP_ASSETS=$(BACKDROP_BIN) ./TREX/model/backdrop_path.bin ./TREX/model/backdrop_shadow.bin \
-	./TREX/model/backdrop_poses.bin ./TREX/model/backdrop_targets.bin \
-	./TREX/model/backdrop_lights.inc ./TREX/model/backdrop_ramp.inc
+BACKDROP_ASSETS=$(BACKDROP_BIN) $(MODEL_DIR)/backdrop_path.bin $(MODEL_DIR)/backdrop_shadow.bin \
+	$(MODEL_DIR)/backdrop_poses.bin $(MODEL_DIR)/backdrop_targets.bin \
+	$(MODEL_DIR)/backdrop_lights.inc $(MODEL_DIR)/backdrop_ramp.inc
 backdrop:
 	blender -b $(BACKDROP_SCENE) --python ./tools/blender_export_falcon.py -- ./TREX/model $(BACKDROP_BIN)
+
+# Export a Blender model and its trail scene as a model directory
+# (OPTIMIZATION.md 6.6h), then build it with the same MODEL_DIR:
+#   make MODEL_DIR=./demos/walker BLEND=walker.blend MODEL_OBJECT=Walker model_export
+#   make MODEL_DIR=./demos/walker trex_m68030_hires_backdrop_run
+# The scene needs the camera, "Ground shadow", the "Falcon DSP shade" group and
+# a "lap" marker of TREX/scene/trex_trail.blend (start from a copy of it).
+MODEL_OBJECT=T-Rex
+.PHONY: model_export
+model_export:
+	@[ -n "$(BLEND)" ] || { echo "model_export needs BLEND=<file.blend>"; exit 1; }
+	blender -b $(BLEND) --python ./tools/blender_export_model.py -- $(MODEL_OBJECT) $(MODEL_DIR)
+	blender -b $(BLEND) --python ./tools/blender_export_falcon.py -- $(MODEL_DIR) $(MODEL_DIR)/backdrop_640x400.bin $(MODEL_OBJECT)
 
 .PHONY: blender_seed
 blender_seed:
@@ -676,25 +708,25 @@ trex_m68030_hires_backdrop_run: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_
 trex_m68030_hires_backdrop_fbseq: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires_bg_fbseq.tos trex_dsp_backdrop
 
 ./TREX/m68030/build/trex_hires_bg.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin $(BACKDROP_ASSETS)
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_DELTA_DSP -DTREX_BACKDROP -o $@ -L ./TREX/m68030/build/trex_hires_bg.lst
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_DELTA_DSP -DTREX_BACKDROP -o $@ -L ./TREX/m68030/build/trex_hires_bg.lst
 
 ./TREX/m68030/build/trex_hires_bg_run.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin $(BACKDROP_ASSETS)
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_DELTA_DSP -DTREX_BACKDROP -DTREX_RUN -o $@ -L ./TREX/m68030/build/trex_hires_bg_run.lst
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_DELTA_DSP -DTREX_BACKDROP -DTREX_RUN -o $@ -L ./TREX/m68030/build/trex_hires_bg_run.lst
 
 ./TREX/m68030/build/trex_hires_bg_fbseq.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin $(BACKDROP_ASSETS)
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_FB_SEQUENCE -DTREX_BACKDROP -o $@ -L ./TREX/m68030/build/trex_hires_bg_fbseq.lst
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_FB_SEQUENCE -DTREX_BACKDROP -o $@ -L ./TREX/m68030/build/trex_hires_bg_fbseq.lst
 
 ./TREX/m68030/trex_hires_bg.tos ./TREX/m68030/trex_hires_bg_run.tos ./TREX/m68030/trex_hires_bg_fbseq.tos: ./TREX/m68030/%.tos: ./TREX/m68030/build/%.o ./TREX/m68030/build/ssi_dma4.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 ./TREX/m68030/build/trex_plain.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_PLAIN_ORDER -o $@ -L ./TREX/m68030/build/trex_plain.lst
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_PLAIN_ORDER -o $@ -L ./TREX/m68030/build/trex_plain.lst
 
 ./TREX/m68030/trex_plain.tos: ./TREX/m68030/build/trex_plain.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 ./TREX/m68030/build/trex_legacy.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_LEGACY_OT -o $@ -L ./TREX/m68030/build/trex_legacy.lst
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_LEGACY_OT -o $@ -L ./TREX/m68030/build/trex_legacy.lst
 
 ./TREX/m68030/trex_legacy.tos: ./TREX/m68030/build/trex_legacy.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
@@ -706,7 +738,7 @@ trex_m68030_hires_backdrop_fbseq: create_dirs $(VASM) $(VLINK) ./TREX/m68030/tre
 trex_m68030_offset_probe: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_offset.tos trex_dsp_legacy
 
 ./TREX/m68030/build/trex_offset.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_LEGACY_OT -DTREX_OFFSET_PROBE -o $@ -L ./TREX/m68030/build/trex_offset.lst
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_LEGACY_OT -DTREX_OFFSET_PROBE -o $@ -L ./TREX/m68030/build/trex_offset.lst
 
 ./TREX/m68030/trex_offset.tos: ./TREX/m68030/build/trex_offset.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
@@ -717,43 +749,43 @@ trex_m68030_offset_probe: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_offset
 trex_m68030_fbseq: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_fbseq.tos ./TREX/m68030/trex_dsp.lod
 
 ./TREX/m68030/build/trex_fbseq.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_FB_SEQUENCE -o $@ -L ./TREX/m68030/build/trex_fbseq.lst
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_FB_SEQUENCE -o $@ -L ./TREX/m68030/build/trex_fbseq.lst
 
 ./TREX/m68030/trex_fbseq.tos: ./TREX/m68030/build/trex_fbseq.o ./TREX/m68030/build/ssi_dma4.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 ./TREX/m68030/build/trex_framehash.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_FRAME_HASH -o $@ -L ./TREX/m68030/build/trex_framehash.lst
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_FRAME_HASH -o $@ -L ./TREX/m68030/build/trex_framehash.lst
 
 ./TREX/m68030/trex_framehash.tos: ./TREX/m68030/build/trex_framehash.o ./TREX/m68030/build/ssi_dma4.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 ./TREX/m68030/build/trex_pio_cal.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_PIO_CAL -o $@ -L ./TREX/m68030/build/trex_pio_cal.lst
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_PIO_CAL -o $@ -L ./TREX/m68030/build/trex_pio_cal.lst
 
 ./TREX/m68030/trex_pio_cal.tos: ./TREX/m68030/build/trex_pio_cal.o ./TREX/m68030/build/ssi_dma4.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 ./TREX/m68030/build/trex_ssi_shadow.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_dma.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_SSI_SHADOW -o $@ -L ./TREX/m68030/build/trex_ssi_shadow.lst
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_SSI_SHADOW -o $@ -L ./TREX/m68030/build/trex_ssi_shadow.lst
 
 ./TREX/m68030/trex_ssi_shadow.tos: ./TREX/m68030/build/trex_ssi_shadow.o ./TREX/m68030/build/ssi_dma.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 ./TREX/m68030/build/trex_ssi_rows.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_dma.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_SSI_ROWS -o $@ -L ./TREX/m68030/build/trex_ssi_rows.lst
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_SSI_ROWS -o $@ -L ./TREX/m68030/build/trex_ssi_rows.lst
 
 ./TREX/m68030/trex_ssi_rows.tos: ./TREX/m68030/build/trex_ssi_rows.o ./TREX/m68030/build/ssi_dma.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 ./TREX/m68030/build/trex_ssi_hatari.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_dma.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_SSI_ROWS -DTREX_SSI_HATARI -o $@ -L ./TREX/m68030/build/trex_ssi_hatari.lst
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_SSI_ROWS -DTREX_SSI_HATARI -o $@ -L ./TREX/m68030/build/trex_ssi_hatari.lst
 
 ./TREX/m68030/trex_ssi_hatari.tos: ./TREX/m68030/build/trex_ssi_hatari.o ./TREX/m68030/build/ssi_dma.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 ./TREX/m68030/build/TREXSSI.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_dma.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_RUN -DTREX_FPS -DTREX_SSI_ROWS -DTREX_SSI_HATARI -DTREX_SSI_LOOPBACK -o $@ -L ./TREX/m68030/build/TREXSSI.lst
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_RUN -DTREX_FPS -DTREX_SSI_ROWS -DTREX_SSI_HATARI -DTREX_SSI_LOOPBACK -o $@ -L ./TREX/m68030/build/TREXSSI.lst
 
 ./TREX/m68030/TREXSSI.TOS: ./TREX/m68030/build/TREXSSI.o ./TREX/m68030/build/ssi_dma.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
@@ -782,25 +814,25 @@ trex_m68030_fbseq: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_fbseq.tos ./T
 # the linked binary instead -- one byte, layout-identical by construction.
 # OPTIMIZATION.md 2.4e does exactly that for the release and gives the offsets.
 ./TREX/m68030/build/trex_run.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) $< -quiet -Felf -m68030 -DTREX_RUN -o $@ -L ./TREX/m68030/build/trex_run.lst
+	$(VASM) $(VASM_MODEL) $< -quiet -Felf -m68030 -DTREX_RUN -o $@ -L ./TREX/m68030/build/trex_run.lst
 
 ./TREX/m68030/trex_run.tos: ./TREX/m68030/build/trex_run.o ./TREX/m68030/build/ssi_dma4.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 ./TREX/m68030/build/trex_prepass.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) $< -quiet -Felf -m68030 -DTREX_PREPASS -o $@ -L ./TREX/m68030/build/trex_prepass.lst
+	$(VASM) $(VASM_MODEL) $< -quiet -Felf -m68030 -DTREX_PREPASS -o $@ -L ./TREX/m68030/build/trex_prepass.lst
 
 ./TREX/m68030/trex_prepass.tos: ./TREX/m68030/build/trex_prepass.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 ./TREX/m68030/build/trex_phase.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) $< -quiet -Felf -m68030 -DTREX_PHASEPROBE -o $@ -L ./TREX/m68030/build/trex_phase.lst
+	$(VASM) $(VASM_MODEL) $< -quiet -Felf -m68030 -DTREX_PHASEPROBE -o $@ -L ./TREX/m68030/build/trex_phase.lst
 
 ./TREX/m68030/trex_phase.tos: ./TREX/m68030/build/trex_phase.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 ./TREX/m68030/build/trex_prepass_run.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) $< -quiet -Felf -m68030 -DTREX_PREPASS -DTREX_RUN -o $@ -L ./TREX/m68030/build/trex_prepass_run.lst
+	$(VASM) $(VASM_MODEL) $< -quiet -Felf -m68030 -DTREX_PREPASS -DTREX_RUN -o $@ -L ./TREX/m68030/build/trex_prepass_run.lst
 
 ./TREX/m68030/trex_prepass_run.tos: ./TREX/m68030/build/trex_prepass_run.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
@@ -810,7 +842,7 @@ trex_m68030_fbseq: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_fbseq.tos ./T
 # binary whose output is compared or dumped (trex_prepass*, the fb.res capture
 # path, the span validator) must stay without it.
 ./TREX/m68030/build/TREX.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) $< -quiet -Felf -m68030 -DTREX_RUN -DTREX_RELEASE -DTREX_FPS -o $@ -L ./TREX/m68030/build/TREX.lst
+	$(VASM) $(VASM_MODEL) $< -quiet -Felf -m68030 -DTREX_RUN -DTREX_RELEASE -DTREX_FPS -o $@ -L ./TREX/m68030/build/TREX.lst
 
 ./TREX/m68030/TREX.TOS: ./TREX/m68030/build/TREX.o ./TREX/m68030/build/ssi_dma4.o ./TREX/m68030/TREX.LOD
 	$(VLINK) ./TREX/m68030/build/TREX.o ./TREX/m68030/build/ssi_dma4.o -tos-fastload -b ataritos -s -e start -o $@
@@ -953,7 +985,7 @@ trex_ssi_pipeline: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_pipe.tos
 	cp $(SSI_PIPE_LOD) ./TREX/m68030/TREXPIPE.LOD
 
 ./TREX/m68030/build/trex_pipe.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_packets.s ./TREX/m68030/ssi_crc_table.i ./TREX/m68030/ssi_crc_table.bin ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) $< -quiet -Felf -m68030 -DTREX_SSI_PIPELINE -o $@ -L ./TREX/m68030/build/trex_pipe.lst
+	$(VASM) $(VASM_MODEL) $< -quiet -Felf -m68030 -DTREX_SSI_PIPELINE -o $@ -L ./TREX/m68030/build/trex_pipe.lst
 
 ./TREX/m68030/trex_pipe.tos: ./TREX/m68030/build/trex_pipe.o ./TREX/m68030/build/ssi_dma.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
@@ -965,7 +997,7 @@ trex_ssi_pipeline: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_pipe.tos
 trex_ssi_pipeline_crcprobe: trex_ssi_pipeline ./TREX/m68030/trex_pipe_nocrc.tos
 
 ./TREX/m68030/build/trex_pipe_nocrc.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_packets.s ./TREX/m68030/ssi_crc_table.i ./TREX/m68030/ssi_crc_table.bin ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) $< -quiet -Felf -m68030 -DTREX_SSI_PIPELINE -DTREX_SSI_CRC_PROBE -o $@ -L ./TREX/m68030/build/trex_pipe_nocrc.lst
+	$(VASM) $(VASM_MODEL) $< -quiet -Felf -m68030 -DTREX_SSI_PIPELINE -DTREX_SSI_CRC_PROBE -o $@ -L ./TREX/m68030/build/trex_pipe_nocrc.lst
 
 ./TREX/m68030/trex_pipe_nocrc.tos: ./TREX/m68030/build/trex_pipe_nocrc.o ./TREX/m68030/build/ssi_dma.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
@@ -975,13 +1007,13 @@ trex_ssi_pipeline_crcprobe: trex_ssi_pipeline ./TREX/m68030/trex_pipe_nocrc.tos
 trex_ssi_pipeline_hash: trex_ssi_pipeline ./TREX/m68030/trex_pipe_hash.tos
 
 ./TREX/m68030/build/trex_pipe_hash.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_packets.s ./TREX/m68030/ssi_crc_table.i ./TREX/m68030/ssi_crc_table.bin ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) $< -quiet -Felf -m68030 -DTREX_SSI_PIPELINE -DTREX_FRAME_HASH -o $@ -L ./TREX/m68030/build/trex_pipe_hash.lst
+	$(VASM) $(VASM_MODEL) $< -quiet -Felf -m68030 -DTREX_SSI_PIPELINE -DTREX_FRAME_HASH -o $@ -L ./TREX/m68030/build/trex_pipe_hash.lst
 
 ./TREX/m68030/trex_pipe_hash.tos: ./TREX/m68030/build/trex_pipe_hash.o ./TREX/m68030/build/ssi_dma.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 ./TREX/m68030/build/TREXPIPE.o: ./TREX/m68030/trex_m68030.s ./TREX/m68030/ssi_packets.s ./TREX/m68030/ssi_crc_table.i ./TREX/m68030/ssi_crc_table.bin ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin
-	$(VASM) $< -quiet -Felf -m68030 -DTREX_SSI_PIPELINE -DTREX_RUN -DTREX_RELEASE -DTREX_FPS -o $@ -L ./TREX/m68030/build/TREXPIPE.lst
+	$(VASM) $(VASM_MODEL) $< -quiet -Felf -m68030 -DTREX_SSI_PIPELINE -DTREX_RUN -DTREX_RELEASE -DTREX_FPS -o $@ -L ./TREX/m68030/build/TREXPIPE.lst
 
 ./TREX/m68030/TREXPIPE.TOS: ./TREX/m68030/build/TREXPIPE.o ./TREX/m68030/build/ssi_dma.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
