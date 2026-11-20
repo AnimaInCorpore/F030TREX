@@ -70,11 +70,18 @@ if obj is None or obj.type != "MESH":
 # ------------------------------------------------------------------ mesh
 # The basis shape with the modifiers: pose shape keys belong to the scene.
 keys = obj.data.shape_keys
+# Armatures deforming it are put in their rest pose for the same reason.
 saved = (obj.show_only_shape_key, obj.active_shape_key_index)
+rigs = [m.object.data for m in obj.modifiers if m.type == "ARMATURE" and m.object]
+poses = [rig.pose_position for rig in rigs]
 obj.show_only_shape_key, obj.active_shape_key_index = True, 0
+for rig in rigs:
+    rig.pose_position = "REST"
 evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
 mesh = bpy.data.meshes.new_from_object(evaluated)
 obj.show_only_shape_key, obj.active_shape_key_index = saved
+for rig, pose in zip(rigs, poses):
+    rig.pose_position = pose
 if any(len(p.vertices) != 3 for p in mesh.polygons):
     bm = bmesh.new()
     bm.from_mesh(mesh)

@@ -110,9 +110,15 @@ base, normals, triangles = read_tmd(MODEL / "trex.tmd")
 mesh = trex.data
 # The rest mesh as blender_export_model.py saw it: basis shape, modifiers on.
 saved = (trex.show_only_shape_key, trex.active_shape_key_index)
+rigs = [m.object.data for m in trex.modifiers if m.type == "ARMATURE" and m.object]
+poses = [rig.pose_position for rig in rigs]
 trex.show_only_shape_key, trex.active_shape_key_index = True, 0
+for rig in rigs:
+    rig.pose_position = "REST"
 rest_mesh = bpy.data.meshes.new_from_object(trex.evaluated_get(bpy.context.evaluated_depsgraph_get()))
 trex.show_only_shape_key, trex.active_shape_key_index = saved
+for rig, pose in zip(rigs, poses):
+    rig.pose_position = pose
 if len(rest_mesh.vertices) != len(base) or len(rest_mesh.polygons) != len(triangles):
     fail("%s no longer matches %s's vertex and triangle counts" % (OBJECT, MODEL / "trex.tmd"))
 rest = np.array([v.co[:] for v in rest_mesh.vertices]) / scale @ LOCAL   # mesh axes -> PS1

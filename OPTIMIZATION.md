@@ -8640,9 +8640,79 @@ now taken as-is; only Blender's own normals are normalized.
 ms/frame, against 462.4 for the committed build, on the same cycle-exact
 Hatari settings. Emulator only; physical Falcon timing is unmeasured.
 
-*What is not covered.* Nothing yet tests a model other than the T-Rex.
-That needs a scene built around a new mesh: decimation, quantized
-textures, and an animation authored as shape keys or an armature.
+*A new model: anymachine's stilt walker* (MIT, `stilt/stilt.blend`, 2026-11-20).
+[`tools/blender_swap_model.py`](tools/blender_swap_model.py) moves a rigged
+model into a copy of the trail scene, in this order:
+1. Joins the parts skinned to the rig, after unparenting them. One
+   `view_layer.update()` after appending is needed so the rig's offset is
+   included.
+2. Scales the model to a height and turns it to the route's forward axis.
+3. Reduces it to the triangle budget.
+4. Stores flat Q12 normals and per-face colours.
+5. Replays the action through an NLA strip whose time advances with the
+   distance walked, divided by the action's stance-foot speed.
+
+Decimating the joined mesh at a ratio of 0.007 shredded it into 3,638
+pieces, including 5 m slivers, because its legs are trusses of about 110
+struts per part. So each part becomes its own convex hull, decimated to its
+share of the budget by area.
+
+The walker became 1,495 vertices and 2,358 triangles: 352,290 source
+triangles, 7 m tall, untextured, because the source's texture images are
+not published. It uses 12,825 X and 11,628 Y DSP words.
+
+Results on cycle-exact Hatari:
+- **Blender against Hatari** (frames 1, 23, 60, 90 and 161): the
+  background is exact, silhouette overlap is 0.91–0.98, and Blender is
+  darker by 0.4–2 green steps.
+- **Loop:** all 159 post-wrap frames match their lap counterparts.
+- **Speed: 755.2 ms/frame (1.32 FPS).** The rasterizer takes 593.9 ms
+  against the T-Rex's 131.7 ms, while writing only 16% more pixels
+  (93,744 against 80,612 per frame). The packet stage drops to 13.2 ms.
+  So untextured (mode `0x30`) triangles take the 68030's flat-span path,
+  not the DSP span stream. That path costs about four times as much per
+  pixel.
+
+Until that path is faster, give a model's flat colours a small texture page
+of solid swatches instead.
+
+*A generated, unrigged sculpt* (a user-supplied glTF reptile, 39,200
+triangles, one 512×512 texture, 2026-11-20).
+[`tools/blender_rig_creature.py`](tools/blender_rig_creature.py) rigs and
+walks a static four-legged mesh.
+
+How it works:
+- **Mesh:** it welds the vertices glTF splits along UV seams, without which
+  the mesh fell into 336 pieces. It scales the model to 4.5 m and
+  decimates it.
+- **Landmarks:** the feet are the ground-contact clusters. The head and
+  tail are the farthest geodesic pair, and the spine is traced between
+  them.
+- **Skeleton and skin:** torso, neck and tail chains run from the pelvis,
+  with two-bone legs. Each vertex gets region weights (leg or spine), then
+  six rounds of diffusion over the mesh.
+- **Gait:** diagonal-pair forward kinematics (hip sweep capped at 0.45
+  rad, lift and knee flex), a sideways body wave, a lagging tail and a
+  steadied head along the route.
+
+What was rejected:
+- *IK:* leg IK to planted world targets over-reached the auto-placed legs
+  and tore the mesh.
+- *Nearest-bone skinning:* the two nearest bones tied flank vertices to
+  legs. 143 triangles per frame stretched up to 8.7×.
+- *Result:* with region weights and diffusion, about 20 triangles stretch
+  beyond 1.8×, at most 3.1×.
+
+The model is 1,186 vertices and 2,400 triangles in one 256×256 page, with
+all triangles qualified as opaque. It uses 10,704 X and 9,570 Y DSP words.
+
+On cycle-exact Hatari:
+- **Blender against Hatari:** the background is exact, silhouette overlap
+  is 0.965–0.983, and the mean colour difference is at most 1.4 green steps
+  with no bias.
+- **Loop:** all 159 post-wrap frames match.
+- **Speed:** 320 frames averaged **346.6 ms/frame (2.89 FPS)**: packets
+  215.4 ms, clear 47.4 ms, rasterizer 77.8 ms.
 
 ### 6.7 Texture and CLUT reads
 
