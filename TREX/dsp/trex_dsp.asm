@@ -1968,20 +1968,25 @@ make_triangle_zkey
 	; -- after the read's post-increment the gap is exactly five, hence
 	; N5.  R6 then sums the triple.  Both registers are free in every
 	; caller (BUILD and the classify passes).
+	; lookup_projected_z inlined, as in make_triangle_area (2.8c).  2.8e:
+	; the three z are summed in B as they are read; nothing else ever
+	; read triangle_z0..z2, so they are no longer stored.  The array base
+	; waits in X1.  Clobbers B as well now.
 	move	#triangle_i0,r5
-	move	#5,n5
-	move	#triangle_z0,r6
+	move	#projected_vertices+2,x1
+	clr	b
 	do	#3,make_zkey_lookups
-	move	y:(r5)+,x0
-	jsr	<lookup_projected_z
-	move	x0,y:(r5+n5)
+	move	y:(r5)+,a
+	asl	a
+	asl	a
+	add	x1,a
+	move	a1,r0
+	nop
+	move	x:(r0),x0
+	add	x0,b
 make_zkey_lookups
 
-	move	y:(r6)+,a
-	move	y:(r6)+,x0
-	add	x0,a	y:(r6)+,x0
-	add	x0,a
-	move	a1,y:triangle_zkey
+	move	b1,y:triangle_zkey
 
 	move	y:<triangles_processed,a
 	move	#>1,x0
@@ -2065,11 +2070,10 @@ shade_depth_diff_clamped
 	move	y:(r5)+,a
 	move	a1,b
 	move	#>SHADE_CACHE_MASK,x0
-	and	x0,b
-	move	#shade_cache_tags,x0
-	add	x0,b
+	and	x0,b	#shade_cache_tags,x0		; 2.8e: constants ride along
+	add	x0,b	#>NORMAL_Y_COUNT,x1
 	move	b1,r7
-	move	#>NORMAL_Y_COUNT,x1
+	nop
 	move	x:(r7),x0
 	cmp	x0,a
 	jeq	<shade_corner_cache_hit
@@ -2086,8 +2090,7 @@ shade_depth_diff_clamped
 	cmp	x1,a	a1,x:(r7)
 	jge	<shade_corner_x_bank
 	move	a1,x0
-	add	x0,a
-	move	#corner_normals_y,x0
+	add	x0,a	#corner_normals_y,x0
 	add	x0,a
 	move	a1,r0
 	nop
@@ -2189,6 +2192,11 @@ shade_rotate_row
 	; needs it as the pipeline gap after its R3 load.
 	move	#phase_light_directions_x,r0
 	move	#shade_sum_r,r3
+	; 2.8c: both clamps are branch-free.  RND leaves N and Z for the cosine,
+	; so TLE can zero a light the normal faces away from (X1 is dead since
+	; the normal was stored, and holds the zero), and the sum's saturation
+	; is shade_clamp_sum's compare with a TGT in place of its branch.
+	move	#0,x1
 	do	#2,shade_channel_loop
 	clr	b
 	do	#LIGHT_COUNT,shade_light_loop
@@ -2197,13 +2205,13 @@ shade_rotate_row
 	mac	x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
 	mac	x0,y0,a
 	rnd	a	(r4)+n4
-	tst	a
-	jle	<shade_light_none
+	tle	x1,a
 	add	a,b
-shade_light_none
-	nop
 shade_light_loop
-	jsr	<shade_clamp_sum
+	tfr	b,a
+	move	#>$7fffff,x0
+	cmp	x0,a
+	tgt	x0,a
 	; The X:R dual move stores the cache value while copying the same limited
 	; accumulator into Y0 for the depth multiply.  The stored value is the raw
 	; clamped light sum; depth remains specific to this triangle and is
@@ -2241,28 +2249,21 @@ shade_cache_hit_channel
 shade_corner_sums_ready
 	jsr	<shade_quantize_level
 	move	a1,y:(r6)+
+	; 2.8e: one third and the saturation limit are loaded once for both
+	; channels, green runs in B while red is stored, and TGT saturates.
 	move	y:<shade_sum_r,x0
 	move	#>$2aaaab,y0			; 1/3
-	mpy	x0,y0,a
+	mpy	x0,y0,a	y:<shade_sum_g,x1
 	rnd	a	y:<shade_acc_r,x0
-	add	x0,a
-	move	#>$7fffff,x0
+	add	x0,a	#>$7fffff,x0
 	cmp	x0,a
-	jle	<shade_acc_r_ok
-	move	x0,a
-shade_acc_r_ok
-	move	a1,y:<shade_acc_r
-	move	y:<shade_sum_g,x0
-	move	#>$2aaaab,y0
-	mpy	x0,y0,a
-	rnd	a	y:<shade_acc_g,x0
-	add	x0,a
-	move	#>$7fffff,x0
-	cmp	x0,a
-	jle	<shade_acc_g_ok
-	move	x0,a
-shade_acc_g_ok
-	move	a1,y:<shade_acc_g
+	tgt	x0,a
+	mpy	x1,y0,b	a1,y:<shade_acc_r
+	rnd	b	y:<shade_acc_g,x1
+	add	x1,b
+	cmp	x0,b
+	tgt	x0,b
+	move	b1,y:<shade_acc_g
 	nop
 shade_corner_loop
 
@@ -2348,8 +2349,7 @@ shade_quantize_level
 	mpy	x0,y0,a	y:<shade_sum_g,x0
 	move	#>$59ba5e,y0			; 0.701
 	mac	x0,y0,a
-	rnd	a
-	tst	a
+	rnd	a			; leaves N, Z and V for the JGT (2.8e)
 	jgt	<shade_level_positive
 	clr	a
 	rts
@@ -2380,23 +2380,6 @@ shade_unlit_model
 	move	a1,y:<corner_levels+2
 	rts
 
-lookup_projected_xy
-	; x0 = vertex index; returns screen x in x1, screen y in y1 and the
-	; record's flags word in y0.  Layout is (x, y, z, flags).
-	move	x0,a
-	add	x0,a
-	add	x0,a
-	add	x0,a
-	move	#projected_vertices,x1
-	add	x1,a
-	move	a1,r0
-	nop
-	move	x:(r0)+,x1
-	move	x:(r0)+,y1
-	move	(r0)+
-	move	x:(r0),y0
-	rts
-
 make_triangle_area
 	; Twice the signed screen-space area, left in A.  Screen coordinates are
 	; small integers, so the fractional MPY/MAC pair stays exact and only the
@@ -2410,12 +2393,25 @@ make_triangle_area
 	clr	b
 	move	#triangle_i0,r5
 	move	#tri_x0,r6
+	; lookup_projected_xy inlined (2.8c): this loop runs for every listed
+	; triangle in the prelight pass and again for BUILD's survivors.  The
+	; index is scaled by two shifts, x leaves through A in the dual move
+	; that fetches y, and the flags word is added straight from X0.
+	; 2.8e: the array base waits in Y1, N0 steps over z to the flags
+	; word, and y is stored by the ADD that collects the flags.
+	move	#projected_vertices,y1
+	move	#2,n0
 	do	#3,make_area_corners
-	move	y:(r5)+,x0
-	jsr	<lookup_projected_xy
-	move	x1,y:(r6)+
-	move	y1,y:(r6)+
-	add	y0,b
+	move	y:(r5)+,a
+	asl	a
+	asl	a
+	add	y1,a
+	move	a1,r0
+	nop
+	move	x:(r0)+,a
+	move	x:(r0)+n0,x1	a,y:(r6)+
+	move	x:(r0),x0
+	add	x0,b	x1,y:(r6)+
 make_area_corners
 
 	; Any vertex behind the near plane drops the whole triangle.  Returning a
@@ -2433,18 +2429,17 @@ tri_near_ok
 	; The delta stores continue through R6, which the corner loop left
 	; parked exactly on tri_dx01, and each SUB's parallel slot fetches the
 	; next pair's first operand into the other accumulator.
+	; 2.8e: x0 and y0 of the first corner stay in X0 and Y0, and each
+	; delta is stored by the SUB that forms the next one.
 	move	y:tri_x1,a
 	move	y:tri_x0,x0
+	move	y:tri_y0,y0
 	sub	x0,a	y:tri_y1,b
-	move	a1,y:(r6)+
-	move	y:tri_y0,x0
-	sub	x0,b	y:tri_x2,a
-	move	b1,y:(r6)+
-	move	y:tri_x0,x0
-	sub	x0,a	y:tri_y2,b
-	move	a1,y:(r6)+
-	move	y:tri_y0,x0
-	sub	x0,b
+	sub	y0,b	a1,y:(r6)+
+	move	y:tri_x2,a
+	sub	x0,a	b1,y:(r6)+
+	move	y:tri_y2,b
+	sub	y0,b	a1,y:(r6)+
 	move	b1,y:(r6)+
 
 	move	y:tri_dx01,x0
@@ -2698,45 +2693,39 @@ span_sort_done
 	; k0 = sy1-sy2 = -rows_low, k1 = sy2-sy0 = dy_long, k2 = sy0-sy1.
 	; Each NEG's parallel slot stores the PRE-negation value -- the half
 	; height -- while the negation itself becomes the k factor.
+	; Signed cross product of the sorted triangle: twice the area, and the
+	; middle vertex's side in one value.  MPY leaves products doubled, so
+	; one ASR restores the integer cross.
+	; The integer cross sits in the accumulator's LOW word after the ASR:
+	; storing A1 here is the classic fractional-MPY trap the area routine's
+	; normalization comment warns about, and it fed the gradient divides a
+	; divisor of 0 or -1 -- instant saturation, caught by the validator.
+	; 2.8e: operands for the next step load in the parallel slot of the
+	; step before it.
 	move	y:span_sy1,a
 	move	y:span_sy0,x0
-	sub	x0,a
+	sub	x0,a	y:span_sy1,x0
 	neg	a	a1,y:span_rows_up
 	move	a1,y:span_k2
 	move	y:span_sy2,a
-	move	y:span_sy1,x0
 	sub	x0,a
 	neg	a	a1,y:span_rows_low
 	move	a1,y:span_k0
 	move	y:span_rows_up,a
 	move	y:span_rows_low,x0
-	add	x0,a
+	add	x0,a	y:span_sx0,x0
 	move	a1,y:span_k1
-
-	; Signed cross product of the sorted triangle: twice the area, and the
-	; middle vertex's side in one value.  MPY leaves products doubled, so
-	; one ASR restores the integer cross.
 	move	y:span_sx1,a
-	move	y:span_sx0,x0
-	sub	x0,a
+	sub	x0,a	y:span_k1,y0
 	move	a1,x0
-	move	y:span_k1,y0
-	mpy	x0,y0,a
-	move	y:span_sx2,b
+	mpy	x0,y0,a	y:span_sx2,b
 	move	y:span_sx0,x0
-	sub	x0,b
+	sub	x0,b	y:span_rows_up,y1
 	move	b1,x0
-	move	y:span_rows_up,y1
 	mpy	x0,y1,b
 	sub	b,a
 	asr	a
-	; The integer cross sits in the accumulator's LOW word after the ASR:
-	; storing A1 here is the classic fractional-MPY trap the area routine's
-	; normalization comment warns about, and it fed the gradient divides a
-	; divisor of 0 or -1 -- instant saturation, caught by the validator.
-	move	a0,y:span_cross
-
-	clr	b
+	clr	b	a0,y:span_cross
 	tst	a
 	jge	<span_mid_stored
 	move	#>1,b
@@ -2758,8 +2747,7 @@ span_mid_stored
 	move	a1,y:span_sl_long
 
 	; Short-chain slopes; an empty half stores zero, matching the host.
-	clr	a
-	move	y:span_rows_up,b
+	clr	a	y:span_rows_up,b
 	tst	b
 	jeq	<span_sl_up_store
 	move	y:span_sx1,a
@@ -2770,8 +2758,7 @@ span_mid_stored
 	jsr	<span_div
 span_sl_up_store
 	move	a1,y:span_sl_up
-	clr	a
-	move	y:span_rows_low,b
+	clr	a	y:span_rows_low,b
 	tst	b
 	jeq	<span_sl_low_store
 	move	y:span_sx2,a
@@ -2814,21 +2801,19 @@ span_sl_low_store
 	; Corner levels per sorted slot, straight from the shading pass.  The
 	; raw 0..15 integers feed the same gradient formulas the UV bytes use,
 	; so every derived field lands in level units <<8 -- Q4.8.
+	; 2.8e: the next slot loads in the pipeline gap behind each R0 load,
+	; and each level is stored by the ADD for the next.
 	move	#corner_levels,x0
 	move	y:span_slot0,a
 	add	x0,a
 	move	a1,r0
-	nop
-	move	y:(r0),x1
-	move	x1,y:span_sl0
 	move	y:span_slot1,a
-	add	x0,a
-	move	a1,r0
-	nop
 	move	y:(r0),x1
-	move	x1,y:span_sl1
+	add	x0,a	x1,y:span_sl0
+	move	a1,r0
 	move	y:span_slot2,a
-	add	x0,a
+	move	y:(r0),x1
+	add	x0,a	x1,y:span_sl1
 	move	a1,r0
 	nop
 	move	y:(r0),x1
@@ -2837,44 +2822,40 @@ span_sl_low_store
 	; Affine span gradients: (su0*k0 + su1*k1 + su2*k2) << 8, over the
 	; signed cross.  The MAC chain leaves the sum doubled; seven more
 	; shifts complete the <<8 in span_div's doubled convention.
-	move	y:span_su0,x0
+	; 2.8e: k0 and k1 wait in Y0 and Y1 through all three gradients
+	; (span_div keeps them); k2 and the cross share X1, the cross
+	; arriving in the last MAC's parallel slot.
 	move	y:span_k0,y0
+	move	y:span_k1,y1
+	move	y:span_su0,x0
+	move	y:span_k2,x1
 	mpy	x0,y0,a	y:span_su1,x0
-	move	y:span_k1,y0
-	mac	x0,y0,a	y:span_su2,x0
-	move	y:span_k2,y0
-	mac	x0,y0,a
+	mac	x0,y1,a	y:span_su2,x0
+	mac	x0,x1,a	y:span_cross,x1
 	rep	#8
 	asl	a
-	move	y:span_cross,x1
 	jsr	<span_div
 	move	a1,y:span_dudx
 
 	move	y:span_sv0,x0
-	move	y:span_k0,y0
+	move	y:span_k2,x1
 	mpy	x0,y0,a	y:span_sv1,x0
-	move	y:span_k1,y0
-	mac	x0,y0,a	y:span_sv2,x0
-	move	y:span_k2,y0
-	mac	x0,y0,a
+	mac	x0,y1,a	y:span_sv2,x0
+	mac	x0,x1,a	y:span_cross,x1
 	rep	#8
 	asl	a
-	move	y:span_cross,x1
 	jsr	<span_div
 	move	a1,y:span_dvdx
 
 	; Span level gradient: the same barycentric expression over the three
 	; sorted corner levels, so the result is level units in Q4.8.
 	move	y:span_sl0,x0
-	move	y:span_k0,y0
+	move	y:span_k2,x1
 	mpy	x0,y0,a	y:span_sl1,x0
-	move	y:span_k1,y0
-	mac	x0,y0,a	y:span_sl2,x0
-	move	y:span_k2,y0
-	mac	x0,y0,a
+	mac	x0,y1,a	y:span_sl2,x0
+	mac	x0,x1,a	y:span_cross,x1
 	rep	#8
 	asl	a
-	move	y:span_cross,x1
 	jsr	<span_div
 	move	a1,y:span_dldx
 
@@ -2933,20 +2914,18 @@ span_chain_left_up
 	mpy	x0,y1,a	b1,x1
 	jsr	<span_div
 	move	a1,y:span_dul_up
-	move	y:span_rows_up,b
 	move	y:span_sv1,a
 	move	y:span_sv0,x0
 	sub	x0,a
 	move	a1,x0
-	mpy	x0,y1,a	b1,x1
+	mpy	x0,y1,a			; X1 is still the row count (2.8e)
 	jsr	<span_div
 	move	a1,y:span_dvl_up
-	move	y:span_rows_up,b
 	move	y:span_sl1,a
 	move	y:span_sl0,x0
 	sub	x0,a
 	move	a1,x0
-	mpy	x0,y1,a	b1,x1
+	mpy	x0,y1,a
 	jsr	<span_div
 	move	a1,y:span_dll_up
 span_chain_left_low
@@ -2966,20 +2945,18 @@ span_chain_left_low_go
 	mpy	x0,y1,a	b1,x1
 	jsr	<span_div
 	move	a1,y:span_dul_low
-	move	y:span_rows_low,b
 	move	y:span_sv2,a
 	move	y:span_sv1,x0
 	sub	x0,a
 	move	a1,x0
-	mpy	x0,y1,a	b1,x1
+	mpy	x0,y1,a			; X1 is still the row count (2.8e)
 	jsr	<span_div
 	move	a1,y:span_dvl_low
-	move	y:span_rows_low,b
 	move	y:span_sl2,a
 	move	y:span_sl1,x0
 	sub	x0,a
 	move	a1,x0
-	mpy	x0,y1,a	b1,x1
+	mpy	x0,y1,a
 	jsr	<span_div
 	move	a1,y:span_dll_low
 	rts
@@ -2993,32 +2970,20 @@ span_div
 	; MAC-built sums already carry a <<1 and shift LEFT by the remaining k.
 	; Getting this wrong saturates the quotient at $7FFFxx -- exactly what
 	; the validation frames caught on first contact.
-	; Returns the quotient in A1.  Clobbers B, X1 and Y0.
-	clr	b
-	tst	a	b1,y:span_flip
-	jpl	<span_div_n_ok
-	neg	a
-	move	#>1,b
-	move	b1,y:span_flip
-span_div_n_ok
-	tfr	x1,b
-	tst	b
-	jpl	<span_div_d_ok
-	neg	b
-	move	b1,x1
-	move	y:span_flip,b
-	move	#>1,y0
-	eor	y0,b
-	move	b1,y:span_flip
-span_div_d_ok
+	; Returns the quotient in A1.  Clobbers B only (2.8e): X0, X1, Y0 and Y1
+	; all survive, which the callers below use.
+	; The signs are the DSP56000 manual's signed-divide idiom (2.8c): ABS
+	; makes the dividend positive while its parallel move copies the old
+	; sign to B, EOR leaves the quotient's sign in N, and neither the CCR
+	; mask, REP, DIV nor the register moves disturb N before the JPL.
+	abs	a	a,b
+	jeq	<span_div_done		; 0 / d: A is already the quotient
+	eor	x1,b
 	andi	#$fe,ccr
 	rep	#24
 	div	x1,a
-	move	a0,y0
-	move	y0,a
-	move	y:span_flip,b
-	tst	b
-	jeq	<span_div_done
+	move	a0,a			; 2.8e: straight across, Y0 is left alone
+	jpl	<span_div_done
 	neg	a
 span_div_done
 	rts
@@ -3269,8 +3234,7 @@ ss_bottom_ok
 
 	; Integer span: left = ceil(xl), right = ceil(xr) - 1.
 	move	y:<ss_xr,x0
-	mpy	x0,y1,b
-	move	y:<ss_xl,x0
+	mpy	x0,y1,b	y:<ss_xl,x0
 	mpy	x0,y1,a	b1,x1		; A1 = left, A0 = fraction << 12; X1 = ceil(xr)
 	move	a0,b
 	lsr	b	a1,x0		; X0 = left
@@ -3307,9 +3271,8 @@ ss_row_v
 	; The pixel loop carries V << 8, so its integer part is the top byte.
 	move	b1,x0
 	move	#>$80,x1
-	mpy	x1,x0,a
+	mpy	x1,x0,a	y:<ss_dv,x1
 	move	a0,b
-	move	y:<ss_dv,x1
 	move	#$ff0000,y0
 	do	r0,ss_pixels_end
 	move	r4,x0
@@ -3331,14 +3294,14 @@ ss_row_next
 	move	y:<ss_sr,x0
 	add	x0,a	(r7)+n7
 	move	a1,y:<ss_xr
+	; 2.8e: the level's step loads behind V's add, and V is stored by
+	; the level's add, which runs in B (dead between two rows).
 	move	y:<ss_vl,a
 	move	y:<ss_dvl,x0
-	add	x0,a
-	move	a1,y:<ss_vl
-	move	y:<ss_lvl,a
-	move	y:<ss_dlvl,x0
-	add	x0,a
-	move	a1,y:<ss_lvl
+	add	x0,a	y:<ss_dlvl,x0
+	move	y:<ss_lvl,b
+	add	x0,b	a1,y:<ss_vl
+	move	b1,y:<ss_lvl
 	nop
 ss_rows_end
 ss_half_end
@@ -3371,8 +3334,7 @@ ss_level_low
 	tfr	x1,a
 ss_level_high
 	move	#>$0f00,x1
-	and	x1,a		; level << 8
-	move	y:<ss_tint,x1
+	and	x1,a	y:<ss_tint,x1	; level << 8
 	add	x1,a
 	IF	HIRES
 	asl	a		; (tint << 4 | level) << 9
@@ -3563,15 +3525,19 @@ command_prepass
 	jset	#23,x:(r3),order_keys_skip
 	jsr	<prepass_unpack_indices
 	jsr	<make_triangle_zkey
+	; (key >> OT_KEY_SHIFT) << 12 is the unsigned key shifted left by
+	; 12 - OT_KEY_SHIFT with its low twelve bits cleared (2.8c): four
+	; shifts in place of twenty.  A2 carries what leaves A1, so the
+	; unsigned compare against the saturated bucket still sees it.
 	clr	a
 	move	y:triangle_zkey,a1
-	rep	#OT_KEY_SHIFT
-	lsr	a
-	move	#>OT_LENGTH-1,x0
+	rep	#12-OT_KEY_SHIFT
+	asl	a
+	move	#>$fff000,x0
+	and	x0,a
+	move	#>(OT_LENGTH-1)<<12,x0
 	cmp	x0,a
 	tgt	x0,a
-	rep	#12
-	asl	a
 	move	y:triangle_base,x0
 	add	x0,a
 	move	a1,x0

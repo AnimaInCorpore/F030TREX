@@ -164,7 +164,8 @@ trex.rotation_mode = "XYZ"
 trex.shape_key_add(name="Basis", from_mix=False)
 for target in data["targets"]:
     key = trex.shape_key_add(name="DSP " + target["name"], from_mix=False)
-    key.value, key.slider_min, key.slider_max = 0.0, -7.99, 7.99
+    peak = target.get("peak", 7.99)
+    key.value, key.slider_min, key.slider_max = 0.0, (-7.99 if peak > 1 else 0.0), peak
     for offset, delta in enumerate(target["deltas"]):
         index = target["first"] + offset
         key.data[index].co = Vector(m["vertices"][index]) + Vector(delta)

@@ -88,7 +88,16 @@ in [`TREX/m68030/trex_m68030.s`](TREX/m68030/trex_m68030.s).
 
 ## 2. Current measured baseline
 
-**Latest active baseline (2026-11-19): section 2.8a.** The pipeline is
+**Latest active baseline (2026-11-21): section 2.8e.** Exact shortenings of
+DSP per-triangle code (2.8c) and a parallel-move pass over it (2.8e), same
+pipeline and same picture. On the cycle-exact profile with Videl contention
+the diagnostic build measures **317.9 ms / 3.15 FPS** at share 184 (348.5 at
+168 before 2.8c) and the trail build of 6.6i **323.4 ms / 3.09 FPS** at share
+188 (352.4 at 164). Not re-measured after the change: the MMU-ledger profile,
+the release timing copy and the 640x400 pair without the backdrop; their
+figures below are 2.8a's.
+
+**Baseline before it (2026-11-19): section 2.8a.** The pipeline is
 7.4h's; the host now assembles the next chunk's list ahead of the hand-over
 and services the DSP during the framebuffer clear, and the span-stream share
 is 168 (176 at 640x400). On Hatari `c5d5bf34` the diagnostic build measures
@@ -4382,7 +4391,8 @@ python3 tools/dsp_pcprof.py report hatari_runs/hires.lst \
 
 For the default pair build `trex_m68030`, keep its listing the same way and
 drop `--dsp-name` and `--memsize`. The Hatari binary needs the profiler patch
-to `src/falcon/dsp.c`; without the variables it behaves as before.
+to `src/falcon/dsp.c`; without the variables it behaves as before. The patch is fork commit
+`24cd93e7`.
 
 ### 2.8a The chunk hand-over, shortened: 365.3 -> 348.5 ms and 617.3 -> 590.5 ms (2026-11-19)
 
@@ -4553,6 +4563,311 @@ python3 tools/patch_data_flag.py hatari_runs/handover_off.tos \
 ```
 
 Arm 2.8's profile (`tools/dsp_pcprof.py env`) for the DSP-side waits.
+
+### 2.8b The trail build's DSP profile: computing 80% of the frame (2026-11-21)
+
+**Question.** Where does the trail build of 6.6i spend its 352 ms, and is
+there a cheap gain left that keeps the picture?
+
+**Instrument.** 2.8's PC-range profile: commit `24cd93e7` of the Hatari
+fork ("falcon/dsp: PC-range clock profile behind HATARI_DSP_PCPROF"), one
+commit after the `c5d5bf34` this machine's F030Arcade checkout pinned until
+that day. It was built in a scratch copy for this run; the checkout was then
+updated and rebuilt, and the trail build measures the same 352.4 ms on it.
+With the profile armed the frame measures 352.4 ms, as without it.
+
+**Measured**, one run, 497 frames, cycle-exact Hatari, 16 MHz, 14 MiB, TOS
+4.02, gestures off; emulator only. Raw counters:
+[`docs/performance/dsp-pcprof-trail-2026-11-21.txt`](docs/performance/dsp-pcprof-trail-2026-11-21.txt).
+
+| DSP time per frame | ms | |
+|---|---:|---:|
+| Span setup (`make_triangle_span`, `span_div`, UV fetch) | 68.2 | 19.3% |
+| Stream walker, arithmetic | 62.6 | 17.7% |
+| Sort key and lighting (`make_triangle_zkey`, `_shade`) | 50.6 | 14.3% |
+| **Stream walker, waiting on the SSI transmitter** | **38.1** | 10.8% |
+| Area, bounding box, projected lookups | 34.8 | 9.8% |
+| **Host port: waiting for the host to send** | **27.2** | 7.7% |
+| Order keys and index reload | 16.0 | 4.5% |
+| Transform and project | 11.6 | 3.3% |
+| Everything else (dispatch, animation, morph) | 11.3 | 3.2% |
+| BUILD chunk loop and record pack | 10.8 | 3.0% |
+| Host port: word moves | 7.8 | 2.2% |
+| Host port: waiting for the host to read | 6.0 | 1.7% |
+| `prelight_run`'s own loop | 4.6 | 1.3% |
+| Band marking and `GET_BANDS` | 4.3 | 1.2% |
+| **Booked** | **353.8** | |
+| of which not computing (the three waits) | 71.3 | 20.2% |
+
+The wait for the host to send is 13.5 ms before `GET_TRIANGLES` (0.39 ms
+× 34.4 chunks), 5.5 ms before `PREPASS` and 4.6 ms before `BUILD`.
+
+Per frame the DSP streams 653 triangles as 5,275 spans and 27,201 pixels;
+the 68030 keeps about 480 records. The SSI wait is 37 clocks per pixel.
+
+**What it says.**
+- The frame is DSP-bound: the DSP computes for 282 of 352 ms. At 640×400
+  without the backdrop (2.8) it waited 36% of the time; here 20%.
+- The work is per triangle, not per pixel: setup, lighting, area and order
+  keys are 170 ms, and they do not shrink with the animal's size on screen.
+  That is why half the pixels bought only a quarter of the frame time.
+- The stream share cannot move it (6.6i's sweep): only the walker's 101 ms
+  follows the share, and the 68030 is busy too.
+
+**Candidates, none built, all estimates:**
+
+| Candidate | Most it could give | What it needs |
+|---|---:|---|
+| SSI transmit from a buffer by interrupt, so the walker never waits and the wire keeps sending during the next triangle's setup | 38 ms | built in 2.8d: exact, 1 ms, not adopted |
+| The hand-over left by 2.8a | 27 ms, of which 13.5 ms at the fetch | the host interrupt of the DSP port, or a second list and record buffer |
+| Shorter per-triangle code in span setup and lighting | unpriced | 2.8c took 17 ms this way, exactly |
+| Unrolled background restore (`delta_clear_bands` copies a longword per `DBRA`) | about 5 ms | measured in 2.8c: no gain, the copy is bus-bound |
+
+A reduced mesh for the far side of the lap would cut the per-triangle work
+directly, but it changes the picture and needs DSP memory for a second
+mesh.
+
+**Reproduction.** Build the fork at `24cd93e7` or later, then run the
+measured trail build with the variables of
+`python3 tools/dsp_pcprof.py env TREX/dsp/build/TREXDSP.LST` and report with
+`--frames` set to the run's frame count. The listing must be the trail
+image's: assemble `make trex_dsp_backdrop` last.
+
+### 2.8c Per-triangle DSP code, shortened exactly: 352.4 -> 333.9 ms and 348.5 -> 332.4 ms (2026-11-21)
+
+2.8b showed the trail frame is bound by the DSP's per-triangle arithmetic.
+This section removes instructions from it without changing one result bit.
+
+**What changed in `trex_dsp.asm`.**
+
+| Step | Change | Trail frame |
+|---|---|---:|
+| | 2.8b's build, share 164 | 352.4 ms |
+| 1 | `span_div`: the DSP56000 manual's signed-divide idiom. `ABS A A,B`, `EOR X1,B`, then the quotient's sign from N, in place of two tested negations and a flag kept in memory. About 13 divisions per surviving triangle | 345.8 |
+| | span-stream share 164 -> 172 for the trail build (172: 344.3, 180: 345.2, 188: 349.0, 196: 352.6) | 344.3 |
+| 2 | `span_div` returns at once for a zero dividend | 343.4 |
+| 3 | `lookup_projected_xy` inlined into `make_triangle_area`: no call, the index scaled by two shifts, x stored in the dual move that fetches y | 339.4 |
+| 4 | `lookup_projected_z` inlined into `make_triangle_zkey` the same way | 337.2 |
+| 5 | Lambert loop branch-free: `RND` already sets N and Z, so `TLE X1,A` zeroes a back-lit light, and the sum saturates with `TGT` instead of calling `shade_clamp_sum` | 335.0 |
+| 6 | Order keys: `(key >> 8) << 12` as four left shifts and a mask in place of twenty shifts | **333.9** |
+
+`lookup_projected_xy` is gone; `tools/dsp_pcprof.py` takes the area range
+from `make_triangle_area` when the label is absent. The trail image now
+ends at P:`$098E`.
+
+**Measured**, cycle-exact Hatari with Videl contention, 16 MHz, TOS 4.02,
+fork `24cd93e7`; emulator only, one run per row. Raw figures:
+[`docs/performance/dsp-micro-2026-11-21.json`](docs/performance/dsp-micro-2026-11-21.json).
+
+| Build | Before | After |
+|---|---:|---:|
+| Trail (6.6i), 14 MiB, about 9,500 VBLs | 352.4 ms (2.84 FPS) | **333.9 ms (2.99 FPS)** |
+| Diagnostic default, 4 MiB, 265 frames | 348.5 ms (2.87 FPS) | **332.4 ms (3.01 FPS)** |
+| Default host with `trex_dsp_cam.lod`, 265 frames | 350.4 ms | 333.6 ms |
+
+Trail stages after: `set_frame` 6.6, packets 203.1, clear 38.5, raster 85.4
+ms. DSP profile after step 5: span setup 57.9 ms (68.2 before), area 29.8
+(34.8), everything else 5.8 (11.3, where `lookup_projected_z` was booked);
+the lighting range stayed at 50.4 because the inlined depth lookup moved
+into it.
+
+The final build's profile (525 frames, 334.0 ms with the profile armed):
+the DSP books 334.9 ms a frame, computes for 262.8 and waits for 72.1 (SSI
+transmitter 40.0, host to send 26.5, host to read 5.6). At share 172 it
+streams 686 triangles as 5,528 spans and 28,635 pixels a frame. Raw counters:
+[`docs/performance/dsp-pcprof-trail-after-2026-11-21.txt`](docs/performance/dsp-pcprof-trail-after-2026-11-21.txt).
+Waits are 21.5% of the DSP's frame, so overlapping more of the two
+processors' work cannot take the frame below about 263 ms; the 68030's own
+idle time is not instrumented.
+
+**Gates.**
+- Trail: after every step the frame-sequence probe wrote a `fbseq.res`
+  **byte-identical for all 320 frames** (163,840,000 bytes) to the capture
+  taken before step 1.
+- Default: all **512 frame hashes** match the reference (`frmhash.res`
+  `0a3f2fa1...`); frame 100 is `d89958b3...3d16` and 9,049,666 pixels are
+  written over 265 frames, as before.
+- `trex_dsp_cam.lod`: frame 100 equal before and after.
+- Not gated: the 640x400 image without the backdrop (`TREXHIRS.LOD`). It
+  assembles from the same routines but was not rebuilt or captured.
+
+**Built, measured, rejected: an unrolled background restore.**
+`delta_clear_bands` copies one longword per `DBRA`; four per `DBRA` behind a
+data flag measured 351.9 against 352.0 ms, and 28.2 against 28.0 ms for the
+clear stage with the chunk service off. The copy is bound by the bus, not by
+the loop: about 15 cycles per longword. Removed. The same runs show that the
+clear stage's 38 ms is 28 ms of restore and shadow plus about 10 ms of chunk
+service booked to it.
+
+**Looked at, not built.**
+- *A larger lighting cache.* Simulated on the TMD's corner normals for four
+  trail samples: 128 entries hit 23-26% of corner references, 512 hit
+  31-35%, and a perfect cache 44-48%, because about 2,100 of 4,000
+  references are distinct normals. Not worth the X memory.
+- *Fewer `DIV` iterations.* The 24 steps are now most of a division; an
+  exact shorter form needs the quotient's bit length first.
+- *The walker's pixel loop.* It waits 37 clocks per pixel on the SSI
+  transmitter, so shortening its arithmetic only lengthens the wait.
+
+**Not established.** No physical Falcon has run it. The share optimum is
+the emulator's.
+
+**Reproduction.**
+
+```sh
+make DOSBOX=/path/to/DOSBox trex_dsp trex_m68030 trex_m68030_framehash
+python3 tools/measure_frames.py TREX/m68030/trex_m68030.tos \
+  TREX/dsp/trex_dsp.lod <new dir> \
+  --cpu-core cycle-exact --videl-contention on --frames 265 --timeout 2400
+make DOSBOX=/path/to/DOSBox trex_m68030_hires_backdrop trex_m68030_hires_backdrop_fbseq
+```
+
+### 2.8d What perfect overlap is worth, and a buffered SSI transmit: built, exact, not adopted (2026-11-21)
+
+**Question.** 2.8c leaves the DSP waiting 72 ms of a 334 ms trail frame.
+What does the frame gain if none of that waiting remained, and can the
+largest part, the SSI transmitter's 40 ms, be removed?
+
+**The ceiling, by what-if.** A scratch build of the emulator scales the
+DSP's clock (`HATARI_DSP_SPEED=<percent>` in `DSP_Run`, not in the fork; the
+SSI and the 68030 keep their time). A DSP that is 27% faster does in 263 ms
+what the real one does in 334, which is what removing every wait at no cost
+would amount to. The gated 2.8c pair, `span_stream_share` patched, one run
+each, cycle-exact, emulator only:
+
+| DSP clock | Share 172 | 196 | 220 | 256 |
+|---|---:|---:|---:|---:|
+| 100% | 333.9 ms | -- | -- | -- |
+| 127% | 320.7 | **299.9** | 308.2 | 317.4 |
+| 150% | 319.1 | -- | -- | -- |
+| 200% | 317.7 | -- | -- | -- |
+| 400% | 317.1 | -- | -- | 215.0 |
+
+- Perfect overlap is worth at most **34 ms: 333.9 -> 299.9 ms, 2.99 -> 3.33
+  FPS**, and only with the share moved to about 196.
+- With the DSP four times as fast and everything streamed the frame is
+  215.0 ms: the 68030's own floor for this scene (packets 158.3, clear
+  35.2, raster 14.6, `set_frame` 6.5).
+- At a fixed share a faster DSP stops helping at once (320.7 at 127%, 317.1
+  at 400%): the 68030 has no idle time to give.
+
+**Buffered transmit, as built.** The walker waits on the transmitter for
+every unit while the wire needs about 54 clocks a unit; between triangles
+the wire is idle. The experiment stores units in a ring and lets a fast
+interrupt send them, so the wire keeps running through the next triangle's
+setup. The 56001 leaves little room for it, and the design is shaped by
+that:
+- **Interrupt:** two words at the SSI transmit vectors (P:`$10` and `$12`),
+  no stacking: `movep x:(r7)+,x:m_tx` and `movep x:(r7)+,x:m_crb`. Every ring
+  entry is a unit and a CRB word. The CRB word behind the last unit written
+  has TIE clear, so the interrupt switches itself off there; no compare, no
+  saved register.
+- **Writer:** `bclr #14,x:(r6)-`, `move a1,x:(r6)-`, `bset #14,x:(r6)+n6`:
+  this entry stops the stream, then the entry before it no longer does. The
+  third header unit and the terminator restart the interrupt directly behind
+  their own write, where the unit cannot have left yet.
+- **Registers:** R7/M7 belong to the interrupt during BUILD and R6/M6 to the
+  writer, so the row and the span's first x moved to on-chip cells.
+- **Ring:** 478 words (239 units) at X:`$3800`, the one modulo base inside
+  the spare X words. A room check per span, and per 32 pixels of a longer
+  one, waits when fewer than 73 words are free.
+- **Program:** ends at P:`$09BA` after `lookup_projected_z` and
+  `shade_clamp_sum`, both dead since 2.8c, were removed; five words are left.
+- **Scope:** the 640x400 backdrop image only (`SSIRING`).
+
+**Measured.**
+
+| | 2.8c | Ring |
+|---|---:|---:|
+| Frame, share 172 | 333.9 ms | 332.9 ms |
+| Frame, share 196 / 220 / 256 | -- | 333.1 / 341.4 / 352.3 |
+| DSP: walker arithmetic | 65.7 ms | 88.2 |
+| DSP: waiting on the SSI transmitter | 40.0 | 0.5 |
+| DSP: everything else (holds the interrupt's two words) | 5.8 | 17.3 |
+| DSP: waiting for the host to send | 26.5 | 31.0 |
+
+- **Gate:** `fbseq.res` byte-identical for all 320 frames; the record
+  address and the read position agree in all 526 frames.
+- **Why 1 ms:** the wait is gone, but the interrupt costs 11.5 ms (8 clocks
+  for each of 45,900 units), the room checks, block logic and row counter
+  about 11 ms, and waiting for room in the ring about another 11 ms. The DSP
+  saves 5.5 ms, and the host does not turn it into frame time.
+- **Not adopted.** The source is back at 2.8c's and reassembles the gated
+  image. The change is kept as
+  [`docs/performance/ssi-ring-2026-11-21.patch`](docs/performance/ssi-ring-2026-11-21.patch).
+
+**What would make it pay** (estimates): a room check per triangle in place
+of one per span and a ring that rarely fills could bring the DSP's saving to
+about 20-25 ms, which the what-if curve turns into roughly 10 ms of frame.
+It would still need the emulator fix below and a run on a real Falcon.
+
+**Emulator finding.** On a 56001 the SSI transmit interrupt request is TDE
+itself: setting TIE while the transmit register is empty interrupts at once.
+Hatari (fork `24cd93e7`) raises the request only when a word has been
+transmitted, so the first unit after reset never starts and the ring build
+hangs. The ring runs were made on a scratch build with
+[`docs/performance/hatari-ssi-tie-2026-11-21.patch`](docs/performance/hatari-ssi-tie-2026-11-21.patch)
+(six lines in `dsp_cpu.c`'s CRB write). The unpatched and the patched
+emulator time the 2.8c pair identically, 333.9 ms. Not applied to the fork.
+
+**Not established.** No physical Falcon has run an interrupt-driven
+handshaked transmit; whether the frame line and TUE behave as assumed there
+is open. Raw figures:
+[`docs/performance/overlap-2026-11-21.json`](docs/performance/overlap-2026-11-21.json).
+
+### 2.8e A parallel-move pass over the per-triangle code: 333.9 -> 323.4 ms and 332.4 -> 317.9 ms (2026-11-21)
+
+2.8c shortened the per-triangle code by changing idioms. This pass leaves
+the arithmetic alone and removes instructions around it: operands load in
+the parallel slot of the instruction before, results are stored by the
+instruction after, registers a subroutine keeps are no longer reloaded.
+
+**What changed in `trex_dsp.asm`.**
+
+| Step | Change | Trail frame |
+|---|---|---:|
+| | 2.8c, share 172 | 333.9 ms |
+| 1 | `make_triangle_area`: array base hoisted to Y1, N0 steps over z, y stored by the flags `ADD`; the four deltas keep the first corner in X0/Y0 and are stored by each other's `SUB`. `make_triangle_zkey`: the three z are summed in B as they are read and `triangle_z0..z2` are no longer written (nothing read them) | 330.1 |
+| 2 | Walker rows: the level's step and V's store ride on the two row-end `ADD`s, `ss_xl` and `ss_dv` on the `MPY` before them, the tint on the header's `AND`. Span setup: row counts, cross product and corner levels load and store in parallel slots | 328.8 |
+| 3 | `span_div` returns through `move a0,a` and keeps X0, X1, Y0 and Y1. The three gradients hold k0 and k1 in Y0 and Y1 and take the cross in the last `MAC`'s slot; the left-chain steps stop reloading the row count | 327.8 |
+| 4 | Lighting: cache constants as immediate parallel moves, `RND`'s flags used directly, one third and the saturation limit loaded once for both channels with green in B and `TGT` in place of two branches | 326.5 |
+| | span-stream share 172 -> 188 (164: 334.4, 180: 323.8, 188: 323.4, 196: 326.9, 204: 330.8) | **323.4** |
+
+The trail image ends at P:`$0951`, 110 words below the ceiling (`$098E`
+after 2.8c).
+
+**Measured**, cycle-exact Hatari with Videl contention, 16 MHz, TOS 4.02,
+fork `24cd93e7`; emulator only, one run per row. Raw figures:
+[`docs/performance/dsp-parallel-moves-2026-11-21.json`](docs/performance/dsp-parallel-moves-2026-11-21.json).
+
+| Build | 2.8c | After |
+|---|---:|---:|
+| Trail (6.6i), 14 MiB, about 9,500 VBLs | 333.9 ms (2.99 FPS) | **323.4 ms (3.09 FPS)** |
+| Diagnostic default, 4 MiB, 265 frames, share 168 | 332.4 ms (3.01 FPS) | 326.6 ms (3.06 FPS) |
+| Diagnostic default, share 184 | -- | **317.9 ms (3.15 FPS)** |
+| Default host with `trex_dsp_cam.lod`, share 168 | 333.6 ms | 327.7 ms |
+
+The default build's share sweep with the new image: 168: 326.6, 176: 320.6,
+184: 317.9, 192: 319.7, 200: 322.4, 208: 324.3, 224: 328.1 ms. Its default
+is now 184 (168 since 2.8a). Stages at 184: `set_frame` 13.6, packets
+206.1, clear 23.9, raster 74.0 ms.
+
+**Gates.**
+- Trail: after every step, and at share 188, `fbseq.res` is
+  **byte-identical for all 320 frames** to the capture taken before 2.8c.
+- Default: all **512 frame hashes** match the reference (`frmhash.res`
+  `0a3f2fa1...`) at share 168 and at 184; frame 100 is `d89958b3...3d16`
+  and 9,049,666 pixels are written over 265 frames at every share swept.
+- `trex_dsp_cam.lod`: frame 100 and the pixel count as before.
+- Not gated: the 640x400 image without the backdrop (`TREXHIRS.LOD`), not
+  rebuilt; its share stays 176.
+
+**Left.** The vertex sort at the top of `make_triangle_span` still copies
+six words and swaps in memory, `span_uv_fetch` and `shade_quantize_level`
+are still called, and the normal unpack is untouched. Unpriced.
+
+**Not established.** No physical Falcon has run it. The share optima are
+the emulator's.
 
 ## 3. Rasterizer cost model
 
@@ -8413,8 +8728,8 @@ no longer computes weights, mixes run lists or keeps a pose cache.
   matrix the demo used has determinant −1.
 - **Animation:** the T-Rex's keyed location and Z rotation, plus one
   `pose NNN` shape key per displayed sample. Shape keys named `DSP …` are
-  optional DSP morph targets; the seed adds PS1 TANM targets 5–8, all at
-  weight 0.
+  optional DSP morph targets; the seed adds PS1 TANM targets 4–8, all at
+  weight 0. Those named `DSP random …` are run-time gestures (6.6i).
 - **Lens:** a fixed horizontal-fit camera, 1,320/1,219 pixel focal lengths
   through the pixel aspect.
 - **Shadow:** a `Ground shadow` plane whose scale gives the ellipse
@@ -8533,6 +8848,22 @@ generators (`make_backdrop.py`, `make_backdrop_path.py`,
 `blender_check_scene.py` renders chosen frames, and
 `compare_blender_render.py` compares them with an `fbseq.res` capture.
 [Blender-source checks and timing](docs/performance/blender-source-2026-11-20.json)
+
+**Host toolchain (checked 2026-11-21, macOS arm64, Homebrew Blender 5.3.0).**
+- **Result:** `make backdrop` reproduces every committed trail asset
+  byte for byte, and `make model_export` on a copy of the scene writes a
+  complete model directory.
+- **Exit code:** Blender exits 0 after a Python error in a `--python`
+  script, so a failed export used to pass `make`. The Makefile's `BLENDER`
+  now carries `--python-exit-code 1`.
+- **Pillow:** the Python bundled with Blender's macOS build has no Pillow.
+  `blender_seed_data.py` now imports it only where it writes PNGs, so
+  `make backdrop` needs none. `blender_export_model.py` and
+  `blender_rig_creature.py` still need it; `make blender_pillow` installs
+  it into Blender's user `scripts/modules` directory, which Blender puts on
+  `sys.path` itself.
+- **DSP image:** DOSBox-X needs the `DOSBOX_FLAGS` given in the Makefile, or
+  it waits at a start-up prompt and never runs `BUILD.BAT`.
 
 **DSP capacity for a new model** (computed from the `ds`/`=` allocations in
 `trex_dsp.asm`, ORDERED/SPANSTREAM images):
@@ -8713,6 +9044,146 @@ On cycle-exact Hatari:
 - **Loop:** all 159 post-wrap frames match.
 - **Speed:** 320 frames averaged **346.6 ms/frame (2.89 FPS)**: packets
   215.4 ms, clear 47.4 ms, rasterizer 77.8 ms.
+
+### 6.6i Wider lap, secondary motion and random gestures
+
+*2026-11-21.* This replaces the route and the sample, memory and timing
+figures of 6.6f–6.6g; the pipeline of 6.6g is unchanged. The 6.6g validation
+numbers describe the previous scene.
+
+**Route** ([`tools/make_backdrop_path.py`](tools/make_backdrop_path.py)).
+- **Before:** a 16-sample approach, a slow pivot close to the camera (2.3°
+  per sample at a third of the walking speed), a fast return and a
+  four-stride lap of about 3 m at the hips. The speed tripled within three
+  samples after the pivot and the turn rate dipped to 0.5° just before the
+  lap.
+- **Now:** two strides straight in, one and a half strides in which the turn
+  rate rises as a smoothstep to the lap's, then a six-stride lap. The root
+  circles at 5.74–5.96 m. Every stride shows 12 samples, so the lap turns 5°
+  per sample as before.
+- **Placement:** the route is turned by `ROUTE_YAW` (14°) and the hips' lap
+  centre is put at `LAP_CENTRE`, 25 m from the camera on the view axis. The
+  nearest pass is about 19 m instead of 12 m; a lap this wide leaves the
+  picture at the sides when it is closer.
+- **Samples:** 114 (lap from 42), down from 161 (lap from 89).
+- **Feet:** a planted foot moves 2–11 cm per sample against 51 cm of body
+  travel, the same proportion as before (1–8 cm against 39 cm).
+- **Removed:** the pivot's gathered steps, its slowed presentation and the
+  look-ahead window of `trail_weights` that belonged to it.
+
+**The head belongs to the Falcon.** The baked walk carries the body: legs,
+torso and tail. Nothing in it turns, raises or bends the head or neck.
+- **Why:** the gestures are the PS1 morph deltas, authored for the head in
+  the gait's own frame. Added to a head the bake has already turned or
+  raised, the jaw travels in the wrong direction and shears off the skull.
+- **Removed from the bake:** the raised neck on the far side of the lap
+  (0.58 + 0.85 rad), the 37° look into the lap, the keyed gaze weights, and
+  the neck bend an earlier version of the secondary motion added.
+- **Kept:** the gait's own head bob and the small stabilising roll.
+
+**Secondary motion** ([`tools/blender_natural_motion.py`](tools/blender_natural_motion.py)).
+The tail rode rigidly on the yaw. The script bends it in every baked pose:
+- **Turn:** up to 12° into the turn.
+- **Steps:** up to 10° with the steps.
+- **Lag:** both arrive up to four samples later toward the tip, and the tip
+  follows the hip's bob.
+- **Untouched:** the 1,157 vertices ahead of rest Y 4.0 m (head, torso and
+  legs), so foot contact, route and shadow do not change.
+- **Loop:** lap samples read their neighbours around the lap, and the last 15
+  approach samples blend into that, so the lap closes exactly.
+
+No Blender addon is involved. The poses are still baked, so this costs the
+Falcon nothing.
+
+**Random gestures.** The baked walk repeats with the lap; the head must not.
+- **Scene:** shape keys named `DSP random <group> …` are gestures. The seed
+  makes five from the PS1 targets: `jaw` (target 4, the mouth opens), `snarl`
+  (5, the lips draw back off the teeth), `look right` (6), `brow` (7) and
+  `look left` (8). They stay at 0 in the scene. A key's slider maximum is its
+  peak weight, 1.0 for all five.
+- **Groups:** the first word is the group. Gestures of one group never
+  overlap, so the head cannot look left and right at once. Groups run
+  independently, so it can glance with its mouth open.
+- **Export:** `backdrop_gestures.inc` holds one row per gesture (target,
+  peak Q12 weight, group, attack, shortest hold, hold range mask, release,
+  extra rest, in samples), ended by −1, and `GESTURE_GROUPS`. `backdrop_targets.bin` is
+  unchanged in format and now carries five targets (9,660 bytes).
+- **Timing per group** (`GESTURE_TIMING` in the exporter):
+
+  | Group | Attack | Hold | Release | Extra rest |
+  |---|---:|---:|---:|---:|
+  | `look` | 2 | 2–5 | 3 | 0 |
+  | `jaw` | 1 | 1–2 | 2 | 16 |
+  | `snarl` | 2 | 2–5 | 2 | 0 |
+  | `brow` | 1 | 1–2 | 1 | 0 |
+
+  The jaw's rest doubles its expected cycle from 16 to 32 samples (cost
+  model from the timings, not counted in a run): the mouth opens half as
+  often as without it.
+
+- **68030:** `gesture_advance` runs once per displayed sample, with one
+  channel per group. A channel idles for 3–10 samples plus the last
+  gesture's extra rest, then draws a random
+  row each sample until one of its own group comes up. It ramps that gesture
+  to 50–100% of its peak, holds it and releases it. `trail_send_targets`
+  adds each channel's weight to its target's keyed weight. The DSP program
+  is unchanged.
+- **Random numbers:** xorshift32 over `gesture_seed`.
+- **`gesture_enabled`:** one data longword, the same `dc.l` in every variant.
+  1 (the `TREX_RUN` viewing build) seeds from `_hz_200`; 2 uses the fixed
+  seed, for repeatable captures; 0 (measured and probe builds) plays none, so
+  those builds still replay the scene exactly.
+- **Limit:** the deltas are linear and add. A full glance with a fully open
+  jaw moves the jaw up to about 10 cm sideways off the skull's axis. The PS1
+  original overlaps the same targets the same way.
+
+**Memory.**
+
+| | Before | Now |
+|---|---:|---:|
+| `backdrop_poses.bin` | 1,329,216 bytes (161 poses) | 932,928 bytes (113 unique of 114) |
+| `backdrop_targets.bin` | 8,910 | 9,660 |
+| `backdrop_path.bin` | 8,388 | 5,944 |
+| `backdrop_shadow.bin` | 37,600 | 20,644 |
+| Viewing TOS text/data/BSS | 16,090 / 2,625,830 / 4,861,030 | 16,538 / 2,211,686 / 4,861,030 |
+
+**Validation on cycle-exact Hatari** (patched F030Arcade build, 16 MHz, DSP
+emulated, 14 MiB, TOS 4.02; emulator only, no physical Falcon):
+- **Loop:** in the probe build with gestures off, all 206 post-wrap frames of
+  a 320-frame capture equal their lap counterparts.
+- **Gestures:** the same probe with `gesture_enabled` patched to 2 differs
+  from it in 230 of 320 frames, by up to 12,718 pixels. Frames 14, 34, 45,
+  51, 90, 107, 118 and 150 were inspected: level head, open mouth, bared
+  teeth and glances, no tearing.
+  [Capture at 6 fps](docs/previews/trex-gestures-hatari.mp4).
+- **Since 2.8e** the measured build averages **323.4 ms/frame (3.09 FPS)**
+  at share 188 (333.9 at 172 after 2.8c); the figures below are the ones
+  before both.
+- **Timing:** the measured build averaged **352.4 ms/frame (2.84 FPS)** over
+  497 frames (353.0 ms over 496 in the build before the jaw's extra rest).
+  Patched to play gestures, that earlier build averaged **357.7 ms (2.80
+  FPS)** over 490 frames: `set_frame` 6.7 → 10.2 ms. With the jaw resting
+  longer the gesture cost can only be lower; not remeasured.
+- **Stream share, swept for this route** (`span_stream_share` patched on the
+  measured build, one run each):
+
+  | Share | 96 | 128 | 144 | 160 | **164** | 192 | 208 | 224 |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|
+  | ms/frame | 424.7 | 383.8 | 364.2 | 354.2 | **352.4** | 359.9 | 364.7 | 368.9 |
+
+  The trail build's 164 stays the optimum although the animal now covers
+  half the pixels. Nothing to gain there.
+- **Not comparable with 6.6g's 462.4 ms:** the animal is farther away and
+  writes 43,600 pixels per frame instead of 80,612.
+- **Not done:** Blender-against-Hatari silhouette comparison for the new
+  route, and a watched run of the timer-seeded viewing build.
+
+[Measurements](docs/performance/trail-gestures-2026-11-21.json)
+
+**Reproduction.** `make blender_seed` regenerates the scene (route, gait,
+then the secondary motion), `make backdrop` exports it, and the 6.6b targets
+build it. For a repeatable gesture capture, patch a copy:
+`python3 tools/patch_data_flag.py <copy.tos> <build .lst> gesture_enabled 2 0`.
 
 ### 6.7 Texture and CLUT reads
 

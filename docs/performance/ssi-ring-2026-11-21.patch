@@ -1,0 +1,420 @@
+--- a/TREX/dsp/trex_dsp.asm
++++ b/TREX/dsp/trex_dsp.asm
+@@ -101,6 +101,14 @@
+ ; from.  ASM56000 conditionals are kept flat here on purpose: PRELIGHT_SEQ is
+ ; "prelight without ORDERED", NOPREPASS is "no occlusion sweep".
+ NOPREPASS	equ	SSIRECORD+ORDERED
++; 2.8d: the span stream leaves through a ring buffer and a fast SSI transmit
++; interrupt instead of a wait per unit.  Only where the program and the X pad
++; have the room: the 640x400 backdrop image.
++SSIRING		equ	SPANSTREAM*HIRES*NOFOG
++SS_RING		equ	$3800		; a multiple of 1,024, the modulo base rule
++SS_RING_WORDS	equ	478		; unit and SSI control word per entry
++SS_BLOCK	equ	32		; pixels written per room check
++SS_ROOM		equ	2*(SS_BLOCK+4)+1	; three header units, a block, the terminator
+ PRELIGHT_SEQ	equ	PRELIGHT-ORDERED
+ 	IF	ORDERED*SSIRECORD
+ 	FAIL	'ORDERED and the SSI record transport are separate images'
+@@ -497,6 +505,18 @@
+ 	org	p:$0
+ 
+ 	jmp	<main
++
++	IF	SSIRING
++; SSI transmit data, and transmit data with exception: a fast interrupt, two
++; words and no stacking.  The next unit goes to the transmitter and the word
++; stored behind it to CRB: $5A00 keeps the interrupt on, $1A00 -- behind the
++; last unit written so far -- switches it off until the walker restarts it.
++	org	p:$10
++	movep	x:(r7)+,x:m_tx
++	movep	x:(r7)+,x:m_crb
++	movep	x:(r7)+,x:m_tx
++	movep	x:(r7)+,x:m_crb
++	ENDIF
+ 
+ 	org	p:$40
+ 
+@@ -514,6 +534,16 @@
+ 	movep	#$1a00,x:m_crb
+ 	movep	#$0020,x:m_pcd
+ 	ENDIF
++	IF	SSIRING
++	; Every ring word starts as the interrupt-off control word; the walker
++	; only ever flips bit 14 (TIE) of the control slots.
++	move	#SS_RING,r0
++	move	#>$1a00,x0
++	rep	#SS_RING_WORDS
++	move	x0,x:(r0)+
++	movep	#$3000,x:m_ipr		; SSI at interrupt priority level 2
++	andi	#$fc,mr			; unmask
++	ENDIF
+ 
+ main_loop
+ 	jsr	<receive_word
+@@ -1153,6 +1183,19 @@
+ 	move	a1,y:triangle_index
+ 	move	a1,y:triangle_out_count
+ 	move	#triangle_out,r1
++	IF	SSIRING
++	; The ring is empty and the interrupt off between chunks (ss_flush), so
++	; both ends restart at its base.  R7/M7 are the interrupt's from here to
++	; the reply; nothing BUILD calls touches them.
++	move	#SS_RING,r7
++	move	#SS_RING_WORDS-1,m7
++	move	#>SS_RING+1,x0
++	move	x0,y:<ss_wr
++	; M6 stays the ring's modulus for good: R6's other users (area, depth
++	; key, lighting) step through a few on-chip cells far below a wrap.
++	move	#SS_RING_WORDS-1,m6
++	move	#4,n6
++	ENDIF
+ 
+ 	; r2 -> triangle_indices + 3 * triangle_base
+ 	move	y:triangle_base,a
+@@ -1476,7 +1519,16 @@
+ 	; The acknowledgement tells the host that this chunk's spans are in its
+ 	; record window, so the last word has to have left the transmitter.
+ ss_flush
++	IF	SSIRING
++	; The interrupt clears TIE behind the last unit; then that unit has
++	; to leave the transmitter as before.
++	jset	#14,x:m_crb,ss_flush
++ss_flush_sent
++	jclr	#m_tde,x:m_sr,ss_flush_sent
++	move	#$ffff,m7
++	ELSE
+ 	jclr	#m_tde,x:m_sr,ss_flush
++	ENDIF
+ 	ENDIF
+ 	; The acknowledgement carries the SURVIVOR count, not the chunk size:
+ 	; Dsp_BlkUnpacked transfers a word count fixed before the call, so the
+@@ -2335,22 +2387,6 @@
+ 	move	a1,y:triangle_shade
+ 	rts
+ 
+-shade_clamp_sum
+-	; B holds one channel's sum of clamped dot products, and it CAN exceed 1.0:
+-	; the vectors are normalised on luminance, and the key light is redder than
+-	; its own luminance, so a face pointing straight at it reaches 1.09 in red.
+-	; Storing B1 alone would drop the extension byte and wrap that to -0.91,
+-	; putting the brightest faces in the darkest bank -- a shadow exactly where
+-	; the light is strongest, on a flat patch of the snout.  Saturating here is
+-	; also what the PS1 does; it clamps every colour channel to 255.
+-	tfr	b,a
+-	move	#>$7fffff,x0
+-	cmp	x0,a
+-	jle	<shade_clamp_done
+-	move	x0,a
+-shade_clamp_done
+-	rts
+-
+ shade_quantize_level
+ 	; Luminance of the sums in shade_sum_r/g, clamped and quantized to a
+ 	; SHADE_BITS level in a1.  Shared by the three corner passes and the
+@@ -3090,6 +3126,11 @@
+ ; Clobbers A, B, X0, X1, Y0, Y1.
+ ; -----------------------------------------------------------------------------
+ span_stream_walk
++	IF	SSIRING
++	; R6 writes the ring: it rests on the control slot of the entry to come.
++	move	y:<ss_wr,r6
++	move	#SS_ROOM,n0
++	ENDIF
+ 	move	#>$800,y1
+ 	move	#>$80,x1
+ 	move	y:span_sx0,x0
+@@ -3113,11 +3154,13 @@
+ 	move	a0,y:<ss_dv		; the pixel loop steps V << 8
+ 	move	y:span_dudx,x0
+ 	move	x0,n4
++	IF	!SSIRING
+ 	IF	HIRES
+ 	move	#>1,n7		; R7 is the row itself
+ 	ELSE
+ 	move	#>$100,n7
+ 	ENDIF
++	ENDIF
+ 	move	y:triangle_shade,a
+ 	move	#>$30,x0
+ 	and	x0,a
+@@ -3223,10 +3266,43 @@
+ 	move	x0,y:<ss_dlvl
+ 	jsr	<ss_half
+ ss_walk_end
++	IF	SSIRING
++	jsr	<ss_room
++	move	#$ffff00,x0		; end of the triangle
++	bclr	#14,x:(r6)-
++	move	x0,x:(r6)-
++	bset	#14,x:(r6)+n6
++	bset	#14,x:m_crb
++	move	r6,y:<ss_wr
++	rts
++
++; Wait until the ring has N0 - 1 free words.  With D = R7 - R6 (the reader
++; less the writer's control slot, always odd), the free count less the one
++; entry kept apart is D - 1, plus the ring size when that is negative.
++; While it waits the ring holds unsent units, so restarting the interrupt
++; cannot send a stale word -- and an interrupt that stopped behind a pixel
++; unit, which is written without a restart, would otherwise never resume.
++; Clobbers A and X0.
++ss_room_wait
++	bset	#14,x:m_crb
++ss_room
++	move	r7,a
++	move	r6,x0
++	sub	x0,a
++	jgt	<ss_room_ahead
++	move	#>SS_RING_WORDS,x0
++	add	x0,a
++ss_room_ahead
++	move	n0,x0
++	cmp	x0,a
++	jlt	<ss_room_wait
++	rts
++	ELSE
+ ss_wait_end
+ 	jclr	#m_tde,x:m_sr,ss_wait_end
+ 	movep	#$ffff00,x:m_tx		; end of the triangle
+ 	rts
++	ENDIF
+ 
+ ; One trapezoid half: ss_rows rows from row ss_y, chains continuing in place.
+ ss_half
+@@ -3250,9 +3326,13 @@
+ 	jle	<ss_half_end
+ 	move	a1,y0		; rows to walk
+ 	move	y:<ss_y,x0
+-	IF	HIRES
++	IF	SSIRING
++	move	x0,y:<ss_row		; y; R7 is the interrupt's
++	ENDIF
++	IF	HIRES*(1-SSIRING)
+ 	move	x0,r7		; y
+-	ELSE
++	ENDIF
++	IF	!HIRES
+ 	move	#>$80,x1
+ 	mpy	x1,x0,b
+ 	move	b0,r7		; y << 8
+@@ -3283,10 +3363,15 @@
+ 	jmi	<ss_left_clip
+ 	sub	x0,b		; pixels in the span
+ 	jle	<ss_row_next
+-	IF	HIRES
++	IF	SSIRING
+ 	move	b1,r0		; R0 = pixel count
++	move	x0,y:<ss_pos		; x of the first pixel; R6 writes the ring
++	ENDIF
++	IF	HIRES*(1-SSIRING)
++	move	b1,r0		; R0 = pixel count
+ 	move	x0,r6		; x of the first pixel
+-	ELSE
++	ENDIF
++	IF	!HIRES
+ 	move	r7,a
+ 	add	x0,a	b1,r0		; y << 8 | x; R0 = pixel count
+ 	move	a1,r6
+@@ -3306,16 +3391,48 @@
+ 	move	a0,b
+ 	move	y:<ss_dv,x1
+ 	move	#$ff0000,y0
++	IF	SSIRING
++	; A span longer than SS_BLOCK goes block by block, each after its own
++	; room check; ss_more holds what is left, and zero for the usual case.
++ss_run_split
++	move	r0,a
++	move	#>SS_BLOCK,x0
++	sub	x0,a
++	jgt	<ss_run_long
++	clr	a
++ss_run
++	move	a1,y:<ss_more
+ 	do	r0,ss_pixels_end
+ 	move	r4,x0
+ 	tfr	b,a	(r4)+n4
+ 	and	y0,a
+ 	or	x0,a		; V integer << 16 | U, the low byte never leaves the chip
++	bclr	#14,x:(r6)-		; this entry ends the stream for now
++	move	a1,x:(r6)-
++	bset	#14,x:(r6)+n6		; and the one before it no longer does
++	add	x1,b
++ss_pixels_end
++	move	y:<ss_more,a
++	tst	a
++	jeq	<ss_row_next
++	move	a1,r0
++	jsr	<ss_room		; A and X0 only; B, X1 and Y0 carry the span
++	jmp	<ss_run_split
++ss_run_long
++	move	x0,r0
++	jmp	<ss_run
++	ELSE
++	do	r0,ss_pixels_end
++	move	r4,x0
++	tfr	b,a	(r4)+n4
++	and	y0,a
++	or	x0,a		; V integer << 16 | U, the low byte never leaves the chip
+ ss_pixel_wait
+ 	jclr	#m_tde,x:m_sr,ss_pixel_wait
+ 	movep	a1,x:m_tx
+ 	add	x1,b
+ ss_pixels_end
++	ENDIF
+ 
+ ss_row_next
+ 	move	y:<ss_xl,a
+@@ -3324,8 +3441,17 @@
+ 	move	a1,y:<ss_xl
+ 	move	y:<ss_xr,a
+ 	move	y:<ss_sr,x0
++	IF	SSIRING
++	add	x0,a
++	move	a1,y:<ss_xr
++	move	y:<ss_row,a
++	move	#>1,x0
++	add	x0,a
++	move	a1,y:<ss_row
++	ELSE
+ 	add	x0,a	(r7)+n7
+ 	move	a1,y:<ss_xr
++	ENDIF
+ 	move	y:<ss_vl,a
+ 	move	y:<ss_dvl,x0
+ 	add	x0,a
+@@ -3344,6 +3470,9 @@
+ ; R7 = y, R6 = x.
+ ; Clobbers A, X0 and X1; leaves B, Y0 and Y1 alone.
+ ss_header
++	IF	SSIRING
++	jsr	<ss_room		; A and X0 only
++	ENDIF
+ 	IF	HIRES
+ 	move	r0,a
+ 	move	#>1,x1
+@@ -3351,10 +3480,19 @@
+ 	move	a1,x0
+ 	move	#>$80,x1
+ 	mpy	x1,x0,a
++	IF	SSIRING
++	; The third header unit restarts the interrupt right behind its own
++	; write: within that distance the unit cannot have been sent, so the
++	; ring is not empty and no stale word can leave.
++	bclr	#14,x:(r6)-
++	move	a0,x:(r6)-
++	bset	#14,x:(r6)+n6
++	ELSE
+ ss_header_wait0
+ 	jclr	#m_tde,x:m_sr,ss_header_wait0
+ 	movep	a0,x:m_tx
+ 	ENDIF
++	ENDIF
+ 	move	y:<ss_lvl,a
+ 	tst	a
+ 	jpl	<ss_level_low
+@@ -3371,7 +3509,11 @@
+ 	add	x1,a
+ 	IF	HIRES
+ 	asl	a		; (tint << 4 | level) << 9
++	IF	SSIRING
++	move	y:<ss_row,x1
++	ELSE
+ 	move	r7,x1
++	ENDIF
+ 	add	x1,a		; | y
+ 	ELSE
+ 	move	r0,x1
+@@ -3380,6 +3522,18 @@
+ 	move	a1,x0
+ 	move	#>$80,x1
+ 	mpy	x1,x0,a		; aligned to the transmitter's top sixteen bits
++	IF	SSIRING
++	bclr	#14,x:(r6)-
++	move	a0,x:(r6)-
++	bset	#14,x:(r6)+n6
++	move	y:<ss_pos,x0
++	mpy	x1,x0,a
++	bclr	#14,x:(r6)-
++	move	a0,x:(r6)-
++	bset	#14,x:(r6)+n6
++	bset	#14,x:m_crb
++	rts
++	ELSE
+ ss_header_wait1
+ 	jclr	#m_tde,x:m_sr,ss_header_wait1
+ 	movep	a0,x:m_tx
+@@ -3389,6 +3543,7 @@
+ 	jclr	#m_tde,x:m_sr,ss_header_wait2
+ 	movep	a0,x:m_tx
+ 	rts
++	ENDIF
+ 
+ ; Left edge off screen: the span starts at column zero and U/V advance by
+ ; the clipped distance as well as by the prestep.
+@@ -3398,9 +3553,14 @@
+ 	jle	<ss_row_next
+ 	neg	a	b1,r0		; clipped pixels; R0 = pixel count
+ 	move	a1,y:ss_clip
+-	IF	HIRES
++	IF	SSIRING
++	move	#0,x0
++	move	x0,y:<ss_pos		; column zero
++	ENDIF
++	IF	HIRES*(1-SSIRING)
+ 	move	#0,r6		; column zero
+-	ELSE
++	ENDIF
++	IF	!HIRES
+ 	move	r7,x0
+ 	move	x0,r6		; position unit: column zero
+ 	ENDIF
+@@ -3473,21 +3633,6 @@
+ 	move	y:<ss_y,a
+ 	jmp	<ss_top_ok
+ 	ENDIF
+-lookup_projected_z
+-	; x0 = vertex index, returns z in x0.  The record base must be folded
+-	; into the address: writing the scaled index straight into R0 would
+-	; address X:$0002 upwards instead of the projected-vertex array.
+-	move	x0,a
+-	add	x0,a
+-	add	x0,a
+-	add	x0,a
+-	move	#projected_vertices+2,x1
+-	add	x1,a
+-	move	a1,r0
+-	nop
+-	move	x:(r0),x0
+-	rts
+-
+ ; -----------------------------------------------------------------------------
+ ; Occlusion prepass
+ ;
+@@ -4759,7 +4904,15 @@
+ 	DUP	DC_BANDS
+ 	dc	$fff,0
+ 	ENDM
++	IF	SSIRING
++; 2.8d: the span-stream ring, at its modulo base inside the spare words.  A
++; model whose tables reach past SS_RING makes the first pad negative.
++	ds	SS_RING-prelight_table-TREX_PRIMITIVES-DC_BANDS*2
++	ds	SS_RING_WORDS
++	ds	CHUNK_UVS_BASE-SS_RING-SS_RING_WORDS
++	ELSE
+ 	ds	CHUNK_UVS_BASE-prelight_table-TREX_PRIMITIVES-DC_BANDS*2
++	ENDIF
+ 	ELSE
+ 	ds	CHUNK_UVS_BASE-prelight_table-TREX_PRIMITIVES
+ 	ENDIF
+@@ -5191,6 +5344,11 @@
+ ss_tint equ project_temp_z  ; (tint << 12) - 1
+ ss_clip equ prepass_cnt_lo
+ ss_tmp equ prepass_cnt_lo+1
++; 2.8d ring walker: four more short cells nothing reads during BUILD.
++ss_row equ triangle_tint  ; the row, R7's old role
++ss_pos equ shade_depth_scale  ; x of the span's first pixel, R6's old role
++ss_wr equ project_temp_x  ; ring write position between two walks
++ss_more equ animation_vertices_remaining  ; pixels of a long span still to go
+ 	ENDIF
+ 
+ ; Sticky arming flag, written only by CMD_PREPASS.  It starts at zero, so an

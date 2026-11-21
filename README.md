@@ -183,26 +183,33 @@ to DMA record) while it runs and falls back to the plain pipeline if it cannot.
 of the hand-over and services the DSP during the framebuffer clear, at an
 identical picture: the diagnostic build measures **348.5 ms / 2.87 FPS**
 cycle-exact and **339.2 ms / 2.95 FPS** on the MMU ledger, and `TREX.TOS`
-**349.0 ms / 2.87 FPS** and **339.3 ms / 2.95 FPS**.
+**349.0 ms / 2.87 FPS** and **339.3 ms / 2.95 FPS**. Since 2026-11-21
+(OPTIMIZATION.md 2.8c and 2.8e) shorter DSP per-triangle code brings the
+cycle-exact diagnostic build to **317.9 ms / 3.15 FPS** and the dinosaur
+trail to **323.4 ms / 3.09 FPS**, with identical frames; the other figures
+here have not been re-measured.
 Emulator only; no Falcon has run the stream yet.
 
 The **dinosaur trail** is a fixed-camera, 640×400 live 3D scene from a
 standing human's eye height.
-The T-Rex approaches on the camera’s left, arcs back toward the clearing and shortens its
-inside step as it turns. Its shoulders and ribcage bend inward as the tail
-follows the hips through the circular patrol. On the close turn the head
-looks ahead along the trail, the shoulders follow, and the tail swings through last.
+The T-Rex walks in on the camera's left, eases into a turn over one and a
+half strides and then circles a 5.8 m patrol, six strides to the lap. The tail
+sways with the steps and trails through the turn. The walk itself leaves the
+head alone: in the viewing build the Falcon makes it glance left and right,
+bare its teeth and open its mouth at random, so no two laps look alike.
 The clay trail recedes toward the middle of the jungle at the camera's eye
 level. Tall tree ferns, coral fronds and turquoise moss line its edges.
 The full 2,724-triangle model and its six native texture pages are lit by the
 canopy opening and reflected light from the bare earth. See the
-[performance reference](OPTIMIZATION.md#66f-wider-patrol-circle) for
+[performance reference](OPTIMIZATION.md#66i-wider-lap-secondary-motion-and-random-gestures) for
 the current Hatari measurements.
 
 Build it with `make trex_m68030_hires_backdrop_run`. Run `trex_hires_bg_run.tos`
 beside `TREXBGND.LOD` on a Falcon with 14 MiB ST-RAM and an RGB/TV display.
 The packaged executable is named `TRAIL.TOS`. Watch the
-[approach and one lap with the side-to-side head glances](docs/previews/trex-steady-walk.mp4).
+[approach and three laps as rendered by Blender](docs/previews/trex-wide-lap.mp4)
+(the walk only), and a
+[Hatari capture with the random head gestures](docs/previews/trex-gestures-hatari.mp4).
 
 ![The T-Rex at standing human eye level](docs/screenshots/trex-human-view.png)
 
@@ -213,7 +220,13 @@ backdrop. Its material reproduces the DSP's lighting and the host's 5-bit
 colour arithmetic, and EEVEE renders it with the Raw view transform, so a
 Blender frame is the reference for the Falcon frame. `make backdrop` exports
 every trail asset from it (Blender 5.3 on PATH; under MSYS2 install
-`mingw-w64-ucrt-x86_64-blender`). The exporter bakes all deformation into
+`mingw-w64-ucrt-x86_64-blender`, on macOS `brew install --cask blender`).
+`make blender_seed` regenerates the scene itself from the route generator and
+adds the tail motion. Shape keys named `DSP random <group> …` are gestures
+the 68030 triggers at run time, up to the key's slider maximum; keep the
+baked head and neck unturned, because the gestures are deltas for that pose.
+`make backdrop` needs no Pillow; `make model_export` does, and
+`make blender_pillow` installs it where Blender's own Python finds it. The exporter bakes all deformation into
 per-frame XYZ16 poses, except shape keys named `DSP …`, which it sends as the
 DSP's own morph targets with per-frame Q12 weights. The mesh, UVs, texture
 pages and corner normals stay the TMD's; the exporter refuses a scene that

@@ -1,0 +1,105 @@
+{
+ "date": "2026-11-21",
+ "scene": "Wider lap, secondary motion and random gestures (OPTIMIZATION.md 6.6i)",
+ "emulator": {
+  "build": "Patched Hatari, F030Arcade fork",
+  "sha256": "d1dc43ab0b28aee0f0cc4adba25ac5526cbc4af2e94be49d054a6e67b1165872",
+  "machine": "Falcon, 16 MHz 68030, cycle-exact, MMU off, DSP emulated, RGB, 14 MiB ST-RAM, TOS 4.02",
+  "timer": "Emulated 200 Hz elapsed counter",
+  "physical_falcon": "not measured"
+ },
+ "route": {
+  "samples": 114,
+  "lap_sample": 42,
+  "lap_strides": 6,
+  "root_radius_m": [
+   5.74,
+   5.96
+  ],
+  "lap_centre_distance_m": 25,
+  "yaw_per_lap_sample_deg": 5,
+  "planted_foot_cm_per_sample": [
+   2,
+   11
+  ],
+  "body_cm_per_sample": 51
+ },
+ "timing": {
+  "runs": 1,
+  "gestures_off": {
+   "binary": "trex_hires_bg.tos",
+   "frames": 497,
+   "ms_per_frame": 352.4,
+   "fps": 2.84,
+   "set_frame_ms": 6.7,
+   "packet_ms": 218.0,
+   "clear_ms": 38.0,
+   "raster_ms": 90.1,
+   "pixels_per_frame": 43599.8,
+   "note": "current build; stage split below is from the build before the jaw's extra rest (353.0 ms over 496 frames)"
+  },
+  "gestures_fixed_seed": {
+   "binary": "trex_hires_bg.tos with gesture_enabled patched 0 -> 2",
+   "frames": 490,
+   "ms_per_frame": 357.7,
+   "fps": 2.8,
+   "set_frame_ms": 10.2,
+   "packet_ms": 219.9,
+   "clear_ms": 37.7,
+   "raster_ms": 89.4,
+   "pixels_per_frame": 43394.3,
+   "note": "measured on the build before the jaw's extra rest; not remeasured"
+  },
+  "host_sha256": "9a48e39a221ffea2f79b5c2698d46941cfe8d30d98a5179bbbc8fdaa5655f685",
+  "dsp_sha256": "9cd7440157128bf7bfb51af42d23c6c7f8f9fe7bcab11aba34972d28ce20b0b3",
+  "span_stream_share_sweep_ms": {
+   "96": 424.7,
+   "128": 383.8,
+   "144": 364.2,
+   "160": 354.2,
+   "164": 352.4,
+   "192": 359.9,
+   "208": 364.7,
+   "224": 368.9
+  }
+ },
+ "framebuffer": {
+  "frames": 320,
+  "fbseq_host_sha256": "b6cab173a46bfa4c513342793e20e20d5caaec20faf55e6d50be0266adcd8682",
+  "post_wrap_frames_equal_to_lap": "206 of 206",
+  "gesture_build_frames_differing": 230,
+  "gesture_build_max_differing_pixels": 12718,
+  "blender_vs_hatari": "not run for this route",
+  "frames_inspected": [
+   14,
+   34,
+   45,
+   51,
+   90,
+   107,
+   118,
+   150
+  ],
+  "note": "loop check repeated on the current build (206 of 206); differing-frame counts are from the build before the jaw's extra rest"
+ },
+ "export_checks": {
+  "make_blender_seed_reproduces_assets": true,
+  "gestures": 5,
+  "gesture_groups": [
+   "jaw",
+   "snarl",
+   "look",
+   "brow"
+  ]
+ },
+ "files_sha256": {
+  "TREX/scene/trex_trail.blend": "263f6941d84ae60a855e8a30001b17d0c1c7c6d8b9aa0b9433e004e6d8bd68f4",
+  "TREX/model/backdrop_path.bin": "5e8978c8f1b7e42754e1e271bed3c044d3aa5fdb7e295f25d498d4fae2f707f6",
+  "TREX/model/backdrop_poses.bin": "78f9703369ce48d2b4bfe02fd249a489cefceec849e5b40c42b6000fdcc22f43",
+  "TREX/model/backdrop_targets.bin": "108093f38bd8f2dc786c670d637c64f040ddd2bb057a8f35ec12f4b7ee05b765",
+  "TREX/model/backdrop_shadow.bin": "a9bb8e5b9ac0bfe373dd97f1ecf12f3deb9410d58e007b338465cb13e8cd6bf9",
+  "TREX/model/backdrop_gestures.inc": "e674e129a1d9b748ce01a2fa7e5b3a070de94512179d96dbc663506e1a60ccad"
+ },
+ "baked_head": "neutral: no baked nod, look, gaze weight or neck bend",
+ "superseded_timing": "see dsp-micro-2026-11-21.json: 333.9 ms at share 172 after OPTIMIZATION.md 2.8c"
+}

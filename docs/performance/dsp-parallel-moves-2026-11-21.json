@@ -1,0 +1,68 @@
+{
+ "date": "2026-11-21",
+ "section": "OPTIMIZATION.md 2.8e",
+ "emulator": {
+  "build": "Patched Hatari, F030Arcade fork 24cd93e7",
+  "sha256": "9535b69edcca6488010b3c93edef64ce8f8c260e0ba0441e2c4687c11ccc96a7",
+  "machine": "Falcon, 16 MHz 68030, cycle-exact, Videl contention, DSP emulated, TOS 4.02",
+  "physical_falcon": "not measured"
+ },
+ "runs": 1,
+ "trail_ms_per_frame": {
+  "2.8c_share_172": 333.9,
+  "step1_area_zkey": 330.1,
+  "step2_walker_rows_span_setup": 328.8,
+  "step3_span_div_registers": 327.8,
+  "step4_lighting": 326.5,
+  "share_188": 323.4
+ },
+ "trail_share_sweep": {
+  "164": 334.4,
+  "172": 326.5,
+  "180": 323.8,
+  "188": 323.4,
+  "196": 326.9,
+  "204": 330.8
+ },
+ "trail_after": {
+  "frames": 542,
+  "ms_per_frame": 323.4,
+  "fps": 3.09,
+  "program_end": "P:$0951",
+  "host_sha256": "c402f1ddc63d7eec6e998701173ced4b3595f030276c4bbc057bdec017ce0e88",
+  "dsp_sha256": "a4e4f6f74a22fb63050ce01ac12a816f3d5dbd9267df1b868793d6b28554b982"
+ },
+ "default_265_frames": {
+  "share_sweep_ms": {
+   "168": 326.6,
+   "176": 320.6,
+   "184": 317.9,
+   "192": 319.7,
+   "200": 322.4,
+   "208": 324.3,
+   "224": 328.1
+  },
+  "after_ms": 317.9,
+  "after_fps": 3.15,
+  "stages_ms": {
+   "set_frame": 13.6,
+   "packets": 206.1,
+   "clear": 23.9,
+   "raster": 74.0
+  },
+  "frame_100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16",
+  "pixels": 9049666,
+  "frame_hashes_512": "0a3f2fa1... matches at share 168 and 184",
+  "host_sha256": "d16c95b9755df6079807df312aac92b4344e83f66175b5e9291d1ec118b57c85",
+  "dsp_sha256": "05284eb2d02a2e1de6d74f9b8024f734a6432247f488058821316a90552355b9"
+ },
+ "cam_lod_265_frames_share_168": {
+  "after_ms": 327.7,
+  "frame_100_equal": true,
+  "dsp_sha256": "a69340766836f3b25aa3edff48e39a1962883ddbb447270931f3732cdc80a258"
+ },
+ "gates": {
+  "trail_fbseq_320_frames_byte_identical_after_every_step": true,
+  "TREXHIRS_640x400_without_backdrop": "not rebuilt, not gated"
+ }
+}

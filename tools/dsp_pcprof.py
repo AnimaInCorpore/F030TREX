@@ -54,14 +54,16 @@ def plan(path):
     def add(key, lo, hi):
         ranges.append((key, lo, hi))
 
-    waits = ["ss_wait_end", "ss_pixel_wait"]
-    if "ss_header_wait0" in labels:
-        waits.append("ss_header_wait0")
-    waits += ["ss_header_wait1", "ss_header_wait2"]
+    # A ring image (2.8d) has none of these waits: its units leave by interrupt.
+    waits = [name for name in ("ss_wait_end", "ss_pixel_wait", "ss_header_wait0",
+                               "ss_header_wait1", "ss_header_wait2") if name in labels]
     for name in waits:
         add(name + ".jclr", at(name), at(name) + 1)
         add(name + ".movep", at(name) + 2, at(name) + 2)
-    add("walker", at("span_stream_walk"), at("lookup_projected_z") - 1)
+    # lookup_projected_z was inlined and removed (2.8c/2.8d); the walker then
+    # ends where the order-key command begins.
+    walker_end = at("lookup_projected_z") if "lookup_projected_z" in labels else at("command_prepass")
+    add("walker", at("span_stream_walk"), walker_end - 1)
     add("span", at("make_triangle_span"), at("span_stream_walk") - 1)
     add("rx.jclr", at("receive_word"), at("receive_word") + 1)
     add("rx.tail", at("receive_word") + 2, at("send_word") - 1)
@@ -70,9 +72,11 @@ def plan(path):
     add("build", at("command_build_triangles"), at("command_get_triangles") - 1)
     add("prelight", at("prelight_run"), at("transform_vertices") - 1)
     add("xform", at("transform_vertices"), at("make_triangle_zkey") - 1)
-    add("shade", at("make_triangle_zkey"), at("lookup_projected_xy") - 1)
+    # lookup_projected_xy was inlined into make_triangle_area (2.8c).
+    area = at("lookup_projected_xy") if "lookup_projected_xy" in labels else at("make_triangle_area")
+    add("shade", at("make_triangle_zkey"), area - 1)
     area_end = at("band_mark") if "band_mark" in labels else at("make_triangle_span")
-    add("area", at("lookup_projected_xy"), area_end - 1)
+    add("area", area, area_end - 1)
     if "band_mark" in labels:
         add("band", at("band_mark"), at("make_triangle_span") - 1)
     add("order", at("command_prepass"), last)

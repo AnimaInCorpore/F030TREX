@@ -11,7 +11,8 @@ import numpy as np
 FOCAL_X, FOCAL_Y, CENTRE_Y = 1320, 1219, 200
 CAMERA_HEIGHT = -3405  # 3545 units above the ground, about 1.65 m.
 PITCH = math.radians(-3.4)
-ROUTE_YAW = math.radians(1.22)
+ROUTE_YAW = math.radians(14)   # turns the whole route about the camera's vertical
+LAP_CENTRE = (0, 53750)        # hip circle centre: camera-level X and depth, model units
 
 
 def pitch_view(y, z):
@@ -52,31 +53,25 @@ def shadow_rows(hip_x, depth, c, s, radius):
 
 MODEL = Path(__file__).resolve().parents[1] / "TREX/model"
 GAIT_FIRST = 52
-TURN_START, TURN_END = 40, 112
-LAP_START, LAP = 152, 128
+# Route in source gait keys, 32 to a stride: a straight approach, one and a
+# half strides that ease the turn rate up to the lap's, then a circle of six
+# strides (about 5 m at the hips). LAP_START and LAP are multiples of 8 and
+# 32, so every phase lands on a whole displayed sample.
+TURN_START, ENTRY = 64, 48
+LAP_START, LAP = TURN_START + ENTRY, 192
 FRAMES_PER_STRIDE = 12  # Samples displayed from one 32-key source gait.
-TURN_EXTRA_FRAMES = 24
 
 
 def heading(frame):
-    """Walk directly past camera left, then arc right into the patrol."""
-    finish = math.radians(-107.44)
-    entry = math.radians(-184.45)
+    """Walk straight in, ease into the turn, then hold the lap's turn rate."""
+    rate = -math.tau / LAP
     if frame <= TURN_START:
         return 0.0
-    if frame < TURN_END:
-        t = (frame - TURN_START) / (TURN_END - TURN_START)
-        # Spread the departure across more than two strides. The animal
-        # still walks towards the viewer during the first part of the arc.
-        return finish * t*t*(3-2*t)
-    if frame < LAP_START-8:
-        t = (frame-TURN_END) / (LAP_START-8-TURN_END)
-        # Steer back into the clearing before joining the patrol.
-        return finish + (entry-finish)*t*t*(3-2*t) + math.radians(7.59) * math.sin(math.pi*t)**2
-    rate = -math.tau / LAP
     if frame < LAP_START:
-        return entry + rate*(frame-LAP_START+8)**2/16
-    return entry + rate*(4+frame-LAP_START)
+        # The turn rate rises as a smoothstep; this is its integral.
+        t = (frame - TURN_START) / ENTRY
+        return rate * ENTRY * (t**3 - t**4 / 2)
+    return rate * (ENTRY / 2 + frame - LAP_START)
 
 
 def load_stride():
@@ -112,8 +107,6 @@ def stride_path(feet):
         roots.append(roots[-1] + left*step[0] + (1-left)*step[1])
     roots = np.asarray(roots)
     assert np.allclose(roots[-1], roots[LAP_START], atol=0.001)
-    # Place the entire track once. Camera, lens and horizon stay fixed.
-    roots += np.array([5624, 23500]) - roots[TURN_START]
     return roots
 
 
@@ -152,38 +145,20 @@ def smoothstep(value):
 
 
 def presentation_time(key):
-    """Ease into a shorter, slower stride around the closest part of the turn."""
-    t = np.clip((key - TURN_START) / (TURN_END - TURN_START), 0, 1)
-    ease = t**3 * (10 - 15 * t + 6 * t**2)
-    # Increase sampling gradually into the lap. Eighteen displayed poses
-    # per stride keep cruising yaw at five degrees per presented frame.
-    ramp = np.clip((key - TURN_END) / (LAP_START - TURN_END), 0, 1)
-    extra = (LAP_START - TURN_END) * ramp**2 / 2 + np.maximum(key - LAP_START, 0)
-    times = key * FRAMES_PER_STRIDE / 32 + TURN_EXTRA_FRAMES * ease + 6 * extra / 32
-    # Allocate extra displayed poses wherever the shorter return turns more
-    # quickly. End on an integer sample so both pages repeat the same lap.
-    delta = np.abs(np.diff([math.degrees(heading(k)) for k in key[:LAP_START+1]]))
-    durations = np.maximum(np.diff(times[:LAP_START+1]), delta / 4.85)
-    end = durations.sum()
-    durations *= math.ceil(end) / end
-    times[LAP_START+1:] += math.ceil(end) - times[LAP_START]
-    times[:LAP_START+1] = np.r_[0, durations.cumsum()]
-    times[LAP_START] = math.ceil(end)
-    return times
+    """A steady cadence: every stride shows the same number of samples."""
+    return key * FRAMES_PER_STRIDE / 32
 
 
 def turning_steps(base, gait, feet):
-    """Shorten the inside step and gather both feet through the near bend."""
+    """Shorten the steps on the lap, the inside one more."""
     leg = smoothstep((base[:, 1] - 850) / 4200) * smoothstep((-base[:, 2] - 2800) / 1600)
     side = (base[:, 0] > 0).astype(int)
     poses = []
     mean_foot_z = feet[:, :, 1].mean(axis=0)
     for frame in range(LAP_START + LAP + 1):
         phase = frame % 32
-        # Look ahead to place the foot, then ease back into a full stride.
-        bend = smoothstep((frame - TURN_START + 5) / 13) * smoothstep((TURN_END + 9 - frame) / 15)
-        on_lap = smoothstep((frame - LAP_START + 8) / 8)
-        reduction = np.array([0.50, 0.77]) * bend + np.array([0.16, 0.30]) * on_lap
+        on_lap = smoothstep((frame - TURN_START) / ENTRY)
+        reduction = np.array([0.05, 0.16]) * on_lap
         pose = gait[phase].copy()
         excursion = feet[phase, :, 1] - mean_foot_z
         pose[:, 2] -= leg * (excursion * reduction)[side]
@@ -216,7 +191,6 @@ def trail_poses(base, gait, steps, feet, lift, brow, anim, look=0, body=0, tail=
         phase = frame % 32
         pose = steps[frame].copy()
         angle = heading(frame)
-        rear = smoothstep((-math.cos(angle) - 0.15) / 0.75)
         delta = head_delta if look >= 0 else right_delta
         pose[:557] += (delta * abs(look)) >> 12
         pose[78:90] += (brow_delta * brow[phase]) >> 12
@@ -242,24 +216,9 @@ def trail_poses(base, gait, steps, feet, lift, brow, anim, look=0, body=0, tail=
         pose[:, 0] = side * np.cos(lean) - height * np.sin(lean)
         pose[:, 1] = 1600 + side * np.sin(lean) + height * np.cos(lean)
 
-        # Raise the neck from its base while sighting the return trail.
-        # The flex tapers into the shoulders and the head follows as a unit.
-        # Counter-rotate the skull at the upper joint to keep the gaze low.
-        nod = -0.58 * rear * smoothstep((z + 1250) / 2100) * upper
-        c, s = np.cos(nod), np.sin(nod)
-        height, reach = pose[:, 1] + 100, pose[:, 2] - 1800
-        pose[:, 1] = -100 + height * c - reach * s
-        pose[:, 2] = 1800 + height * s + reach * c
-        yaw = 0.05 * rear * skull
-        c, s = np.cos(yaw), np.sin(yaw)
-        side, reach = pose[:, 0].copy(), pose[:, 2] + 4600
-        pose[:, 0] = side * c - reach * s
-        pose[:, 2] = -4600 + side * s + reach * c
-        neck = 0.85 * rear * skull
-        c, s = np.cos(neck), np.sin(neck)
-        height, reach = pose[:, 1] - 450, pose[:, 2] + 4600
-        pose[:, 1] = 450 + height * c - reach * s
-        pose[:, 2] = -4600 + height * s + reach * c
+        # The head and neck stay in the gait's own frame: glances, the jaw
+        # and the lips are run-time gestures, PS1 deltas authored for exactly
+        # this frame (OPTIMIZATION.md 6.6i), so nothing here may turn it.
 
         # Bend the tail along a circular arc of the same centreline length.
         # The base follows the pelvis, the tip retains several poses of yaw.
@@ -277,13 +236,6 @@ def trail_poses(base, gait, steps, feet, lift, brow, anim, look=0, body=0, tail=
         pose[:, 0] = (side * np.cos(tail_angle)
                       - length * tail_angle / 2 * np.sinc(tail_angle / (2 * math.pi))**2)
         pose[:, 2] += length * (1 - np.sinc(tail_angle / math.pi)) - side * np.sin(tail_angle)
-        # Look through the inside of the patrol on broadside passes.
-        # Keep the face free to look ahead on the camera-facing stretch.
-        inside = math.radians(37) * smoothstep((frame - TURN_START) / 36) * math.sin(angle)**2 * skull
-        side, reach = pose[:, 0].copy(), pose[:, 2] + 4600
-        c, s = np.cos(inside), np.sin(inside)
-        pose[:, 0] = side * c + reach * s
-        pose[:, 2] = -4600 - side * s + reach * c
         pose[y >= 4800] = steps[frame, y >= 4800]
         yield pose - base
 
@@ -296,6 +248,15 @@ def main(output, shadow_output, pose_output):
     steps = turning_steps(base, gait, feet)
     placed_feet = np.stack([steps[:, sole].mean(axis=1)[:, [0, 2]] for sole in soles], axis=1)
     roots = steady_stride(stride_path(placed_feet), steps, base)
+    # Place the whole track once: turn it by ROUTE_YAW, then put the centre of
+    # the hips' lap at LAP_CENTRE. Camera, lens and horizon stay fixed.
+    c_route, s_route = math.cos(ROUTE_YAW), math.sin(ROUTE_YAW)
+    lap_keys = np.arange(LAP_START, LAP_START + LAP)
+    lap_yaw = np.array([heading(k) for k in lap_keys])
+    hips = roots[lap_keys] + 6144 * np.column_stack((np.sin(lap_yaw), np.cos(lap_yaw)))
+    centre = hips.mean(axis=0)
+    offset_x = LAP_CENTRE[0] - (c_route * centre[0] + s_route * centre[1])
+    offset_z = LAP_CENTRE[1] - (-s_route * centre[0] + c_route * centre[1])
     poses = list(trail_poses(base, gait, steps, feet, lift, brow, anim))
     assert np.allclose(poses[-1], poses[LAP_START], atol=1e-7, rtol=0)
     targets = [np.asarray(list(trail_poses(base, gait, steps, feet, lift, brow, anim, **control)))
@@ -314,8 +275,7 @@ def main(output, shadow_output, pose_output):
         tx, z = roots[key] + t * (roots[key + 1] - roots[key])
         body_y = (1 - t) * lift[key % 32] + t * lift[(key + 1) % 32]
         angle = heading(key + t) + ROUTE_YAW
-        c_route, s_route = math.cos(ROUTE_YAW), math.sin(ROUTE_YAW)
-        tx, z = c_route * tx + s_route * z - 11250, -s_route * tx + c_route * z + 6086
+        tx, z = c_route * tx + s_route * z + offset_x, -s_route * tx + c_route * z + offset_z
         c, s = math.cos(angle), math.sin(angle)
         # The yaw puts model +Z along the horizontal tangent. Apply the
         # same camera pitch to its three axes, translation and shadow.

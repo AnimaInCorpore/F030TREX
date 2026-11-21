@@ -964,6 +964,17 @@ trex_init
 	lea	trex_model_desc,a0
 	bsr	lib_tmd_parse
 
+	ifd	TREX_BACKDROP
+	bsr	gesture_init
+	cmpi.l	#1,gesture_enabled
+	bne	.gesture_seeded
+	move.l	$4ba.w,d0		; _hz_200: a different sequence each run
+	eor.l	d0,gesture_seed
+	bne	.gesture_seeded
+	move.l	#1,gesture_seed		; xorshift must not start at zero
+.gesture_seeded
+	endc
+
 	; TOS 4.02 advances only the low 16 address bits in Dsp_BlkUnpacked's
 	; source walk.  Select a 64-KiB-aligned window from the overallocated
 	; animation storage so every acknowledged sub-transaction stays wholly
@@ -1229,6 +1240,9 @@ trex_dummy_frame
 	; box and removes the overrun with the arm left on.
 	endc
 .animation_advance_ready
+	ifd	TREX_BACKDROP
+	bsr	gesture_advance
+	endc
 	TimeMark	stat_mark_setframe
 	bsr	dsp_set_frame
 	TimeAdd	stat_mark_setframe,stat_t_setframe
@@ -2600,6 +2614,183 @@ dsp_finish_frame_wait
 	rts
 
 	ifd	TREX_BACKDROP
+; Run-time gestures (OPTIMIZATION.md 6.6i): the scene's "DSP random ..."
+; targets, played on top of the baked pose so the head never repeats with
+; the lap. Called once per displayed sample. Every gesture group of
+; backdrop_gestures.inc has one channel, so two gestures of a group never
+; overlap and the groups run independently. A channel idles for a random
+; 3-10 samples plus the last gesture's rest, then draws gestures until one of its own group comes up,
+; ramps it to 50-100% of its peak over the row's attack, holds it for the
+; row's hold range and lets it go over the row's release.
+; trail_send_targets adds each channel's weight to its target.
+GESTURE_TARGET		= 0	; channel: target index, -1 while idle
+GESTURE_WEIGHT		= 2	; current signed Q12 weight
+GESTURE_STAGE		= 4	; 0 idle, 1 attack, 2 hold, 3 release
+GESTURE_TIMER		= 6
+GESTURE_PEAK		= 8
+GESTURE_ATTACK		= 10	; weight step per sample
+GESTURE_RELEASE		= 12
+GESTURE_REST		= 14	; extra idle samples after this gesture
+GESTURE_BYTES		= 16
+GESTURE_ROW_PEAK	= 2	; table row: target, peak, group, attack,
+GESTURE_ROW_GROUP	= 4	; shortest hold, hold range mask, release
+GESTURE_ROW_ATTACK	= 6
+GESTURE_ROW_HOLD	= 8
+GESTURE_ROW_HOLD_MASK	= 10
+GESTURE_ROW_RELEASE	= 12
+GESTURE_ROW_REST	= 14	; extra rest before the group plays again
+GESTURE_ROW_BYTES	= 16
+gesture_advance
+	tst.l	gesture_enabled
+	beq	.off
+	movem.l	d0-d3/a0-a1,-(sp)
+	lea	gesture_channels,a1
+	moveq	#0,d3			; channel = group
+.channel
+	cmpi.w	#GESTURE_GROUPS,d3
+	bcc	.end
+	bsr	gesture_channel
+	lea	GESTURE_BYTES(a1),a1
+	addq.w	#1,d3
+	bra	.channel
+.end
+	movem.l	(sp)+,d0-d3/a0-a1
+.off
+	rts
+
+; Mark every channel idle and stagger their first gestures.
+gesture_init
+	movem.l	d0-d1/a0,-(sp)
+	lea	gesture_channels,a0
+	moveq	#0,d0
+	moveq	#4,d1
+.channel
+	cmpi.w	#GESTURE_GROUPS,d0
+	bcc	.end
+	move.w	#-1,GESTURE_TARGET(a0)
+	clr.w	GESTURE_WEIGHT(a0)
+	clr.w	GESTURE_STAGE(a0)
+	move.w	d1,GESTURE_TIMER(a0)
+	lea	GESTURE_BYTES(a0),a0
+	addq.w	#3,d1
+	addq.w	#1,d0
+	bra	.channel
+.end
+	movem.l	(sp)+,d0-d1/a0
+	rts
+
+; Advance channel D3 at A1 by one sample. Trashes D0-D2/A0.
+gesture_channel
+	move.w	GESTURE_STAGE(a1),d0
+	beq	.idle
+	subq.w	#1,d0
+	beq	.attack
+	subq.w	#1,d0
+	beq	.hold
+	move.w	GESTURE_WEIGHT(a1),d0	; release
+	sub.w	GESTURE_RELEASE(a1),d0
+	bgt	.weight
+	move.w	#-1,GESTURE_TARGET(a1)
+	clr.w	GESTURE_WEIGHT(a1)
+	clr.w	GESTURE_STAGE(a1)
+	bsr	gesture_random
+	andi.w	#7,d0
+	addq.w	#3,d0
+	add.w	GESTURE_REST(a1),d0
+	move.w	d0,GESTURE_TIMER(a1)
+	rts
+.attack
+	move.w	GESTURE_WEIGHT(a1),d0
+	add.w	GESTURE_ATTACK(a1),d0
+	cmp.w	GESTURE_PEAK(a1),d0
+	blt	.weight
+	move.w	GESTURE_PEAK(a1),d0
+	move.w	#2,GESTURE_STAGE(a1)
+.weight
+	move.w	d0,GESTURE_WEIGHT(a1)
+	rts
+.hold
+	subq.w	#1,GESTURE_TIMER(a1)
+	bgt	.done
+	move.w	#3,GESTURE_STAGE(a1)
+.done
+	rts
+.idle
+	subq.w	#1,GESTURE_TIMER(a1)
+	bgt	.done
+	lea	gesture_table,a0
+	moveq	#0,d1
+.count
+	tst.w	(a0)
+	bmi	.counted
+	lea	GESTURE_ROW_BYTES(a0),a0
+	addq.w	#1,d1
+	bra	.count
+.counted
+	tst.w	d1
+	beq	.done			; the scene has no gestures
+	bsr	gesture_random
+	move.l	d0,d2
+	swap	d0
+	andi.l	#$0000ffff,d0
+	divu.w	d1,d0
+	swap	d0			; random row
+	mulu.w	#GESTURE_ROW_BYTES,d0
+	lea	gesture_table,a0
+	adda.l	d0,a0
+	cmp.w	GESTURE_ROW_GROUP(a0),d3
+	bne	.done			; another group's: draw again next sample
+	move.w	(a0),GESTURE_TARGET(a1)
+	move.w	GESTURE_ROW_REST(a0),GESTURE_REST(a1)
+	move.w	GESTURE_ROW_PEAK(a0),d1
+	lsr.w	#1,d1
+	move.w	d2,d0
+	andi.w	#255,d0
+	mulu.w	d1,d0
+	lsr.l	#8,d0
+	add.w	d1,d0			; 50-100% of the peak
+	bne	.peak
+	moveq	#1,d0
+.peak
+	move.w	d0,GESTURE_PEAK(a1)
+	moveq	#0,d1
+	move.w	d0,d1
+	add.w	GESTURE_ROW_ATTACK(a0),d1
+	subq.w	#1,d1
+	divu.w	GESTURE_ROW_ATTACK(a0),d1
+	move.w	d1,GESTURE_ATTACK(a1)	; ceil(peak / attack samples)
+	moveq	#0,d1
+	move.w	d0,d1
+	add.w	GESTURE_ROW_RELEASE(a0),d1
+	subq.w	#1,d1
+	divu.w	GESTURE_ROW_RELEASE(a0),d1
+	move.w	d1,GESTURE_RELEASE(a1)
+	lsr.w	#8,d2
+	and.w	GESTURE_ROW_HOLD_MASK(a0),d2
+	add.w	GESTURE_ROW_HOLD(a0),d2
+	move.w	d2,GESTURE_TIMER(a1)
+	move.w	#1,GESTURE_STAGE(a1)
+	rts
+
+; xorshift32 over gesture_seed. Returns D0.
+gesture_random
+	movem.l	d1-d2,-(sp)
+	move.l	gesture_seed,d0
+	move.l	d0,d1
+	moveq	#13,d2
+	lsl.l	d2,d1
+	eor.l	d1,d0
+	move.l	d0,d1
+	moveq	#17,d2
+	lsr.l	d2,d1
+	eor.l	d1,d0
+	move.l	d0,d1
+	lsl.l	#5,d1
+	eor.l	d1,d0
+	move.l	d0,gesture_seed
+	movem.l	(sp)+,d1-d2
+	rts
+
 ; Send this sample's non-zero DSP morph targets after its pose. The table is
 ; backdrop_targets.bin from blender_export_falcon.py: target count, sample
 ; count, one 32-bit run-list offset per target, sample-major signed Q12
@@ -2623,7 +2814,22 @@ trail_send_targets
 	adda.l	d1,a4			; this sample's weights
 	subq.w	#1,d4
 .target
-	move.w	(a4)+,d5		; signed Q12 weight; zero sends nothing
+	move.w	(a4)+,d5		; the scene's signed Q12 weight
+	move.w	(a2),d1
+	subq.w	#1,d1
+	sub.w	d4,d1			; this target's index
+	lea	gesture_channels,a0
+	moveq	#GESTURE_GROUPS,d0
+	bra	.gesture_next
+.gesture
+	cmp.w	GESTURE_TARGET(a0),d1
+	bne	.gesture_other
+	add.w	GESTURE_WEIGHT(a0),d5	; plus a run-time gesture's
+.gesture_other
+	lea	GESTURE_BYTES(a0),a0
+.gesture_next
+	dbra	d0,.gesture
+	tst.w	d5			; zero sends nothing
 	beq	.next_target
 	move.l	a2,a1
 	adda.l	(a3),a1
@@ -4818,12 +5024,12 @@ SPAN_STREAM_BYTES = 512*1024
 ; to the machine that runs it; a physical Falcon will want its own figure.
 	ifd	TREX_HIRES
 	ifd	TREX_BACKDROP
-SPAN_STREAM_SHARE = 164
+SPAN_STREAM_SHARE = 188
 	else
 SPAN_STREAM_SHARE = 176
 	endc
 	else
-SPAN_STREAM_SHARE = 168
+SPAN_STREAM_SHARE = 184
 	endc
 	endc
 SPAN_STAT_LONGS = 8
@@ -9413,6 +9619,23 @@ backdrop_poses
 	incbin	"backdrop_poses.bin"
 backdrop_targets
 	incbin	"backdrop_targets.bin"
+	even
+; Run-time gestures (6.6i): the table and GESTURE_GROUPS.
+gesture_table
+	include	"backdrop_gestures.inc"
+; 1 = trigger gestures, seeded from the 200 Hz tick; 2 = from the fixed seed
+; (repeatable, for captures); 0 = none, so the measured and probe builds
+; replay the scene exactly. The same dc.l in every variant, like the
+; TREX_RUN capture flags: only the value differs.
+gesture_enabled
+	ifd	TREX_RUN
+	dc.l	1
+	else
+	dc.l	0
+	endc
+gesture_seed	dc.l	$2545f491
+gesture_channels
+	ds.b	GESTURE_BYTES*GESTURE_GROUPS+2	; one per group, set by gesture_init
 	even
 	else
 trex_animation_data

@@ -1,0 +1,104 @@
+{
+ "date": "2026-11-21",
+ "section": "OPTIMIZATION.md 2.8c",
+ "emulator": {
+  "build": "Patched Hatari, F030Arcade fork 24cd93e7",
+  "sha256": "9535b69edcca6488010b3c93edef64ce8f8c260e0ba0441e2c4687c11ccc96a7",
+  "machine": "Falcon, 16 MHz 68030, cycle-exact, Videl contention, DSP emulated, TOS 4.02",
+  "physical_falcon": "not measured"
+ },
+ "trail_ms_per_frame": {
+  "before_share_164": 352.4,
+  "step1_span_div_sign_idiom": 345.8,
+  "share_172": 344.3,
+  "step2_zero_dividend": 343.4,
+  "step3_inline_xy_lookup": 339.4,
+  "step4_inline_z_lookup": 337.2,
+  "step5_branch_free_lambert": 335.0,
+  "step6_order_key_shifts": 333.9
+ },
+ "trail_share_sweep_after_step1": {
+  "164": 345.8,
+  "172": 344.3,
+  "180": 345.2,
+  "188": 349.0,
+  "196": 352.6
+ },
+ "trail_share_check_final": {
+  "172": 333.9,
+  "180": 333.6,
+  "188": 335.6
+ },
+ "trail_after": {
+  "frames": 525,
+  "ms_per_frame": 333.9,
+  "fps": 2.99,
+  "set_frame_ms": 6.6,
+  "packet_ms": 203.1,
+  "clear_ms": 38.5,
+  "raster_ms": 85.4,
+  "host_sha256": "d1c0a479c084bc519797d6b4b68a2808f502e26a93a3a98fd08cdb5d49300204",
+  "dsp_sha256": "275ed2e4ebaaf5e2bde36cb97dbb0716787e99ff4021b43ea19f20f925683d99"
+ },
+ "default_265_frames": {
+  "before_ms": 348.5,
+  "after_ms": 332.4,
+  "after_fps": 3.01,
+  "frame_100_sha256": "d89958b314c924ad6654f5e92cd29b859ab99b0c4f197170dfe8cfc0216f3d16",
+  "pixels": 9049666,
+  "frame_hashes_512": "0a3f2fa1... matches",
+  "host_sha256": "10a2c9f035a2bb28b9db367594e75b9c0026ccad8ad01f50db3b948d2673d047",
+  "dsp_sha256": "2d14f8c3461f37d4ed95127a36ec011e0af394aa3122f2dd7e797ebf924b27c2"
+ },
+ "cam_lod_265_frames": {
+  "before_ms": 350.4,
+  "after_ms": 333.6,
+  "frame_100_equal": true,
+  "dsp_sha256": "2e74d5e8d3f2fc22804b9efc105efe3b52d0baadb0fe74ae9cf8bacc42cf82b0"
+ },
+ "gates": {
+  "trail_fbseq_320_frames_byte_identical_after_every_step": true,
+  "TREXHIRS_640x400_without_backdrop": "not rebuilt, not gated"
+ },
+ "rejected": {
+  "unrolled_restore_ms": {
+   "plain": 352.0,
+   "unrolled": 351.9,
+   "clear_stage_plain_no_service": 28.0,
+   "clear_stage_unrolled_no_service": 28.2
+  }
+ },
+ "dsp_profile_after_step5_ms": {
+  "span_setup": 57.86,
+  "walker_arithmetic": 65.78,
+  "ssi_wait": 40.08,
+  "zkey_lighting": 50.43,
+  "area": 29.76,
+  "order_keys": 16.03,
+  "host_send_wait": 26.52,
+  "everything_else": 5.79
+ },
+ "dsp_profile_final_ms": {
+  "frames": 525,
+  "booked": 334.93,
+  "computing": 262.8,
+  "waiting": 72.1,
+  "ssi_wait": 40.03,
+  "host_send_wait": 26.46,
+  "host_read_wait": 5.59,
+  "walker_arithmetic": 65.68,
+  "span_setup": 57.82,
+  "zkey_lighting": 50.44,
+  "area": 29.76,
+  "order_keys": 15.01,
+  "transform": 11.54,
+  "streamed_triangles": 686,
+  "spans": 5528,
+  "pixels": 28635,
+  "wait_by_command": {
+   "GET_TRIANGLES": 13.44,
+   "PREPASS": 4.84,
+   "BUILD_TRIANGLES": 4.63
+  }
+ }
+}

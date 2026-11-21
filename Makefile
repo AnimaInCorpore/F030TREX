@@ -671,16 +671,23 @@ trex_dsp_backdrop: create_dirs
 	cp $(BACKDROP_LOD) ./TREX/m68030/TREXBGND.LOD
 # The Blender scene is the source (OPTIMIZATION.md 6.6g): "make backdrop"
 # exports route, poses, DSP targets, shadow, lights, ramp and picture from it.
-# Needs Blender on PATH (MSYS2: pacman -S mingw-w64-ucrt-x86_64-blender).
-# "make blender_seed" rebuilds the scene from the older procedural
-# generators and OVERWRITES TREX/scene -- only to start over.
+# Needs Blender on PATH (MSYS2: pacman -S mingw-w64-ucrt-x86_64-blender;
+# macOS: brew install --cask blender). --python-exit-code makes a failed
+# script fail the target: Blender otherwise exits 0 after a Python error.
+# "backdrop" needs no Pillow. "model_export" does, and the Python bundled
+# with Blender's macOS and Windows builds has none: "make blender_pillow"
+# installs it into Blender's user scripts/modules directory.
+BLENDER=blender --python-exit-code 1
+# "make blender_seed" rebuilds the scene from the procedural generators
+# (route and gait, then the tail motion of blender_natural_motion.py,
+# OPTIMIZATION.md 6.6i) and OVERWRITES TREX/scene -- only to start over.
 BACKDROP_SCENE=./TREX/scene/trex_trail.blend
 BACKDROP_SEED=./blender/seed
 BACKDROP_ASSETS=$(BACKDROP_BIN) $(MODEL_DIR)/backdrop_path.bin $(MODEL_DIR)/backdrop_shadow.bin \
 	$(MODEL_DIR)/backdrop_poses.bin $(MODEL_DIR)/backdrop_targets.bin \
-	$(MODEL_DIR)/backdrop_lights.inc $(MODEL_DIR)/backdrop_ramp.inc
+	$(MODEL_DIR)/backdrop_lights.inc $(MODEL_DIR)/backdrop_ramp.inc $(MODEL_DIR)/backdrop_gestures.inc
 backdrop:
-	blender -b $(BACKDROP_SCENE) --python ./tools/blender_export_falcon.py -- ./TREX/model $(BACKDROP_BIN)
+	$(BLENDER) -b $(BACKDROP_SCENE) --python ./tools/blender_export_falcon.py -- ./TREX/model $(BACKDROP_BIN)
 
 # Export a Blender model and its trail scene as a model directory
 # (OPTIMIZATION.md 6.6h), then build it with the same MODEL_DIR:
@@ -692,8 +699,12 @@ MODEL_OBJECT=T-Rex
 .PHONY: model_export
 model_export:
 	@[ -n "$(BLEND)" ] || { echo "model_export needs BLEND=<file.blend>"; exit 1; }
-	blender -b $(BLEND) --python ./tools/blender_export_model.py -- $(MODEL_OBJECT) $(MODEL_DIR)
-	blender -b $(BLEND) --python ./tools/blender_export_falcon.py -- $(MODEL_DIR) $(MODEL_DIR)/backdrop_640x400.bin $(MODEL_OBJECT)
+	$(BLENDER) -b $(BLEND) --python ./tools/blender_export_model.py -- $(MODEL_OBJECT) $(MODEL_DIR)
+	$(BLENDER) -b $(BLEND) --python ./tools/blender_export_falcon.py -- $(MODEL_DIR) $(MODEL_DIR)/backdrop_640x400.bin $(MODEL_OBJECT)
+
+.PHONY: blender_pillow
+blender_pillow:
+	$(BLENDER) -b --python-expr "import bpy, subprocess, sys; subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--upgrade', '--target', bpy.utils.user_resource('SCRIPTS', path='modules', create=True), 'pillow'])"
 
 .PHONY: blender_seed
 blender_seed:
@@ -701,7 +712,9 @@ blender_seed:
 	python3 ./tools/make_backdrop.py ./TREX/textures/jungle_eye_level.png $(BACKDROP_SEED)/backdrop_640x400.bin --trail-camera
 	python3 ./tools/make_backdrop_path.py $(BACKDROP_SEED)/backdrop_path.bin $(BACKDROP_SEED)/backdrop_shadow.bin $(BACKDROP_SEED)/backdrop_poses.bin
 	python3 ./tools/blender_seed_data.py $(BACKDROP_SEED) $(BACKDROP_SEED)/data
-	blender -b --factory-startup --python ./tools/blender_build_scene.py -- $(BACKDROP_SEED)/data ./TREX/scene
+	$(BLENDER) -b --factory-startup --python ./tools/blender_build_scene.py -- $(BACKDROP_SEED)/data ./TREX/scene
+	$(BLENDER) -b ./TREX/scene/trex_trail.blend --python ./tools/blender_natural_motion.py -- $(abspath $(BACKDROP_SEED))/trex_trail.blend
+	mv $(BACKDROP_SEED)/trex_trail.blend ./TREX/scene/trex_trail.blend
 
 trex_m68030_hires_backdrop: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires_bg.tos trex_dsp_backdrop
 trex_m68030_hires_backdrop_run: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires_bg_run.tos trex_dsp_backdrop

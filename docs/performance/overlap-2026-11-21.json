@@ -1,0 +1,64 @@
+{
+ "date": "2026-11-21",
+ "section": "OPTIMIZATION.md 2.8d",
+ "emulator": "scratch build of fork 24cd93e7 plus hatari-ssi-tie patch and a HATARI_DSP_SPEED what-if hook; cycle-exact, 16 MHz, 14 MiB, TOS 4.02; emulator only",
+ "runs": 1,
+ "what_if_dsp_clock_ms": {
+  "100": {
+   "172": 333.9
+  },
+  "127": {
+   "172": 320.7,
+   "196": 299.9,
+   "220": 308.2,
+   "256": 317.4
+  },
+  "150": {
+   "172": 319.1
+  },
+  "200": {
+   "172": 317.7
+  },
+  "400": {
+   "172": 317.1,
+   "256": 215.0
+  }
+ },
+ "what_if_400_share_256_stages_ms": {
+  "set_frame": 6.5,
+  "packets": 158.3,
+  "clear": 35.2,
+  "raster": 14.6
+ },
+ "ring": {
+  "frame_ms": {
+   "172": 332.9,
+   "196": 333.1,
+   "220": 341.4,
+   "256": 352.3
+  },
+  "fbseq_320_frames_identical": true,
+  "stream_end_mismatch_frames": 0,
+  "program_end": "P:$09BA",
+  "ring_words": 478,
+  "dsp_profile_ms": {
+   "walker_arithmetic": 88.17,
+   "ssi_wait": 0.5,
+   "span_setup": 57.93,
+   "zkey_lighting": 50.48,
+   "area": 29.79,
+   "order_keys": 15.02,
+   "host_send_wait": 31.04,
+   "host_read_wait": 5.61,
+   "everything_else": 17.29
+  }
+ },
+ "baseline_2_8c": {
+  "frame_ms": 333.9,
+  "walker_arithmetic": 65.68,
+  "ssi_wait": 40.03,
+  "host_send_wait": 26.46,
+  "everything_else": 5.79
+ },
+ "adopted": false
+}

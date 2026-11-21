@@ -13,7 +13,8 @@ set and shade ramp of make_backdrop_light.py:
   * poses     each sample's composed pose (neutral gait plus the four run
               lists mixed with the weights the 68030 used to compute at run
               time, same integer arithmetic) as a PC2 point cache
-  * targets   PS1 TANM morph targets 5-8 as optional shape keys (weight 0)
+  * targets   PS1 TANM morph targets 4-8 as DSP shape keys (weight 0); jaw,
+              head turns and brow are marked for random run-time use
   * route     per-sample object transform, the fixed lens and the loop start
   * shadow    ground ellipse centre, heading and axes per sample
   * lighting  camera-fixed light vectors, ambient and 4x16 shade ramp
@@ -29,7 +30,6 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -51,8 +51,15 @@ SHADOW_AXES = (3150, 7700)
 SHADOW_OFFSET = (700, 450)
 SHADOW_RINGS = (1.0, 0.77, 0.51)
 HIP_REACH = 6144
-# Sparse PS1 targets usable as DSP morph targets (trex_animation.json).
-TANM_TARGETS = {5: (0, 147, 34528), 6: (0, 557, 35412), 7: (78, 12, 38756), 8: (0, 557, 38828)}
+# Sparse PS1 targets usable as DSP morph targets (trex_animation.json):
+# first vertex, vertex count, delta offset, shape key name, slider maximum.
+# Keys named "DSP random ..." are gestures the 68030 triggers at run time, up
+# to the slider maximum; the scene keeps them at 0.
+TANM_TARGETS = {4: (0, 216, 33232, "random jaw", 1.0),
+                5: (0, 147, 34528, "random snarl", 1.0),
+                6: (0, 557, 35412, "random look right", 1.0),
+                7: (78, 12, 38756, "random brow", 1.0),
+                8: (0, 557, 38828, "random look left", 1.0)}
 
 
 # --------------------------------------------------------------------- mesh
@@ -87,6 +94,7 @@ def read_tmd(path=TMD):
 
 
 def write_textures(out):
+    from PIL import Image  # here, so the Blender exporters import this module without Pillow
     for page in PAGES:
         data = (ROOT / f"TREX/textures/trex_texture_page_{page}.tim").read_bytes()
         clut = np.frombuffer(data, "<u2", 256, 20)
@@ -111,11 +119,6 @@ def limit(value):
     return max(-4096, min(4096, value))
 
 
-def crossfade(new, old, phase):
-    """trail_crossfade: word subtract, signed multiply, arithmetic shift."""
-    return s16(((s16(new - old) * phase) >> 2) + old)
-
-
 def trail_weights(path, frame, count, lap):
     """The four Q12 weights trail_mix_pose computed for one displayed sample."""
     yaw = lambda sample: struct.unpack_from(">H", path, 16 + sample * RECORD + 52)[0]
@@ -130,17 +133,8 @@ def trail_weights(path, frame, count, lap):
 
     trunk = limit(heading_change(1) * 3)
     tail = limit(heading_change(3))
-    cos_q12 = struct.unpack_from(">i", path, 16 + frame * RECORD)[0] >> 11
-    gaze = (limit(1000 - cos_q12) * trunk) >> 12
-    phase = frame - 12
-    if 0 <= phase and 57 - phase >= 0:
-        phase = min(phase, 57 - phase, 4)
-        look = crossfade((s16(yaw(frame + 2) - yaw(frame))) >> 1, gaze, phase)
-        trunk = crossfade(limit((s16(yaw(frame) - yaw(frame - 2)) * 3) >> 1), trunk, phase)
-        tail = crossfade(limit(s16(yaw(frame - 2) - yaw(frame - 5))), tail, phase)
-        gaze = look
-    gaze = s16(gaze)
-    return [gaze if gaze >= 0 else 0, -gaze if gaze < 0 else 0, trunk, tail]
+    # No baked gaze: looking around is a run-time gesture (6.6i).
+    return [0, 0, trunk, tail]
 
 
 def mixed_pose(poses, offset, weights):
@@ -223,15 +217,16 @@ def main(seed, out):
     words = np.fromfile(seed / "backdrop_640x400.bin", ">u2").reshape(H, W).astype(np.uint32)
     r5, g6, b5 = words >> 11, (words >> 5) & 63, words & 31
     picture = np.dstack([(r5 * 255 + 15) // 31, (g6 * 255 + 31) // 63, (b5 * 255 + 15) // 31])
+    from PIL import Image
     Image.fromarray(picture.astype(np.uint8), "RGB").save(out / "backdrop.png")
     # Ramp entries n/64 stored as 4n/255: a raw read times 255/4 is n again.
     Image.fromarray((np.asarray(ramp) * 4).astype(np.uint8), "RGB").save(out / "shade_ramp.png")
 
     anim = TANM.read_bytes()
     targets = []
-    for index, (first, length, offset) in TANM_TARGETS.items():
+    for first, length, offset, name, peak in TANM_TARGETS.values():
         delta = np.frombuffer(anim, ">i2", length * 3, offset).reshape(-1, 3).astype(float)
-        targets.append(dict(name="PS1 target %d" % index, first=first,
+        targets.append(dict(name=name, first=first, peak=peak,
                             deltas=(delta @ local.T * SCALE).tolist()))
 
     scene = dict(

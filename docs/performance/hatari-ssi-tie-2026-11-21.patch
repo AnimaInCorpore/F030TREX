@@ -1,0 +1,15 @@
+--- a/src/falcon/dsp_cpu.c
++++ b/src/falcon/dsp_cpu.c
+@@ -1383,6 +1383,12 @@
+ 					dsp_set_interrupt_mask(DSP_INTER_SSI_RCV_DATA, dsp_core.periph[DSP_SPACE_X][DSP_SSI_CRB]&(1<<DSP_SSI_CRB_RIE));
+ 					dsp_set_interrupt_mask(DSP_INTER_SSI_TRX_DATA_E, dsp_core.periph[DSP_SPACE_X][DSP_SSI_CRB]&(1<<DSP_SSI_CRB_TIE));
+ 					dsp_set_interrupt_mask(DSP_INTER_SSI_TRX_DATA, dsp_core.periph[DSP_SPACE_X][DSP_SSI_CRB]&(1<<DSP_SSI_CRB_TIE));
++					/* The request is TDE itself: enabling TIE while the transmit
++					 * register is empty interrupts at once on a 56001, also when
++					 * no word has been transmitted since reset. */
++					if ((value & (1<<DSP_SSI_CRB_TIE))
++					    && (dsp_core.periph[DSP_SPACE_X][DSP_SSI_SR] & (1<<DSP_SSI_SR_TDE)))
++						dsp_set_interrupt(DSP_INTER_SSI_TRX_DATA, 1);
+ 					break;
+ 				case DSP_SSI_TSR:
+ 					dsp_core_ssi_writeTSR();
