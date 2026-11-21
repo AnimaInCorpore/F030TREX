@@ -8789,7 +8789,8 @@ no longer computes weights, mixes run lists or keeps a pose cache.
   weight 0. Those named `DSP random …` are run-time gestures (6.6i).
 - **Lens:** a fixed horizontal-fit camera, 1,320/1,219 pixel focal lengths
   through the pixel aspect.
-- **Shadow:** a `Ground shadow` plane whose scale gives the ellipse
+- **Shadow:** a `Ground shadow` plane (several since 6.6j, one ellipse
+  each) whose scale gives the ellipse
   half-axes; its material holds the three ring radii.
 - **Lighting:** the `Falcon DSP shade` node group with world-space light
   vectors, the ambient, the DSP's fixed tint thresholds and the 16×4 ramp
@@ -8819,7 +8820,7 @@ Blender. It writes:
 | `backdrop_path.bin` | the 16-byte header, then one 52-byte record per sample: Q1.23 matrix, translation, pose offset. The yaw word is gone. |
 | `backdrop_poses.bin` | unique full-body XYZ16 poses |
 | `backdrop_targets.bin` | DSP targets with per-sample Q12 weights |
-| `backdrop_shadow.bin` | the shadow rows, format of 6.6c |
+| `backdrop_shadow.bin` | the shadow rows, format of 6.6c; several ellipses per sample since 6.6j |
 | `backdrop_lights.inc`, `backdrop_ramp.inc` | light vectors and ramp; `trex_m68030.s` includes them in place of the hand-pasted tables |
 | `backdrop_640x400.bin` | the RGB565 picture |
 
@@ -9241,6 +9242,214 @@ emulated, 14 MiB, TOS 4.02; emulator only, no physical Falcon):
 then the secondary motion), `make backdrop` exports it, and the 6.6b targets
 build it. For a repeatable gesture capture, patch a copy:
 `python3 tools/patch_data_flag.py <copy.tos> <build .lst> gesture_enabled 2 0`.
+
+### 6.6j Two walkers on a snowfield: one model, several actors (2026-11-20)
+
+The timings in this section were measured before the 6.6i changes
+(2026-11-21) and have not been rerun on top of them.
+
+The original column and tracking experiments below precede the revised
+**Glacier patrol** at the end of this section. Their counts and timings
+describe their respective builds.
+
+A second scene built with the model directory of 6.6h: two four-legged
+walkers march past a low, up-tilted camera on a snowfield and fire laser
+bolts. The source is a user-supplied rigged model (`assets/Tutorial.blend`,
+109,092 vertices in 1,071 loose pieces, 49 bones, no animation) and its
+foot-position table. Neither is in the repository. The scene and its
+build live in the git-ignored `blender/atat/`.
+
+**Reducing a rigid machine.**
+[`tools/blender_reduce_rigid.py`](tools/blender_reduce_rigid.py) extends
+the convex-hull reduction of 6.6h from parts to loose pieces, and adds
+texture:
+- **Hulls:** every loose piece larger than 4.5% of the model height becomes
+  the convex hull of its vertices, owned by the bone most of them follow.
+  A piece lying inside a larger hull of the same bone is dropped. Of 116
+  candidates, 43 remained.
+- **Mirrored copies:** bone-name rules (`_l:_r:X`, `front_:rear_:Y`) name
+  parts that are mirror images. A rule replaces the occurrence that
+  yields an existing bone: replacing the first `_l` of `front_leg_001_l`
+  hit `_leg` and silently left the walker with two legs. Only the source
+  is reduced and textured.
+  Each copy is mirrored about the plane midway between the two bones and
+  shares the source's UVs, so the four legs cost one leg of texture.
+- **Texture:** the hulls are unwrapped per page (hull, head and guns, leg)
+  and Cycles bakes the source onto them: material albedo times ambient
+  occlusion. Panel lines and greebles survive as texels on flat hulls.
+  Texels whose rays found no surface take their neighbours' colour.
+  Pages are reduced to 256x256, 15-bit colour and 255 palette entries.
+
+One walker is 844 vertices and 1,276 triangles in three pages. Its feet
+still show dark blotches: the hull of a foot spans the gaps between its
+toe flaps, and the bake sees the dark inside through them.
+
+**One model, two actors.**
+[`tools/blender_build_walkers.py`](tools/blender_build_walkers.py) builds
+the scene in a copy of the trail scene. The DSP holds one mesh, so both
+walkers and four bolts are one mesh, `Walkers`:
+- **Rigs:** each walker has its own armature, parented to the mesh object.
+  The second armature's bones carry a prefix, so each Armature modifier
+  moves only its own vertex groups. The object moves straight ahead at the
+  stance speed; the rigs walk in place.
+- **Gait:** the foot table gives a 200-frame cycle in which one leg swings
+  per quarter and the other three slide back at 0.0233 m per frame. One
+  sample is ten cycle frames.
+- **Loop:** the loop lasts 4.5 cycles (90 samples) and the walkers stand
+  4.5 strides apart, half a cycle out of phase. At the end the rear walker
+  stands where the front one began, in the same pose. The camera is placed
+  so that the front walker has left the frame by then and the rear one's
+  starting place is outside it. Two walkers therefore read as an endless
+  column.
+- **Bolts:** each bolt is eight triangles skinned to a free bone. Between
+  shots it is scaled to 1% and parked inside the hull. Its corner normals
+  point at the lights, so it is drawn at a high shade level. No shot
+  crosses the loop's seam.
+- **Scale:** 900 model units per metre. The mesh origin is placed so that
+  the span from the furthest bolt to the rear walker's tail fits 16-bit
+  model units (32,016).
+- **Near plane:** a walker that has passed the camera has vertices behind
+  it. The DSP drops every triangle with a vertex nearer than 64 units, and
+  at this camera those triangles are outside the frame before that.
+
+**Several ground shadows.** `backdrop_shadow.bin` now holds one ellipse per
+object named `Ground shadow`, `Ground shadow.001`, and so on. The top byte
+of a sample's index longword counts the ellipses after the first; the low
+24 bits remain the offset. The bounds cover all ellipses, and each ellipse
+adds its three rings in the format of 6.6c. `draw_ground_shadow` loops over
+them. The T-Rex's file is unchanged (top byte 0).
+
+**Budget.** 1,712 vertices, 2,584 triangles and 1,010 distinct normals use
+14,570 of 14,647 X words and 9,770 of 13,888 Y words. The X bank is the
+limit: 1,300 triangles per walker was the largest target that fitted.
+The 90 samples hold 68 unique poses (698,496 bytes). The viewing
+executable is 1,923,469 bytes.
+
+**Results** (Hatari, Falcon 16 MHz, 14 MiB, TOS 4.02; emulator only,
+physical hardware unmeasured):
+- **Blender against Hatari** (frames 1, 8, 20, 30, 40, 52, 66, 80, 90, MMU
+  core): the background, including both shadows, is exact. Silhouette
+  overlap is 0.980-0.987. The mean colour difference inside both
+  silhouettes is at most 2.3 green steps, with a bias below one step.
+  The differences are painter's-order choices where hulls intersect.
+- **Loop:** the five frames after the wrap match frames 0-4.
+- **Speed** (cycle-exact, Videl contention on, 180 frames): **489.6
+  ms/frame, 2.04 FPS**: set_frame 8.0 ms, packets 246.6 ms, backdrop
+  restore 102.0 ms, rasterizer 132.7 ms, 145,889 pixels per frame.
+  Measured before the last texture-only change to the pages; the mesh
+  and poses are identical.
+- **T-Rex control:** with the changed `draw_ground_shadow`, the T-Rex trail's
+  320 captured frames are byte-identical to the previous build's.
+
+**A held composition: the camera travels with the walkers.** The option
+`second=x,y` of `blender_build_walkers.py` replaces the column with the
+layout of a reference photograph: the second walker stands on a parallel
+track (18 m to the far side, 1 m behind), the near one fills the right of
+the frame in three-quarter view, and both stay in frame throughout.
+- **No travel:** the camera moves with the walkers, so in its frame the
+  model stands still and only the poses change. The loop is two walk
+  cycles, 40 samples and 33 unique poses (338,976 bytes).
+- **Backdrop:** the snow is painted without drift detail, which would
+  stand still under the sliding feet. The mountains are far enough to stay.
+- **Beams:** a bolt becomes a 10 m beam that stays on the muzzle for two
+  samples and then flies. It leaves the guns 0.5 rad to the side of the
+  head, across the frame, because a beam along the heading points at the
+  camera and is foreshortened to a sliver.
+- **Scale:** 800 units per metre (span 14,877).
+
+Results on the same Hatari settings: against Blender (frames 1, 3, 5, 13,
+20, 28, 40) the background is exact, silhouette overlap is 0.969-0.976 and
+the mean colour difference is at most 2.2 green steps; the five post-wrap
+frames match. Speed, cycle-exact over 80 frames: **531.3 ms/frame, 1.88
+FPS** (set_frame 8.0 ms, packets 311.1 ms, backdrop restore 84.6 ms,
+rasterizer 127.2 ms, 121,591 pixels per frame). The packet stage is higher
+than the column's 246.6 ms because both walkers are in frame all the time.
+The original camera settings were `second=-18,1 camera=6.7,-11.3,0.5
+yaw=-45 pitch=22 focal=400,369 units=800`.
+
+**Glacier patrol (two-walker build, 2026-11-20).** The scene
+and its single-walker intermediate recorded the original object, vertex count
+and SHA-256 of `assets/Tutorial.blend`. The geometry comes from that file's
+`ATAT` mesh and 49-bone `Armature`. The source has 109,092 vertices.
+With the 0.067 minimum piece size, 32 source pieces survive before mirroring.
+The reducer uses source faces for the cockpit, guns and feet, including
+the separate toe plates. Where a detailed casting stalls edge collapse, it
+resamples the piece exterior on a voxel grid, then simplifies the surface
+to the piece's triangle allowance. The three baked 256×256 walker pages
+carry the source panel lines and red visor. A fourth page supplies the bolts.
+
+The near walker occupies the right of the 640×400 view. The second marches
+20 m to its left and 18 m behind. The 50-sample tracking loop covers two
+gait cycles at eight source frames per sample. Swing velocity matches stance
+velocity at lift-off and touchdown. The lead turns, fires from alternating
+barrels on samples 15 and 20 and recoils. The second fires on sample 35.
+Shot origins and directions are sampled from the posed barrel at ignition.
+The fixed camera projects the two ground shadows against a glacier matte
+with its snowline at row 291. The [original matte](TREX/textures/atat_glacier.png)
+was made with built-in ImageGen, then reframed and dithered to RGB565.
+
+<details><summary>Glacier matte prompt</summary>
+
+Wide 16:10 photographic matte plate for a tracking shot on an icy plain. Pale cyan overcast sky fills the upper two thirds. Low jagged glacial peaks and exposed blue-grey rock strata fade into windblown haze. The flat snowfield begins at 73 percent of image height, with subtle shallow wind-carved ripples. A tiny half-buried remote listening post with a small dish at the far left horizon gives scale. Soft light from upper left, natural restrained film texture, empty foreground for compositing. No figures, vehicles, lettering or borders.
+
+</details>
+
+**Exported budget.** Each walker has 826 vertices and 1,332 triangles.
+Together with four bolts the mesh has 1,676 vertices, 2,696 triangles and
+1,143 normals. It occupies 14,430/14,647 X words and 10,372/13,888 Y words.
+The 49 unique poses occupy 492,744 bytes and the shadow stream 14,800 bytes.
+The DSP assembler reported zero errors and warnings.
+
+**Validation.** In patched Hatari (Falcon 16 MHz, TOS 4.02, 14 MiB), the
+five captured frames after wrap matched the first five byte for byte. On
+Blender frames 1, 8, 16, 17, 22, 36 and 50 the silhouette intersection over
+union was 0.947–0.956. Mean absolute green-channel error inside the shared
+silhouette was 1.72–2.02 RGB565 steps. A separate
+100-frame diagnostic run with the cycle-exact core and Videl contention
+enabled measured 434.1 ms/frame (2.30 fps): set_frame 7.5 ms, packets
+252.8 ms, backdrop restore 69.8 ms, rasterizer 103.5 ms. Physical Falcon
+timing for this revision is unmeasured.
+
+**Single-walker glacier patrol (current).** The [packed scene](TREX/scene/atat_patrol.blend)
+contains one rig, one ground shadow and two animated bolts. The 50-sample
+loop uses the same gait and firing times as the lead walker above. Reducing
+the minimum source-piece size to 0.042 of the model height retains 51
+pieces before mirroring. The foot drums use a stepped profile fitted to
+horizontal cross-sections of the source casting. Five baked 256×256
+pages carry the walker materials, and the sixth carries the bolts.
+
+The source contains 109,092 vertices and 213,827 triangles. The walker
+uses 1,648 vertices and 2,810 triangles. Including the two bolts gives
+1,660 vertices, 2,826 triangles and 2,173 normals. The measured export
+uses 14,448/14,647 X words and 12,822/13,888 Y words. The 44 unique poses
+take 438,240 bytes and the shadow stream takes 10,600 bytes.
+
+The [geometry comparison](docs/previews/atat-mesh-comparison.png) uses the
+rest meshes with a common camera, studio light and plain material. Mask
+intersection over union against the original increased from 90.3% to 92.9%
+from the front, 95.2% to 95.8% from the side and 94.1% to 95.2% from the
+three-quarter view (560×448 orthographic renders, alpha threshold 128).
+These percentages measure the outline. The cockpit close-up shows surface
+details that this measure misses.
+
+On the same Hatari configuration, five captured frames after wrap matched
+the first five byte for byte. The seven Blender/Hatari comparison frames
+had silhouette intersection over union of 0.966–0.977. A separate
+cycle-exact run with Videl contention enabled measured **431.3 ms/frame
+(2.32 fps)** over 100 frames. The [capture](docs/previews/atat-patrol.mp4)
+plays at 8 fps. Physical Falcon timing for this build is unmeasured.
+
+**Rebuild the current patrol** with Blender 5.3 and the supplied source file.
+The first target also leaves a packed, reusable mesh and its original rig in
+`blender/atat/asset_patrol_low.blend`. The earlier two-actor layouts
+require a smaller per-walker mesh to fit the DSP.
+
+```sh
+make atat_scene
+make model_export BLEND=TREX/scene/atat_patrol.blend MODEL_OBJECT=Walkers \
+  MODEL_DIR=./blender/atat/model_patrol
+make MODEL_DIR=./blender/atat/model_patrol trex_m68030_hires_backdrop_run
+```
 
 ### 6.7 Texture and CLUT reads
 

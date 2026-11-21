@@ -6043,9 +6043,17 @@ draw_ground_shadow
 	movem.l	d0-d7/a0-a2,-(sp)
 	lea	backdrop_shadows,a0
 	move.l	animation_frame,d0
-	adda.l	(a0,d0.l*4),a0
+	; The index longword: 24-bit offset of the sample's rows, and in its top
+	; byte the number of ellipses after the first (blender_export_falcon.py).
+	move.l	(a0,d0.l*4),d1
+	move.l	d1,d0
+	andi.l	#$00ffffff,d1
+	adda.l	d1,a0
+	rol.l	#8,d0
+	move.w	d0,-(sp)		; low byte: ellipses still to draw after this one
 	move.l	a0,ground_shadow_box
 	addq.l	#8,a0
+.ellipse
 	moveq	#2,d7
 	moveq	#4,d5
 	move.l	#$08610861,d4		; both RGB565 words divided channelwise by 16
@@ -6075,6 +6083,9 @@ draw_ground_shadow
 	moveq	#3,d5
 	move.l	#$18e318e3,d4		; 1/8 additional attenuation in each inner ring
 	dbra	d7,.ring
+	subq.b	#1,1(sp)
+	bcc	.ellipse
+	addq.l	#2,sp
 	movem.l	(sp)+,d0-d7/a0-a2
 .done
 	rts

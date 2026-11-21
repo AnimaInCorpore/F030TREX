@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Compare Blender renders of the source scene with a Hatari fbseq.res capture.
 
-Usage: compare_blender_render.py <fbseq.res> <render dir> <blender frame> [...]
+Usage: compare_blender_render.py [--model <model dir>] <fbseq.res> <render dir> <blender frame> [...]
+
+--model names a directory written by make model_export (its backdrop and
+shadow); the default is the T-Rex trail's.
 
 fbseq.res holds one 640x400 big-endian RGB565 framebuffer per displayed
 frame; capture frame k is trail sample k, Blender frame k+1 on the first
@@ -26,21 +29,27 @@ def channels(words):
     return np.dstack([words >> 11, (words >> 5) & 63, words & 31]).astype(np.int32)
 
 
+BACKDROP = ROOT / "TREX/textures/backdrop_640x400.bin"
+SHADOW = ROOT / "TREX/model/backdrop_shadow.bin"
+
+
 def ground(sample):
     """draw_ground_shadow applied to the backdrop for one sample."""
-    words = np.fromfile(ROOT / "TREX/textures/backdrop_640x400.bin", ">u2").reshape(H, W).astype(np.int32)
+    words = np.fromfile(BACKDROP, ">u2").reshape(H, W).astype(np.int32)
     rgb = channels(words)
-    data = (ROOT / "TREX/model/backdrop_shadow.bin").read_bytes()
-    cursor = struct.unpack_from(">I", data, sample * 4)[0] + 8
-    for ring in range(3):
-        first, rows = struct.unpack_from(">Hh", data, cursor)
-        cursor += 4
-        shift = 4 if ring == 0 else 3
-        for row in range(rows + 1):
-            column, longs = struct.unpack_from(">HH", data, cursor)
+    data = SHADOW.read_bytes()
+    index = struct.unpack_from(">I", data, sample * 4)[0]
+    cursor = (index & 0xFFFFFF) + 8
+    for ellipse in range((index >> 24) + 1):
+        for ring in range(3):
+            first, rows = struct.unpack_from(">Hh", data, cursor)
             cursor += 4
-            span = rgb[first + row, column // 2:column // 2 + 2 * (longs + 1)]
-            span -= span >> shift
+            shift = 4 if ring == 0 else 3
+            for row in range(rows + 1):
+                column, longs = struct.unpack_from(">HH", data, cursor)
+                cursor += 4
+                span = rgb[first + row, column // 2:column // 2 + 2 * (longs + 1)]
+                span -= span >> shift
     return rgb
 
 
@@ -72,6 +81,10 @@ def main(fbseq, renders, frames):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 4:
+    argv = sys.argv[1:]
+    if argv[:1] == ["--model"]:
+        BACKDROP, SHADOW = Path(argv[1]) / "backdrop_640x400.bin", Path(argv[1]) / "backdrop_shadow.bin"
+        argv = argv[2:]
+    if len(argv) < 3:
         sys.exit(__doc__)
-    main(sys.argv[1], sys.argv[2], [int(f) for f in sys.argv[3:]])
+    main(argv[0], argv[1], [int(f) for f in argv[2:]])

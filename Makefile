@@ -696,6 +696,18 @@ backdrop:
 # The scene needs the camera, "Ground shadow", the "Falcon DSP shade" group and
 # a "lap" marker of TREX/scene/trex_trail.blend (start from a copy of it).
 MODEL_OBJECT=T-Rex
+.PHONY: atat_scene
+ATAT_DIR=./blender/atat
+atat_scene:
+	blender -b -Y assets/Tutorial.blend --python-exit-code 1 --python tools/blender_reduce_rigid.py -- \
+		ATAT Armature $(ATAT_DIR)/asset_patrol_low.blend triangles=3450 min_piece=0.042 ambient=0.76 \
+		'mirror=_l:_r:X,front_:rear_:Y' 'surfaces=Head,canon*,Blaster*,*leg_004*,*leg_003*,*leg_002*' round_feet=front_leg_004_l \
+		'pages=Main;Head,Neck*,canon*,Blaster*;*leg_004*;*leg_003*,*leg_stab*;*leg*' \
+		'colours=Aufbauten:169,175,180;Aufbauten_dunkel:139,146,152;Aufbauten_Wasserschaden:132,137,141;Aufbauten_Schaden:125,130,135;RotCockpit:255,45,45' glow=RotCockpit
+	blender -b -Y $(BACKDROP_SCENE) --python-exit-code 1 --python tools/blender_build_walkers.py -- \
+		$(ATAT_DIR)/asset_patrol_low.blend "ATAT low" Armature $(ATAT_DIR)/atat_patrol.blend
+	cp $(ATAT_DIR)/atat_patrol.blend TREX/scene/atat_patrol.blend
+
 .PHONY: model_export
 model_export:
 	@[ -n "$(BLEND)" ] || { echo "model_export needs BLEND=<file.blend>"; exit 1; }

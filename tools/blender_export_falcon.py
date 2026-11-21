@@ -18,7 +18,8 @@ displayed sample n (Blender frame frame_start + n):
                         count, sample count, one 32-bit offset per target, then
                         sample-major Q12 weights, then each target's runs
                         (first vertex, vertex count, XYZ16 deltas; count 0 ends)
-  backdrop_shadow.bin   the ground-shadow ellipse rows, format of OPTIMIZATION.md 6.6c
+  backdrop_shadow.bin   the ground-shadow ellipse rows, format of OPTIMIZATION.md 6.6c;
+                        one ellipse per object named "Ground shadow[.NNN]"
   backdrop_gestures.inc the "DSP random <group> ..." targets the 68030 triggers at
                         run time: target, peak weight (the key's slider maximum),
                         group and timing
@@ -83,7 +84,12 @@ laps = [m.frame for m in scene.timeline_markers if m.name == "lap"]
 if len(laps) != 1 or not first <= laps[0] <= last:
     fail("need exactly one timeline marker named 'lap' inside the frame range")
 lap = laps[0] - first
-trex, shadow, camera = bpy.data.objects[OBJECT], bpy.data.objects["Ground shadow"], scene.camera
+trex, camera = bpy.data.objects[OBJECT], scene.camera
+# One ellipse per object named "Ground shadow", "Ground shadow.001", ...
+shadows = sorted((o for o in bpy.data.objects if o.name.split(".")[0] == "Ground shadow"),
+                 key=lambda o: o.name)
+if not 1 <= len(shadows) <= 256:
+    fail("need between 1 and 256 objects named 'Ground shadow'")
 
 # ------------------------------------------------------------------ lens
 cam = camera.data
@@ -178,8 +184,8 @@ for key in keys[1:]:
 records, pose_bank, pose_offsets = bytearray(), bytearray(), {}
 weights_table, shadow_index, shadow_rows = [], bytearray(), bytearray()
 wire_words = []
-rings = [shadow.active_material.node_tree.nodes["ring %d radius" % i].inputs[1].default_value
-         for i in range(3)]
+rings = [[shadow.active_material.node_tree.nodes["ring %d radius" % i].inputs[1].default_value
+          for i in range(3)] for shadow in shadows]
 
 
 def homography(obj):
@@ -262,20 +268,22 @@ for sample in range(count):
     wire_words.append(frame_words)
     assert np.array_equal(composed + pose, model)
 
-    # Ground shadow: three rings of the same ellipse.
-    plane = homography(shadow)
-    shadow_index += struct.pack(">I", 4 * count + len(shadow_rows))
-    for ring, radius in enumerate(rings):
-        rows = ellipse_rows(plane, radius)
-        if rows:
-            assert len(rows) == rows[-1][0] - rows[0][0] + 1, "ring rows are not contiguous"
-        if ring == 0:
-            box = (min(x for _, x, _ in rows), max(x for _, _, x in rows) - 1,
-                   rows[0][0], rows[-1][0]) if rows else (0, 0, 1, 0)
-            shadow_rows += struct.pack(">4H", *box)
-        shadow_rows += struct.pack(">Hh", rows[0][0] if rows else 0, len(rows) - 1)
-        for _, left, right in rows:
-            shadow_rows += struct.pack(">HH", left * 2, (right - left) // 2 - 1)
+    # Ground shadows: three rings per ellipse. The index's top byte counts
+    # the ellipses after the first; the box covers all of them.
+    shadow_index += struct.pack(">I", (len(shadows) - 1) << 24 | (4 * count + len(shadow_rows)))
+    ellipses = [[ellipse_rows(homography(shadow), radius) for radius in radii]
+                for shadow, radii in zip(shadows, rings)]
+    outer = [row for ellipse in ellipses for row in ellipse[0]]
+    box = (min(x for _, x, _ in outer), max(x for _, _, x in outer) - 1,
+           min(y for y, _, _ in outer), max(y for y, _, _ in outer)) if outer else (0, 0, 1, 0)
+    shadow_rows += struct.pack(">4H", *box)
+    for ellipse in ellipses:
+        for rows in ellipse:
+            if rows:
+                assert len(rows) == rows[-1][0] - rows[0][0] + 1, "ring rows are not contiguous"
+            shadow_rows += struct.pack(">Hh", rows[0][0] if rows else 0, len(rows) - 1)
+            for _, left, right in rows:
+                shadow_rows += struct.pack(">HH", left * 2, (right - left) // 2 - 1)
 
 # ------------------------------------------------------------------ lights and ramp
 group = bpy.data.node_groups["Falcon DSP shade"]

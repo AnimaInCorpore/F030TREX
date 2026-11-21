@@ -243,6 +243,17 @@ then builds that model's trail scene. Start from a copy of
 `make model_export BLEND=<file> MODEL_OBJECT=<name> MODEL_DIR=<dir>`.
 See [OPTIMIZATION.md 6.6h](OPTIMIZATION.md#66h-any-blender-model-as-a-model-directory).
 
+**AT-AT glacier patrol.** Open the [packed Blender scene](TREX/scene/atat_patrol.blend)
+or [watch the 50-frame Hatari capture at 8 fps](docs/previews/atat-patrol.mp4).
+One walker tracks a target and fires twice. Its rig and armour come from
+`assets/Tutorial.blend`. The [mesh comparison](docs/previews/atat-mesh-comparison.png)
+shows the original and the 1,648-vertex, 2,810-triangle reduction under the
+same lighting. The scene measured 431.3 ms/frame in
+cycle-exact Hatari over two loops. To rebuild the packed scene and the
+individual rigged mesh, run `make atat_scene` with the supplied asset present.
+For Falcon export and the earlier column shot, see
+[OPTIMIZATION.md 6.6j](OPTIMIZATION.md#66j-two-walkers-on-a-snowfield-one-model-several-actors-2026-11-20).
+
 The figures in the rest of
 this paragraph are the previous pipeline's. Over the 265-frame prefix its full-mesh **diagnostic** build
 measured **433.7 ms / 2.31 FPS**, and `TREX.TOS` measures **431.1 ms /
