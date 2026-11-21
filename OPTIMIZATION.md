@@ -11012,6 +11012,53 @@ layout), frame 100 unchanged.
 Not merged. Raw counters:
 [`docs/performance/hires-compact-stream-2026-11-19.json`](docs/performance/hires-compact-stream-2026-11-19.json).
 
+### 7.4j Reusing the row above's texel offsets -- modelled offline, lossy, not built (2026-11-21)
+
+**The idea.** The span rasterizer's texture mapping is affine, not
+perspective-correct (6.6g), so `u` and `v` are linear in screen x and y
+across a triangle. At the same screen x, the next row's `(u, v)` is this
+row's plus a constant `(du/dy, dv/dy)`. In principle the DSP could send one
+packed delta per span instead of one offset per pixel, and the 68030 would
+add it to the offsets it kept from the row above.
+
+**Why it isn't exact.** The stream sends `floor(V) << 8 | floor(U)`, not
+`(u, v)`. Along a row the fractional parts change with `du/dx` and `dv/dx`,
+so the integer step from the row above to the same x is `floor(dU)` for some
+pixels and `floor(dU) + 1` for the others, and the same holds in V. One
+constant per row can only match one of the two cases.
+
+**Modelled** (`tools/model_row_reuse.py`, offline, on the 640x400 frame-100
+capture `hatari_runs/hires-ce/spanstrm.res` from 2026-11-18, before the
+jungle trail; 55,942 streamed pixels). The model gives each row the best
+possible constant, the most common packed difference:
+
+| | Share of the pixels that have one above |
+|---|---:|
+| Pixels with a pixel directly above in the same triangle | 86.0% of all pixels |
+| Exact, each row against the true row above | 74.5% (64.1% of all pixels) |
+| One texel off, the same | 25.5% |
+| Exact, each row against the rebuilt row above (what a decoder sees) | 62.8% |
+| One / two texels off, the same | 36.5% / 0.7% |
+
+The other 14% of pixels (first rows and pixels past the row above's span)
+need full offsets either way. A handful of pixels per frame is 255 texels off
+where a triangle's UVs wrap across a texture edge.
+
+**Making it lossless** means sending the exceptions (a quarter of the reused
+pixels) or the fractional parts. With the fractional parts, the 68030 is
+doing the affine stepping again, which is the job the span stream took off it
+(7.4g).
+
+**68030 cost, estimate, not measured.** The plain loop is four instructions
+per pixel (stream read, texel fetch, CLUT read and store, `dbra`). Reuse adds
+at least a read of the row buffer, the add and a write back for the next row,
+before handling the edge pixels and any exceptions. 7.4i's delta loop, at 7
+instructions against 4, cost about 89 ms of raster cycle-exact. Against that,
+the DSP would send no offset for up to 64% of pixels (lossy) and would spend
+less of 2.8's 116.2 ms waiting on the SSI transmitter. Not built, because
+the lossy form changes the image (1-texel errors on ~37% of reused pixels)
+and the lossless form gives up most of the saving.
+
 ## 8. When SSI/crossbar streaming is worthwhile
 
 This section originally deferred SSI because the host still performed the
