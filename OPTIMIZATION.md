@@ -4752,7 +4752,8 @@ each, cycle-exact, emulator only:
   at 400%): the 68030 has no idle time to give.
 
 **Buffered transmit, as built.** The walker waits on the transmitter for
-every unit while the wire needs about 54 clocks a unit; between triangles
+every unit while the wire takes 64 clocks a unit (7.4f: four tracks, 500,000
+words a second); between triangles
 the wire is idle. The experiment stores units in a ring and lets a fast
 interrupt send them, so the wire keeps running through the next triangle's
 setup. The 56001 leaves little room for it, and the design is shaped by
@@ -6350,6 +6351,62 @@ memory-indirect effective address costs the 68030 more than the brief
 indexed form. Expected no faster (estimate, and the table-entered loop
 above is a hint about memory-indirect cost, not a proof for a data
 access); recorded so the idea is not re-derived.
+
+### 3.18 A three-access stream consumer: pre-shaded 16-bit texels, measured, 1 ms (2026-11-21)
+
+**Question.** The stream consumer reads the stream word, the texel byte and
+the CLUT word and writes the pixel. With each texel stored as its 16-bit
+colour the texel byte goes away. What is that worth?
+
+**Memory.** One pre-shaded set of the six pages is 786,432 bytes. The
+trail executable occupies 7,089,254 bytes, so a 14 MiB machine has room for
+8 or 9 of today's 64 banks (an estimate: TOS's own use was assumed at
+300-600 KB, not measured). The probe therefore measures the loop, not a
+usable renderer.
+
+**Instrument.** `-DTREX_DIRECT_PROBE` (`make
+trex_m68030_hires_backdrop_direct`, `trex_hires_bg_direct.tos` with
+`TREXBGND.LOD`) adds `direct_texels`, every page once through its brightest
+untinted bank, at the very end of BSS, and `span_stream_draw_direct`:
+
+```text
+.direct_pixel
+	move.w	(a1)+,d1		; texel offset, V << 8 | U
+	move.w	(0,a6,d1.l*2),(a4)+	; pre-shaded colour -> framebuffer
+	dbra	d4,.direct_pixel
+```
+
+The per-span bank arithmetic is kept as a `LEA` of the same shape. The
+picture is flat-lit, so there is no picture gate; `direct_probe_enabled`, a
+data longword, selects the loop on one linked layout. Builds without the
+define are byte-identical to before.
+
+**Measured**, trail build of 2.8e, cycle-exact Hatari, 16 MHz, 14 MiB, one
+run of about 9,500 VBLs each; emulator only. Raw figures:
+[`docs/performance/direct-probe-2026-11-21.json`](docs/performance/direct-probe-2026-11-21.json).
+
+| Share | Normal loop | Three-access loop |
+|---:|---:|---:|
+| 172 | -- | **322.8 ms** |
+| 188 | 325.1 ms | 324.1 ms |
+| 204 | -- | 331.6 |
+| 224 | -- | 338.6 |
+| 256 | 348.4 | 347.9 |
+
+- **At share 188** the raster stage drops 68.0 -> 56.6 ms and the packet
+  stage rises 212.8 -> 223.3 ms: the 68030 draws faster and then waits for
+  the DSP longer.
+- **Best case** 322.8 ms at share 172, against 323.4 ms for the 2.8e build
+  at its own optimum: 0.6 ms.
+- **With the DSP four times as fast** (2.8d's what-if emulator, everything
+  streamed): 217.6 -> 211.8 ms, 5.8 ms for about 43,600 streamed pixels.
+  Even there the 137 KB stream needs about 137 ms of SSI time a frame at
+  7.4f's 1 MB/s, so
+  the link still paces the pixels and the figure is a lower bound for the
+  loop alone.
+
+**Not adopted.** It would cost the lighting (9 banks at most) to save
+about a millisecond. The stream consumer is not what the frame waits on.
 
 ## 4. Work already assigned to the DSP
 

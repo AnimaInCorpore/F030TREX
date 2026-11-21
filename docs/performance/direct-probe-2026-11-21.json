@@ -1,0 +1,44 @@
+{
+ "date": "2026-11-21",
+ "section": "OPTIMIZATION.md 3.18",
+ "emulator": "Hatari fork 24cd93e7, cycle-exact, 16 MHz, 14 MiB, TOS 4.02; the DSP x4 rows on a scratch build with HATARI_DSP_SPEED and the SSI TIE fix; emulator only",
+ "runs": 1,
+ "probe": "trex_hires_bg_direct.tos, direct_probe_enabled patched",
+ "memory": {
+  "one_set_bytes": 786432,
+  "executable_bytes": 7089254,
+  "sets_that_fit_14_MiB": "8-9 (TOS use assumed, not measured)"
+ },
+ "frame_ms": {
+  "normal_loop": {
+   "188": 325.1,
+   "256": 348.4
+  },
+  "three_access": {
+   "172": 322.8,
+   "188": 324.1,
+   "204": 331.6,
+   "224": 338.6,
+   "256": 347.9
+  }
+ },
+ "stages_ms_share_188": {
+  "normal": {
+   "packets": 212.8,
+   "clear": 37.2,
+   "raster": 68.0
+  },
+  "three_access": {
+   "packets": 223.3,
+   "clear": 37.3,
+   "raster": 56.6
+  }
+ },
+ "dsp_x4_share_256_ms": {
+  "normal_loop": 217.6,
+  "three_access": 211.8,
+  "stream_bytes_per_frame": 137661,
+  "streamed_triangles_per_frame": 1018
+ },
+ "adopted": false
+}

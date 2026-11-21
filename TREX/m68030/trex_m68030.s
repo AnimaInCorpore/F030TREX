@@ -5112,6 +5112,9 @@ span_stream_begin_frame
 	tst.l	span_table_ready
 	bne	.span_begin_table
 	bsr	span_build_table
+	ifd	TREX_DIRECT_PROBE
+	bsr	direct_build
+	endc
 .span_begin_table
 	lea	span_stream_buffer,a0
 	move.l	a0,span_stream_ptr
@@ -6787,7 +6790,79 @@ offset_draw_packet
 ;      A1 = stream, A3 = render window, A5 = texture page
 ; Out: A1 = first unit after the terminator; the pixels are added to
 ;      raster_pixel_count.  Clobbers D0-D5/A4/A6.
+	ifd	TREX_DIRECT_PROBE
+; Three-access probe (OPTIMIZATION.md 3.18, vasm -DTREX_DIRECT_PROBE): what
+; the stream consumer costs when a texel IS its colour.  direct_texels holds
+; each page once as 16-bit pixels, pre-shaded with one bank, so the picture
+; is flat-lit and only the timing means anything.  A real version needs one
+; such page per bank; the per-span bank arithmetic is kept here as a LEA of
+; the same shape so the span overhead is not understated.
+; In: A0 = the page's opaque CLUT (names the page), A1 = stream, A3 = base.
+span_stream_draw_direct
+	move.l	a0,d0
+	sub.l	#texture_page_falcon_opaque_clut_buffer,d0
+	lsl.l	#2,d0			; page * 32768 bytes of CLUT -> page * 131072
+	lea	direct_texels,a6
+	adda.l	d0,a6
+	moveq	#0,d1
+	moveq	#0,d2
+	moveq	#0,d5
+.direct_span
+	moveq	#0,d4
+	move.w	(a1)+,d4		; length - 1
+	bmi	.direct_done
+	move.w	(a1)+,d3
+	move.w	d3,d2
+	andi.w	#$fe00,d3		; bank * 512 bytes
+	lea	(0,a0,d3.w),a2		; stands in for selecting the bank's page
+	andi.l	#$1ff,d2		; y
+	mulu.w	#FRAMEBUFFER_STRIDE,d2
+	lea	(0,a3,d2.l),a4
+	move.w	(a1)+,d2		; x
+	lea	(0,a4,d2.w*2),a4		; first pixel
+	moveq	#0,d2
+	addq.l	#1,d5
+	add.l	d4,d5
+.direct_pixel
+	move.w	(a1)+,d1		; texel offset, V << 8 | U
+	move.w	(0,a6,d1.l*2),(a4)+		; pre-shaded colour -> framebuffer
+	dbra	d4,.direct_pixel
+	bra	.direct_span
+.direct_done
+	add.l	d5,raster_pixel_count
+	rts
+
+; Fill direct_texels: every page's texels through its brightest untinted bank.
+direct_build
+	movem.l	d0-d3/a0-a3,-(sp)
+	lea	direct_texels,a1
+	lea	texture_page_pixels_table,a2
+	lea	texture_page_opaque_clut_table,a3
+	moveq	#TIM_PAGE_COUNT-1,d2
+.direct_page
+	move.l	(a2)+,a0		; 65,536 palette indices
+	move.l	(a3)+,d0
+	add.l	#SHADE_MAX*TIM_FALCON_OPAQUE_CLUT_PAGE_BYTES,d0
+	move.l	d0,d3
+	move.l	#65535,d1
+	moveq	#0,d0
+.direct_texel
+	move.b	(a0)+,d0
+	move.l	d3,-(sp)
+	move.l	(sp)+,a6
+	move.w	(0,a6,d0.l*2),(a1)+
+	subq.l	#1,d1
+	bpl	.direct_texel
+	dbra	d2,.direct_page
+	movem.l	(sp)+,d0-d3/a0-a3
+	rts
+	endc
+
 span_stream_draw
+	ifd	TREX_DIRECT_PROBE
+	tst.l	direct_probe_enabled
+	bne	span_stream_draw_direct
+	endc
 	ifd	TREX_HIRES
 	; With the band delta clear armed (2.5b), a streamed triangle must
 	; widen the band table like rasterize_packet's delta_mark_packet does,
@@ -9634,6 +9709,12 @@ gesture_enabled
 	dc.l	0
 	endc
 gesture_seed	dc.l	$2545f491
+	ifd	TREX_DIRECT_PROBE
+; 1 = draw streamed spans through direct_texels; 0 = the normal loop at the
+; same linked layout (tools/patch_data_flag.py).
+direct_probe_enabled
+	dc.l	1
+	endc
 gesture_channels
 	ds.b	GESTURE_BYTES*GESTURE_GROUPS+2	; one per group, set by gesture_init
 	even
@@ -11321,6 +11402,11 @@ span_tri_table
 span_stream_buffer
 	ds.b	SPAN_STREAM_BYTES
 span_stream_buffer_end
+	endc
+	ifd	TREX_DIRECT_PROBE
+; Appended after every other allocation so no pinned buffer moves.
+direct_texels
+	ds.b	TIM_PAGE_COUNT*131072
 	endc
 	ifd	TREX_OFFSET_PROBE
 ; Offset-stream probe state, appended after every other allocation so no

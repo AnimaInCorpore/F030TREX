@@ -723,6 +723,18 @@ trex_m68030_hires_backdrop_fbseq: create_dirs $(VASM) $(VLINK) ./TREX/m68030/tre
 ./TREX/m68030/build/trex_hires_bg.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin $(BACKDROP_ASSETS)
 	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_DELTA_DSP -DTREX_BACKDROP -o $@ -L ./TREX/m68030/build/trex_hires_bg.lst
 
+# Three-access probe (OPTIMIZATION.md 3.18): the measured trail build plus a
+# stream consumer that reads pre-shaded 16-bit texels.  Diagnostic only; the
+# picture is flat-lit.  direct_probe_enabled selects the loop per run.
+.PHONY: trex_m68030_hires_backdrop_direct
+trex_m68030_hires_backdrop_direct: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_hires_bg_direct.tos trex_dsp_backdrop
+
+./TREX/m68030/build/trex_hires_bg_direct.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin $(BACKDROP_ASSETS)
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_DELTA_DSP -DTREX_BACKDROP -DTREX_DIRECT_PROBE -o $@ -L ./TREX/m68030/build/trex_hires_bg_direct.lst
+
+./TREX/m68030/trex_hires_bg_direct.tos: ./TREX/m68030/build/trex_hires_bg_direct.o ./TREX/m68030/build/ssi_dma4.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
 ./TREX/m68030/build/trex_hires_bg_run.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin $(BACKDROP_ASSETS)
 	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_DELTA_DSP -DTREX_BACKDROP -DTREX_RUN -o $@ -L ./TREX/m68030/build/trex_hires_bg_run.lst
 
