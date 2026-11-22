@@ -21,6 +21,14 @@ Options (key=value):
   ambient=0.5         minimum AO multiplier baked into non-emissive materials
   round_feet=bone     fit the round vertical casting on this bone to its
                       source cross-sections; other pieces keep their toe geometry
+  size=height         the length that scales min_piece and the bake distances:
+                      "height" (Z extent, for walkers) or "extent" (the longest
+                      side, for flat or long vehicles)
+  inside=bone         drop a hull inside a larger hull of the same bone, or of
+                      any bone with inside=any (rigid models whose parts all
+                      move together)
+  textures=0          1: bake a material's image texture (its first image node,
+                      through the source's UVs) instead of its flat colour
 
 For a model whose parts each follow one bone (machines, robots), every loose
 piece of the mesh becomes the convex hull of its vertices -- which keeps the
@@ -65,6 +73,11 @@ GLOW = set(filter(None, opts.get("glow", "").split(",")))
 SURFACES = tuple(filter(None, opts.get("surfaces", "").split(",")))
 ROUND_FEET = opts.get("round_feet")
 AMBIENT = float(opts.get("ambient", 0.5))
+SIZE = opts.get("size", "height")
+INSIDE_ANY = opts.get("inside", "bone") == "any"
+TEXTURES = opts.get("textures", "0") == "1"
+if SIZE not in ("height", "extent"):
+    raise SystemExit("size must be height or extent")
 if not 0 <= AMBIENT <= 1:
     raise SystemExit("ambient must be in 0..1")
 PAGE_SIZE, BAKE_SIZE = 256, 1024
@@ -83,6 +96,8 @@ for v in mesh.vertices:
     vertex_bone.append(names[best.group] if best else None)
 coords = np.array([v.co[:] for v in mesh.vertices])
 height = coords[:, 2].max() - min(0.0, coords[:, 2].min())
+if SIZE == "extent":        # every length below scales with this one
+    height = float(np.ptp(coords, axis=0).max())
 
 bm = bmesh.new()
 bm.from_mesh(mesh)
@@ -182,7 +197,7 @@ parts = []
 for cand in candidates:
     inside = False
     for other in parts:
-        if other["bone"] != cand["bone"]:
+        if other["bone"] != cand["bone"] and not INSIDE_ANY:
             continue
         depth = cand["points"] @ other["normal"].T - other["offset"]
         if depth.max() < 0.02 * MIN_PIECE * height + 0.02:
@@ -378,7 +393,15 @@ bake_floors = []
 for slot, material in enumerate(list(mesh.materials)):
     name = material.name if material else ""
     colour = COLOURS.get(name, (0.62, 0.64, 0.66))
-    bake_floors.append(max(colour) * (1.0 if name in GLOW else AMBIENT * 0.88))
+    image = None
+    if TEXTURES and material and material.node_tree:
+        image = next((n.image for n in material.node_tree.nodes
+                      if n.type == "TEX_IMAGE" and n.image), None)
+        if image is not None and not image.has_data and tuple(image.size) == (0, 0):
+            image = None        # a missing file would bake Blender's magenta
+    # A texture can be dark anywhere: only an almost black texel counts as a
+    # ray that found no surface.
+    bake_floors.append(0.02 if image else max(colour) * (1.0 if name in GLOW else AMBIENT * 0.88))
     baked = bpy.data.materials.new("bake " + name)
     baked.use_nodes = True
     tree = baked.node_tree
@@ -416,6 +439,10 @@ for slot, material in enumerate(list(mesh.materials)):
         scale = tree.nodes.new("ShaderNodeVectorMath")
         scale.operation = "SCALE"
         scale.inputs[0].default_value = colour
+        if image is not None:
+            texel = tree.nodes.new("ShaderNodeTexImage")
+            texel.image = image
+            tree.links.new(texel.outputs["Color"], scale.inputs[0])
         tree.links.new(both.outputs[0], scale.inputs["Scale"])
         tree.links.new(scale.outputs[0], emission.inputs["Color"])
     mesh.materials[slot] = baked

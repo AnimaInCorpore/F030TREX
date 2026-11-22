@@ -9590,6 +9590,162 @@ make MODEL_DIR=./blender/tie/model BLEND=blender/tie/tie_scene.blend MODEL_OBJEC
 make MODEL_DIR=./blender/tie/model trex_m68030_hires_backdrop_run
 ```
 
+**MeshAnythingV2 as an alternative reducer (2026-11-22, offline).**
+MeshAnythingV2 was tested on the six models where the voxel fuse and TriFlow
+did worst. It is an autoregressive artist-mesh generator, capped at 1,600
+faces and conditioned on a point cloud sampled from the input. The six
+models were the snowspeeder, the vulture droid, the corvette, the AT-ST, the
+Falcon, and the TIE as a reference. As above, the budget figures are
+computed with the exporter's formula, and the quality notes come from
+looking at renders.
+
+*Setup on native Windows:*
+- **Location:** `C:\Arbeit\MeshAnythingV2`, commit `461d3b6`, with its own
+  `.venv`: Python 3.12, torch 2.11+cu128, transformers 4.39.3, optimum
+  1.18.0, numpy 1.26.4.
+- **Local patches:** three, with no CUDA build.
+  1. Eager attention instead of `flash_attention_2`. optimum's
+     BetterTransformer then uses PyTorch SDPA.
+  2. A 4D causal-mask branch in `shape_opt.py`, which otherwise accepts
+     only flash attention.
+  3. Output names from `os.path.basename`. `main.py` split paths on `/`,
+     which fails on Windows.
+- **Speed:** about 2 minutes per model on the RTX 5090 laptop GPU, with the
+  weights from `Yiwen-ntu/meshanythingv2`.
+- **Licence:** S-Lab 1.0, non-commercial.
+
+*Results:* all twelve outputs fit the budget at 571–2,082 triangles and
+3,240–11,968 X words. Shape quality decides which tool to use.
+
+| Model | Voxel + TriFlow | MeshAnythingV2 `--mc --mc_level 8` |
+|---|---|---|
+| Vulture droid | 1,207 T; wing tips lost | 1,985 T; **thin wing blades kept** |
+| AT-ST | 3,058 T; over budget | **1,288 T; legs and gun kept** |
+| Corvette | 1,272 T; a blob | 1,509 T; blocky but legible |
+| Snowspeeder | 2,181 T; plates and guns lost | 2,082 T; **wrong shape** |
+| Falcon | over budget | 571 T; **wrong shape, half missing** |
+| TIE | 1,114 T; good | 864 T; wings only, ball and struts missing |
+
+On the raw mesh without `--mc`, MeshAnythingV2 is worse. It gives
+staircase blocks on the corvette, the AT-ST and the Falcon, which suggests
+its 128-level coordinate grid. The vulture droid is the exception and comes
+out about as well as with `--mc`.
+
+The failures are large, many-part models where the output ends before the
+whole shape is covered. Neither tool wins on every model. Choose per model:
+MeshAnythingV2 with `--mc` for thin-bladed or truss-like shapes, voxel plus
+TriFlow for compact hulls.
+
+**Per-part reduction and bake (2026-11-22): the best result so far, offline
+only.** Both AI reducers treat the model as one surface. That is what loses
+thin parts and merges separate pieces. These 1990s models are built from many
+named objects: 323 for the TIE, 97 for the snowspeeder, 58 for the Falcon.
+They were reduced the way the AT-AT was (6.6j), part by part.
+
+[`tools/blender_vehicle_source.py`](tools/blender_vehicle_source.py) builds
+the source. It joins the OBJ's objects into one mesh, with one vertex group
+per object and a rest-pose armature of one bone per group. It centres and
+scales the mesh. It converts unreadable GIF textures to PNG; Blender reads no
+GIF, and without the conversion the bake took Blender's magenta placeholder.
+It also writes the MTL diffuse colours as a `colours=` option.
+
+`blender_reduce_rigid.py` gained three opt-in options. Their defaults leave
+the AT-AT path's code unchanged, but `make atat_scene` has not been re-run to
+confirm identical output.
+- `size=extent` scales every length by the longest side instead of the
+  height, for flat ships.
+- `inside=any` drops a hull inside any larger hull. The TIE's wing ribs then
+  vanish into the wing slab and survive as texture.
+- `textures=1` bakes a material's image through the source UVs.
+
+The reduction keeps each piece's convex hull, sized by area, and source faces
+for named parts. For the Falcon those are the main body (`mf_main_bo*`), so
+the mandible gap stays open. Then the detail is baked onto 256×256 pages.
+
+| Model | Source tris | Result | 7V + T words | Settings |
+|---|---:|---:|---:|---|
+| TIE | 39,177 | 861 V, 1,242 T, 120 parts | 7,269 | `triangles=1400`, one page |
+| Snowspeeder | 97,599 | 561 V, 866 T, 64 parts | 4,793 | `textures=1`, 2 pages |
+| Falcon | 84,494 | 1,169 V, 1,461 T, 170 parts | 9,644 | `textures=1`, `surfaces=mf_main_bo*`, `min_piece=0.07`, `min_triangles=4`, 2 pages |
+
+The first Falcon run, with the default `min_piece=0.045` and
+`min_triangles=8`, kept 280 parts. At 8 triangles each that is 2,174
+triangles, over budget.
+
+Visual comparison with the sources, from renders:
+- **TIE:** wings, frames, struts and wing hubs are right. Only the ball is
+  angular.
+- **Snowspeeder:** keeps both guns, the cockpit, the engines, the flaps, the
+  red markings and the rear cooler. These are the parts voxels, TriFlow and
+  MeshAnythingV2 all lost or mangled.
+- **Falcon:** keeps the mandibles, the cockpit tube and the disc outline. The
+  radar dish is lost as a small piece, and the main page's texels are coarse
+  across the 34 m hull.
+
+The TIE and the Falcon have not been exported or run on Hatari yet. Their
+normal counts, X/Y words and frame cost are therefore unknown. The bake
+shows the source's own textures and colours, so missing archive textures
+still show as flat colour.
+
+**The snowspeeder on Hatari.** `blender_triflow_vehicle.py` now also takes
+a `blender_reduce_rigid.py` result: `-- <low.blend> <object> <out.blend>`.
+It drops the rig, turns each page material into a `Falcon DSP shade`
+material with the same image, and adds flat Q12 normals. The route flight is
+unchanged.
+
+The restructuring was checked against the TIE: its scene, rebuilt and
+re-exported, gives a model directory identical to the measured one. Only the
+directory and `.blend` names in two generated headers differ.
+
+The snowspeeder flies at a 1.1 m centre height. At 2.2 m it was above the
+1.65 m eye-level camera, which then saw mostly the belly. It uses `bob=0.12`,
+`bank=8.0` and `max_bank=0.45`.
+
+Export and build:
+- **Mesh:** 561 vertices, 866 triangles and 611 normals in two pages. All 866
+  triangles qualify as opaque, using 254 CLUT indices in each page.
+- **DSP RAM:** 4,795 of 14,647 X words and 3,818 of 13,888 Y words.
+- **DSP configuration:** `00001101sinsnowspee561v866t611n610y`.
+
+Results on cycle-exact Hatari (same settings as the TIE):
+- **Speed, 160 frames: 169.9 ms/frame (5.89 FPS).**
+  - Packets: 111.5 ms.
+  - Clear: 30.8 ms.
+  - Rasterizer: 24.0 ms, with 43,313 pixels per frame.
+  - set_frame: 3.2 ms.
+- **Capture:** the timing and capture builds give the same frame-100
+  SHA-256 (`0af8b659…`).
+- **Loop:** all 6 captured post-wrap frames equal their lap counterparts.
+- **Blender against Hatari** (the same nine frames as the TIE):
+  - The background is exact.
+  - Silhouette IoU is 0.915–0.983.
+  - The mean colour difference is 2.5–5.7 green steps.
+  - The lowest IoU is frame 60, the closest pass. There Hatari lacks a sliver
+    under the nose that Blender draws. This fits the DSP's 64-unit near-plane
+    drop of whole triangles, but no near-plane-only build has confirmed it.
+
+Emulator figures only; physical Falcon timing is unmeasured.
+
+Rebuild, with the inputs in the git-ignored `blender/vehicles/snowspeeder/`:
+
+```sh
+blender -b --factory-startup --python-exit-code 1 --python tools/blender_vehicle_source.py -- \
+  blender/vehicles/snowspeeder/snowspeeder3_MAX5_3DS_.obj \
+  blender/vehicles/snowspeeder/snowspeeder_source.blend name=snowspeeder length=5.3
+blender -b -Y blender/vehicles/snowspeeder/snowspeeder_source.blend --python-exit-code 1 \
+  --python tools/blender_reduce_rigid.py -- snowspeeder "snowspeeder rig" \
+  blender/vehicles/snowspeeder/snowspeeder_low.blend size=extent inside=any textures=1 \
+  triangles=1400 ambient=0.6 'pages=rss_body*,rss_bottom*,rss_detail*;*' \
+  "$(cat blender/vehicles/snowspeeder/snowspeeder_source_colours.txt)"
+blender -b -Y TREX/scene/trex_trail.blend --python-exit-code 1 \
+  --python tools/blender_triflow_vehicle.py -- blender/vehicles/snowspeeder/snowspeeder_low.blend \
+  "snowspeeder low" blender/vehicles/snowspeeder/snowspeeder_scene.blend \
+  name=Snowspeeder altitude=1.1 bob=0.12 bank=8.0 max_bank=0.45
+make MODEL_DIR=./blender/vehicles/snowspeeder/model \
+  BLEND=blender/vehicles/snowspeeder/snowspeeder_scene.blend MODEL_OBJECT=Snowspeeder model_export
+make MODEL_DIR=./blender/vehicles/snowspeeder/model trex_m68030_hires_backdrop_run
+```
+
 ### 6.7 Texture and CLUT reads
 
 The six native T-Rex texture pages are much larger than the DSP local memory
