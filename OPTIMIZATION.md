@@ -9451,6 +9451,145 @@ make model_export BLEND=TREX/scene/atat_patrol.blend MODEL_OBJECT=Walkers \
 make MODEL_DIR=./blender/atat/model_patrol trex_m68030_hires_backdrop_run
 ```
 
+### 6.6k Reducing third-party vehicle models with TriFlow (2026-11-22)
+
+The survey below is offline: twelve models were reduced and priced, but
+not built. One of them, the TIE fighter, was then taken end to end
+through bake, export, build and Hatari (end of this section).
+The question was whether TriFlow (`C:\Arbeit\triflow`, run through
+`win_port/run.py inference.py` on the RTX 5090) can bring 1990s fan models
+down to the 6.6h budget. Twelve vehicles from a scifi3d Star Wars 3DS pack
+were tested, at 6,230 to 122,910 source triangles. The budget figures below
+were computed with the exporter's formula. They used Q12 corner normals at
+a 30° sharp angle. **None of them went through `blender_export_model.py`**.
+
+**TriFlow on the raw meshes: 0 of 12 fit.** These models are 33 to 1,792
+loose pieces. TriFlow simplifies each piece but does not merge them, and its
+`face_count` target stops being a limit. A 1,000-face target with
+`qem_threshold=100` gave 2,296 triangles for the 6,230-triangle Sentinel
+shuttle, which is 15,486 of 14,647 X words. The 84,504-triangle Falcon became
+16,113 triangles (209,131 X words). This matches the AT-AT result: 1,300 faces
+gave 7,849 triangles, and 4,430 with `qem_threshold=100`. That result is why
+6.6j uses `blender_reduce_rigid.py` instead.
+
+**Voxel-fuse first, then TriFlow: 10 of 12 fit.** First, a Blender voxel remesh
+at 256 voxels across the longest side turns each model into one watertight
+shell. TriFlow then runs at `face_count=700` and `qem_threshold=100`, in about
+6 s per model after the models load.
+
+| Model | Source tris | V | T | N | X words |
+|---|---:|---:|---:|---:|---:|
+| A-wing | 66,435 | 660 | 1,416 | 1,689 | 6,038 |
+| Tantive IV | 52,068 | 598 | 1,272 | 1,680 | 5,460 |
+| Vulture droid | 26,512 | 620 | 1,207 | 1,346 | 5,549 |
+| E-wing | 19,080 | 488 | 983 | 1,152 | 4,401 |
+| N-1 | 122,910 | 478 | 927 | 731 | 4,275 |
+| Sentinel shuttle | 6,230 | 425 | 854 | 910 | 3,831 |
+| Snowspeeder | 97,601 | 996 | 2,181 | 2,986 | 9,155 |
+| TIE fighter | 39,177 | 540 | 1,114 | 1,020 | 4,896 |
+| Lambda shuttle | 12,003 | 502 | 1,068 | 1,405 | 4,584 |
+| Y-wing | 70,325 | 780 | 1,649 | 1,999 | 7,111 |
+| AT-ST | 89,393 | 1,237 | 3,058 | 3,987 | 14,977 (over) |
+| Falcon | 84,504 | 1,711 | 4,246 | 5,778 | 26,629 (over) |
+
+The models were also reduced with Blender's Decimate to 1,400 triangles from
+the same shells. Eleven of 12 fit that way. In flat-shaded renders TriFlow
+is cleaner at the same or a lower triangle count. It keeps straight panel
+edges and the AT-ST's legs, where Decimate leaves spikes. These quality
+judgments come from looking at renders and are not measured. Both methods
+lose parts thinner than one voxel: the snowspeeder's guns and plates and the
+vulture droid's wing tips. The corvette becomes a blob.
+
+**Open for the other models:**
+- Thin parts need a finer voxel grid or reduction per part.
+- The AT-ST and the Falcon need a lower `face_count`.
+- The pack's models are fan-made and licensed for non-commercial use only.
+  The source, the TriFlow output and the build products therefore stay in
+  the git-ignored `blender/tie/`.
+
+**The TIE fighter, end to end.**
+[`tools/blender_triflow_vehicle.py`](tools/blender_triflow_vehicle.py) takes
+the detailed OBJ and the TriFlow OBJ and builds a copy of the trail scene:
+1. **Align.** TriFlow writes in its voxel-grid coordinates, with the same
+   axes as its input. A least-squares uniform scale and a bounding-box centre
+   map the mesh back onto the source. For the TIE the extents agree to about
+   1%.
+2. **Bake.** One smart-UV page receives the source's diffuse colours times
+   ambient occlusion, baked with Cycles (24 samples, 1024² downsampled to
+   256²). It is quantized to 15-bit colour and 255 CLUT entries.
+3. **Material and normals.** The model gets the `Falcon DSP shade`
+   material, flat Q12 corner normals in `ps1_normal`, and the T-Rex's
+   world-normal geometry nodes.
+4. **Flight.** The model flies the T-Rex's route at an altitude. It rolls
+   into turns by the yaw rate averaged over seven frames, and it bobs. Bob
+   and roll are periodic over the 72-frame lap (frame 114 plays as frame 42),
+   so the post-wrap frames repeat.
+
+The tool keeps the scene's world, which carries the backdrop. The first
+version cleared it for the bake, and its Blender references rendered black.
+
+Settings: `height=5.0`, `altitude=2.9`, `bob=0.25`, `max_bank=0.4`. At the
+canon height of 7.5 m, the close part of the route is out of frame.
+
+Export and build:
+- **Mesh:** 540 vertices, 1,114 triangles and 1,113 normals in one page.
+  All 1,114 triangles qualify as opaque, using 255 CLUT indices.
+- **DSP RAM:** 4,896 of 14,647 X words and 5,566 of 13,888 Y words.
+- **Build:** `make MODEL_DIR=./blender/tie/model trex_m68030_hires_backdrop`
+  gives DSP configuration `00001101sintie540v1114t1113n1112y`.
+- **Determinism:** rebuilding the scene, re-exporting and rebuilding
+  reproduced all four binaries byte for byte. That covers the three
+  executables and `TREXBGND.LOD`.
+
+Results on cycle-exact Hatari (`--cpu-core cycle-exact --videl-contention on
+--memsize 14`):
+- **Speed, 160 frames: 196.2 ms/frame (5.10 FPS).**
+  - Packets: 122.9 ms.
+  - Clear: 37.3 ms.
+  - Rasterizer: 33.1 ms, with 43,044 pixels per frame.
+  - set_frame: 2.6 ms.
+
+  This is faster than the creature (346.6 ms) and the two-walker patrol
+  (531.3 ms). The likely reason is the smaller mesh, though no profiler
+  isolated it.
+- **Capture:** the timing and capture builds give the same frame-100
+  SHA-256 (`1dfaaccc…`).
+- **Loop:** all 6 captured post-wrap frames equal their lap counterparts.
+- **Blender against Hatari** (frames 1, 13, 23, 43, 52, 60, 75, 90, 105):
+  - The background is exact.
+  - Silhouette IoU is 0.957–0.994.
+  - The mean colour difference is 1.5–4.8 green steps, higher than the
+    AT-AT's 2.2.
+  - The largest difference is frame 52, where a wing fills the frame face-on
+    and Hatari is +4.0 G / +4.9 B against Blender.
+
+  The comparison images show Hatari lighting the struts warmer than Blender
+  where a wing faces the camera. This is not yet explained.
+
+Emulator figures only; physical Falcon timing is unmeasured.
+
+**Real-time capture.** The viewing build was recorded with Hatari's AVI
+recorder (`--avirecord true --avi-vcodec png`), which writes every emulated
+60 Hz VBL. The capture stays in the git-ignored `blender/tie/` because of the
+model's licence. The scene starts at VBL 619, after boot and loading. In the
+recording the picture changes on average every 170 ms. That figure is
+counted from the video and is not a stats measurement; the viewing build has
+no stats code. Hatari stores the 640×400 picture at about 553×339 inside a
+640×480 frame, with the dummy and offscreen SDL drivers alike and with or
+without `--borders`. The video is therefore cropped and rescaled. For pixel
+comparisons use `fbseq.res`, not the AVI.
+
+Rebuild, with the inputs in `blender/tie/`:
+
+```sh
+blender -b -Y TREX/scene/trex_trail.blend --python-exit-code 1 \
+  --python tools/blender_triflow_vehicle.py -- blender/tie/tief3DS.obj \
+  blender/tie/tief3DS_triflow700.obj blender/tie/tie_scene.blend \
+  name=TIE height=5.0 altitude=2.9 bob=0.25 max_bank=0.4
+make MODEL_DIR=./blender/tie/model BLEND=blender/tie/tie_scene.blend MODEL_OBJECT=TIE model_export
+make MODEL_DIR=./blender/tie/model trex_m68030_hires_backdrop_run
+```
+
 ### 6.7 Texture and CLUT reads
 
 The six native T-Rex texture pages are much larger than the DSP local memory
