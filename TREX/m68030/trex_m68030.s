@@ -5032,7 +5032,13 @@ SPAN_STREAM_SHARE = 176
 SPAN_STREAM_SHARE = 184
 	endc
 	endc
+	ifd	TREX_HIRES
+; A ninth longword: marked triangles the DSP returned as records because
+; they exceed its size limit (7.4k), summed over the run.
+SPAN_STAT_LONGS = 9
+	else
 SPAN_STAT_LONGS = 8
+	endc
 ; Claim the DSP-transmit -> DMA-record route once.  Without it the frame
 ; flag never sets, no list entry is marked and this build is the plain
 ; draw-order pipeline.
@@ -5241,6 +5247,19 @@ stream_draw_packet
 	lea	order_marks,a0
 	tst.b	(0,a0,d0.l)
 	beq	.draw_record		; this position kept its record
+	ifd	TREX_HIRES
+	; Size split (OPTIMIZATION.md 7.4k): the DSP returned this marked
+	; triangle as a record because it is large, and sent one $FFFE unit in
+	; its place.  Consume it and draw the record like an unmarked one.
+	move.l	span_stream_ptr,a1
+	cmpi.w	#$fffe,(a1)
+	bne	.draw_streamed
+	addq.l	#2,a1
+	move.l	a1,span_stream_ptr
+	addq.l	#1,span_stat+32	; size-split records, summed
+	bra	.draw_record
+.draw_streamed
+	endc
 	lea	order_list,a0
 	moveq	#0,d1
 	move.w	(0,a0,d0.l*2),d1		; global triangle number

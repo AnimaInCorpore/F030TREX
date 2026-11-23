@@ -4234,6 +4234,137 @@ ST-RAM access.
 divide the measured 952 ms between the packet stage and the rasterizer. The
 prediction above says the packet stage carries the larger share of the growth.
 
+### 2.7b The 68030's internal times, charged: 1.51x to 1.20x of the hardware frame (2026-11-22)
+
+**Status update (2026-11-23).** The model is no longer opt-in. Fork commit
+`1fd48884` (F030Arcade pin `32481f4`; upstream merged since, pin `2e66bf0`)
+turns it on by default for a Falcon 68030 in cycle-exact mode without MMU.
+`HATARI_CPU030_TIMING=off` restores the bare core. That commit also adds a
+2-clock wait between the two word cycles of a long ST-RAM write, which moves
+dspmark's long-write line from 8.60 to 10.66 (hardware 10.44).
+
+The September-build figures below predate that wait. The vehicle figures
+of 6.6k and 7.4k name the `hatari.exe` SHA-256 they were taken with:
+- `19bf994e…`: before the wait.
+- `5c5b56fb…`: with it, about +0.8–0.9% per frame on the trail vehicles.
+
+**Why the gap was partly CPU.** The fork's 68030 cycle-exact core charges 2
+clocks per prefetched instruction word and its bus traffic, and nothing of
+the MC68030 manual's internal times (3.19). A taken `DBcc` or `Bcc`, an
+indexed address or `ADDA.W`'s sign extension cost nothing extra.
+
+**The fix.** It is opt-in: `HATARI_CPU030_TIMING=manual`, F030Arcade fork
+branch `cpu030-manual-timing`, binary `build-ucrt64-030t`, SHA256
+`d0f5a002...`, not pinned. It pads every instruction to the manual's
+cache-case time with the overlap of formula 11-2, adding the wait states of
+its RAM accesses. Instructions touching the I/O page keep the fork's
+calibrated host-port timing. F030Arcade's DEBUGGING.md has the model and its
+check against dspmark's hardware column; it matches the hardware's
+`subq`/`bne` loop (8.04 against 8.08), `nop` (2.16 against 2.18) and
+ST-RAM long reads (11.44 against 11.60). With the variable unset the binary
+times exactly as the pinned one: the trail measures 322.0 ms and
+`0dc7213b...` on both.
+
+**The September build, re-measured.** This is the build a stock Falcon ran
+at 952 ms in the close-up frames (2.7). It was rebuilt from `8eb7694` in a
+scratch worktree, then run cycle-exact with Videl contention, 4 MiB, over 265
+frames. Emulator only:
+
+| | Default core | `manual` |
+|---|---:|---:|
+| Frame | 631.7 ms | **794.5 ms** |
+| DSP set_frame | 13.7 | 19.8 |
+| DSP readback + packet build | 193.6 | 206.5 |
+| Framebuffer clear | 15.9 | 16.7 |
+| Rasterizer | 403.6 | 544.2 |
+| Frame 100 | `d89958b3...3d16` | `d89958b3...3d16` |
+| Hardware / emulator | 1.51x | **1.20x** |
+
+- The default core's 631.7 ms is above 2.7a's 584.4 ms because the fork has
+  changed since September.
+- Most of the 163 ms the internal times add falls on the rasterizer, which
+  2.7a's arithmetic expected to grow on hardware.
+- The packet stage moves by only 13 ms. The rest of the gap is where 2.7a
+  put it: the DSP and host-port timing the fork still under-models (WP2 to
+  WP4 of F030Arcade's timing probe). The hardware 952 ms is a close-up
+  reading, and the emulator's close-up segments run about 5% above its
+  mean, so the true remaining factor is somewhat below 1.20.
+
+**The current trail under the same model.** 160 frames, 640x400, 14 MiB:
+
+| | Frame | Packet | Clear | Raster |
+|---|---:|---:|---:|---:|
+| Default core | 322.0 ms | 219.9 | 34.6 | 60.2 |
+| `manual` | 400.4 ms | 197.3 | 40.5 | 150.8 |
+
+The frame-100 hash is identical. The 68030 side grows, so the stream share
+that balances the two processors (6.6i, 7.4k) would move upward under this
+model. The shares were tuned on the default core and are not re-swept here.
+
+**What this changes.** Absolute frame times in this file stay default-core
+figures, and the A/B comparisons stand. A decision that rests on 68030
+instruction timing should now also be checked under `manual`: loop shape,
+addressing modes, reordering, the CPU half of the stream balance. The model
+is one benchmark and one frame time away from hardware, not calibrated
+against a TREX stage split; `RENDER_S.RES` from a hardware `TREXPROF` run
+is still the missing piece.
+
+**A DSP term the emulator could not show: the BCR is never cleared (refuted below).**
+- F030MXDRV's `dspprobe` measured on a Falcon (2026-09-02) that the DSP's
+  Port A Bus Control Register is `$FFFF` after `Dsp_ExecBoot`. That is
+  15 wait states, so every external P fetch and X/Y access costs 17 clocks
+  instead of 2.
+- Snow Bros confirmed it on hardware (F030Arcade PORTING.md, "Clear the
+  DSP's BCR before the kernel does any real work"): its DSP throughput
+  doubled once its loader cleared the register.
+- `trex_dsp.asm` never writes `m_bcr`. Its hot code lives in external P
+  above the 512 internal words: the span walker at P:`$0787`, `ss_half` at
+  `$0828`, `prelight_run` at `$031B`, the record copy at `$0273`. So do the
+  resident arrays above X/Y:`$00FF`.
+- Hatari stores the register and ignores it, so no emulator run here
+  includes that cost.
+- Whether `Dsp_LoadProg`, the path TREX uses, also leaves `$FFFF` behind
+  has not been measured (probe item B3 in F030Arcade's timing probe).
+- If it does, the DSP side of every hardware frame runs up to 8.5 times
+  slower than modelled. That is consistent with 2.7a's finding that the
+  DSP term needs a factor of 2.2 to 3.0, and with the packet stage carrying
+  the remaining gap. This is a hypothesis.
+- **Applied 2026-11-22:** `movep #0,x:m_bcr` is now the first
+  instruction at `main` (P:`$0040`) in every image.
+  - It adds two program words: default P:`$092B`, `trex_dsp_cam.lod`
+    `$0918`, trail `$095E`. The documented tightest variant moves from
+    `$09BA` to `$09BC`.
+  - Hatari ignores the register, so frames and timing are unchanged.
+    Gates, cycle-exact with contention, on the fork's default core:
+    - The default 240x224 pair, with the committed image and the new image
+      on the same host, measures 317.9 ms/frame both ways over 265 frames.
+      Frame 100 is `d89958b3...3d16` and 9,049,666 pixels are written.
+    - The 640x400 trail measures 322.0 ms over 160 frames, with frame 100
+      `0dc7213b...`.
+  - What it is worth on a Falcon is open until the next hardware run. If
+    `Dsp_LoadProg` left `$FFFF`, every earlier hardware figure, the 952 ms
+    of 2.7 included, ran the DSP with fifteen wait states.
+
+**Refuted the same day: `Dsp_LoadProg` already clears the BCR.** Two pieces
+of evidence, independent of each other:
+- **The ROM.** TOS 4.02 holds five copies of DSP code that set the port
+  control and then the BCR: `movep #1,x:$FFE0` followed by
+  `movep #0,x:$FFFE` (DSP words `08F4A0 000001 08F4BE 000000`, at ROM file
+  offsets `$4AA39`, `$4AA60`, `$4AAF9`, `$4AB32` and `$4AB65`). These are
+  TOS's own DSP loaders, the code behind `Dsp_ExecProg` and `Dsp_LoadProg`.
+  Only a bare `Dsp_ExecBoot` program, like MXDRV's probe or Snow Bros'
+  loader, starts with `$FFFF`.
+- **The model.** The fork now charges BCR wait states (F030Arcade
+  DEBUGGING.md). It reproduces dspprobe's hardware 850 ticks with 847. The
+  September build, which never cleared the register, measures 789.5 ms
+  under it against 794.5 ms without it, with frame 100 unchanged: its DSP
+  ran with the BCR at zero all along.
+
+So the BCR was never a TREX term, on the emulator or on the Falcon, and it
+does not explain any of the remaining gap. The clear at `main` stays: it
+costs two words and no time, and it keeps the image correct under a loader
+that does not clear the register.
+
 ### 2.8 Where the DSP's clocks go in the stream pipeline: a PC-range profile (2026-11-19)
 
 **Question.** 7.4g reads the share sweep as "above the optimum the frame waits
@@ -6407,6 +6538,231 @@ run of about 9,500 VBLs each; emulator only. Raw figures:
 
 **Not adopted.** It would cost the lighting (9 banks at most) to save
 about a millisecond. The stream consumer is not what the frame waits on.
+
+### 3.19 A delta-addressed stream consumer, priced from the manuals: 1 clock a pixel, not built (2026-11-22)
+
+**The candidate.** The DSP would send the difference to the previous pixel's
+texel offset, and the consumer would walk an address register:
+
+```text
+.draw_pixel
+	adda.w	(a1)+,a5		; offset delta from the stream
+	move.b	(a5),d0
+	move.w	(0,a6,d0.l*2),(a4)+
+	dbra	d4,.draw_pixel
+```
+
+It has the same four instructions and the same four data accesses as
+`span_stream_draw`'s loop (3.16). Only the texel fetch's addressing mode
+changes: `(An)` replaces the brief-format index `(0,a5,d1.l)`.
+
+**68030 cost model.** The source is the MC68030 User's Manual, chapter 11:
+tables 11.6.1 (fetch EA), 11.6.6 (MOVE), 11.6.8 (ADDA.W) and 11.6.15
+(DBcc), the overlap formula (11-2) and the wait-state rules of 11.5. Each
+row gives clocks, head and tail; reads and writes take two clocks plus w
+wait states.
+
+- Fetch EA: `(An)+` 3 (head 0 / tail 1); `(An)` 3 (1/1);
+  `(d8,An,Xn)` 6 (4/2).
+- `MOVE ea,Dn` 2 (0/0); `MOVE src,(An)+` 4 (2/0) plus the write.
+- `ADDA.W ea,An` **4** (0/0): it costs two clocks more than a MOVE to Dn.
+- `DBcc` taken: 6 (6/0).
+
+The 68030 overlaps only one instruction's tail with the next instruction's
+head (formula 11-2). In these loops the only operation with a tail is the
+pixel write's wait states. DBRA's 6-clock head absorbs up to six of them,
+because the write is held in the write-pending buffer (11.2.5.2).
+`tools/m68030_cc.py` evaluates the loops:
+
+| Loop, clocks a pixel | w = 0 | w = 2 | w = 4 |
+|---|---:|---:|---:|
+| `span_stream_draw` (absolute offset) | 27 | 33 | 39 |
+| Delta in An (`adda.w`, `(a5)`) | **26** | **32** | **38** |
+| Delta in a data register (`add.w (a1)+,d1`) | 27 | 33 | 39 |
+| CLUT read and store split (`move.w ...,d2` / `move.w d2,(a4)+`) | 29 | 35 | 41 |
+| Store first, then the next pixel's fetches | 27 | 35 | 43 |
+
+**MC68000, for comparison.** The figures come from the M68000 timing
+tables (EA calculation, MOVE byte/word, standard instructions, DBcc) in the
+[HTML transcription](https://oldwww.nvg.ntnu.no/amiga/MC680x0_Sections/mc68000timing.HTML).
+The 68000 has no index scale: the M68000PRM (section 2.4) says an MC68000
+ignores an encoded scaling factor. Its loop therefore needs an `add.w
+d0,d0` (4 clocks):
+
+| | `move.w (a1)+,d1` | `move.b (d8,a5,d1),d0` | `add.w d0,d0` | `move.w (d8,a6,d0),(a4)+` | `dbra` | Pixel |
+|---|---:|---:|---:|---:|---:|---:|
+| Absolute offset | 8 | 14 | 4 | 18 | 10 | **54** |
+| Delta in An | `adda.w (a1)+,a5` 12 | `move.b (a5),d0` 8 | 4 | 18 | 10 | **52** |
+
+On the 68000 every access, instruction fetches included, is a four-clock
+bus cycle, so an addressing mode costs its extension word. The index mode
+costs 6 clocks more than `(An)` (14 against 8). Sign-extending `ADDA.W`
+costs 4 more than a MOVE to Dn (12 against 8). On the 68030 the loop comes
+from the instruction cache, so extension words are free. What remains is the
+index calculation, 3 clocks (6 against 3), and ADDA's extension, 2 clocks.
+The relative saving comes out the same on both CPUs: 2 of 54 and 1 of 27,
+3.7%.
+
+**Why it is not built.**
+
+- 1 clock a pixel is at most 1.7 ms of 68030 time a frame for the trail's
+  27,201 streamed pixels (2.8b), and 3.18 measured that the frame does not
+  follow the consumer: removing a whole memory access from this loop gained
+  0.6 ms.
+- Texture wrap breaks it. The absolute offset wraps modulo 2^16 inside the
+  64 KB page because the index is zero-extended. `adda.w` changes the whole
+  32-bit address, so a V wrap (7.4j counts a few a frame) reads outside the
+  page. A delta in a data register wraps correctly, but costs the same as
+  today (row 3).
+- Making the An form exact needs each page mirrored before and after,
+  6 x 128 KB, an absolute offset reloaded per span, and one more subtraction
+  per pixel in the DSP walker. 7.4i's packed deltas showed that a format
+  change is worth it only when it removes DSP clocks or wire units, and this
+  one removes neither.
+
+These are cost-model figures from the manuals with zero data-cache hits.
+They are not measurements, and the Falcon's ST-RAM wait states are not
+established here (2.4a.1), hence the three w columns.
+
+**Reordering elsewhere: the record path's pixel loop.** The same model
+applied to `span_walk_half`'s `.span_tex_opaque_pixel`, which draws every
+large triangle since 7.4k. It uses register moves 2 (head 2 / tail 0),
+`LSR.W #8` 4 (4/0) and `ADD.L Rn,Dn` 2 (2/0).
+
+| Clocks a pixel | w = 0 | w = 2 | w = 4 | w = 6 |
+|---|---:|---:|---:|---:|
+| As shipped | 36 | 40 | 46 | 52 |
+| The two `add.l` moved before the store, so the store meets DBRA's head | 36 | 40 | 44 | 48 |
+
+- The gain is min(w, 6) - min(w, 2) clocks. It needs more than two wait
+  states on the framebuffer write, and the Falcon's figure is not
+  established. The reordering is exact, since U and V are dead once the
+  texel is fetched.
+- The row walk was not modelled. Its per-row cost is dominated by absolute
+  memory operands, and every register operation in it has a zero tail.
+
+**Hatari cannot measure any of this.** The fork's 68030 cycle-exact table
+(`gencpu.c` id 23, `cpuemu_23.c`) has the overlap code under `#if 0`. It
+emits the manual's head, tail and CC only as comments (`/* ea H:4,T:2,C:0
+fea */`). `x_get_disp_ea_ce030` fetches the extension word and adds no
+address-calculation clocks. A taken `DBcc` returns after `fill_prefetch_030()`
+without charging its 6 clocks. Emulated 68030 time on that core is
+therefore prefetch and data-bus traffic. An addressing-mode change, a
+reordering or a head/tail overlap measures as zero or as layout noise.
+
+**Now measured, with an opt-in fix.** `tools/price_loops.py` times these
+loops from the instruction cache (`tools/price_loops.s`, 2,097,152
+iterations each, 200 Hz counter). It ran on the fork's default core and on
+its `HATARI_CPU030_TIMING=manual` mode, which pads each instruction to the
+manual's cache-case time with the RAM wait states the bus model charged.
+The mode is documented in F030Arcade's DEBUGGING.md; it is on the unpinned
+fork branch `cpu030-manual-timing`.
+
+| Clocks per iteration, cycle-exact, contention on | Default core | `manual` |
+|---|---:|---:|
+| `dbra` alone | 4.04 | 6.07 |
+| `move.l #imm,Dn` | 10.07 | 12.09 |
+| three register moves + `lsr.w #8` | 12.09 | 16.14 |
+| `span_stream_draw` loop (indexed) | 21.48 | 40.89 |
+| Delta loop (`adda.w`, `(a5)`) | 21.48 | 37.73 |
+| Record loop | 27.01 | 43.14 |
+| Record loop, adds before the store | 24.99 | 42.23 |
+| Flat store | 6.18 | 9.04 |
+
+- Each figure includes `dbra` and an outer-loop share under 1%.
+- The register-only rows reproduce the model exactly: 6, 12 and 16.
+- With memory, the manual mode adds Hatari's ST-RAM waits, which the trace
+  shows at 4 to 6 clocks per access. The ordering of the variants holds,
+  but the margins grow beyond the zero-wait model:
+  - The delta loop is 3.2 clocks under the indexed one.
+  - The reordered record loop is 0.9 clocks faster.
+- Neither is worth building on that evidence alone. The stream consumer
+  is not what the frame waits on (3.18), and the delta form breaks the
+  texture wrap.
+- These are emulator figures under a new, partly validated model (2.7b),
+  not hardware measurements.
+
+### 3.20 Repeated texels in close-ups: 75% of the Falcon's pixels (2026-11-22)
+
+A magnified triangle repeats each texel over several screen pixels. The
+frame-100 captures (`spanstrm.res`) of 7.4k's runs show how often a pixel
+fetches the same texel as the pixel before it in its span. Each capture
+holds every streamed pixel of that frame: the Falcon was fully streamed;
+the TIE and snowspeeder were at limit 4096, so a few large triangles
+are missing; the T-Rex was at share 256.
+
+| Frame 100, 640x400 | Pixels | Same texel as previous | Mean run | In runs >= 4 | Units with (offset, count) runs |
+|---|---:|---:|---:|---:|---:|
+| Falcon | 137,021 | **74.9%** | 3.98 | 75.5% | 166,816 -> 90,586 (-46%) |
+| Battlefront TIE | 52,870 | 51.1% | 2.05 | 46.4% | 104,244 -> 85,554 (-18%) |
+| Battlefront snowspeeder | 35,589 | 26.8% | 1.37 | 0.0% | 52,076 -> 51,761 (-1%) |
+| T-Rex trail | 36,854 | 0.6% | 1.01 | 0.0% | 60,331 -> 60,328 (0%) |
+
+The run-coded column is an offline count, not a built format. It sends one
+offset unit per run plus one count unit per run longer than one; headers
+and terminators are unchanged.
+
+What it says:
+- 7.4i measured 7.9% repeats on the T-Rex at 640x400 and rejected
+  run-length coding, which is still right for the T-Rex.
+- The large ship that the size split could not help (7.4k) is the scene
+  where coding by runs could remove almost half the wire units.
+- 7.4i's lesson still applies: it pays only if detecting a run costs the
+  DSP walker fewer clocks than the SSI periods it saves. The walker waited
+  37 clocks per pixel in 2.8b.
+- On the 68030 a run saves the texel and CLUT reads of every repeated pixel
+  and leaves only the write (`move.w d2,(a4)+` / `dbra` is already the
+  cheapest store loop).
+- A per-pixel repeat test in the record loop would cost every pixel to save
+  the repeated ones. It would need choosing per triangle, by magnification
+  (|du/dx| and |dv/dx| well below one texel), which the DSP already knows.
+- Nothing is built.
+
+### 3.21 mikro's ST-RAM article against the measurements, and write allocate: no gain (2026-11-22)
+
+mikro's text "ST RAM and things around it" (mikro.atari.org) derives Falcon
+ST-RAM costs from the MC68030 tables and Rodolphe Czuba's CT2 notes. It
+gives a 16-bit bus at 4 clocks per word access, Videl bursts of 17 longs in
+19 cycles, 2 cycles of DRAM precharge on a non-sequential access, and
+long-wide data-cache fills. The author says he had no oscilloscope. Checked
+against dspmark's hardware column (F030Arcade, 2026-09-02) and the fork:
+
+| Claim | Hardware | Fork, default core | Fork, `manual` (2.7b) |
+|---|---:|---:|---:|
+| `move.l (an)+,dn` from the i-cache: 3 internal + 2 x 4 bus = 11 | 11.44 | 8.30 | **11.44** |
+| `move.l d0,(a0)+`: 1 internal + 2 x 4 = 9 | 10.28 | 8.28 | 8.60 |
+
+- The read figure is confirmed to within half a cycle, and the manual
+  timing mode is that same calculation.
+- Writes cost 1.3 cycles more on hardware than the article predicts, and
+  the fork is cheaper still.
+- The Videl burst is already the fork's contention model (2.4a.1 cites the
+  same source).
+- The long-wide cache fill is what the fork does (2.4a).
+- The 2-cycle precharge is not modelled: the fork has no DRAM page state.
+  If it is real, every non-sequential access pays it. In the span loops
+  that is the stream word, the texel, the CLUT word and the pixel write,
+  which interleave across four regions. It is a plausible share of the
+  remaining hardware gap; neither dspmark nor any run here isolates it.
+
+**Write allocate, measured.** The article recommends clearing the data
+cache's write allocate (CACR bit 13, WA). With WA set, a word write that
+misses invalidates the entry in its slot, and TOS 4.02 leaves `$3111`, so
+every framebuffer pixel could evict a cached CLUT word or texel. The fork
+models this. A data-longword knob that cleared WA at start-up gave
+(cycle-exact, contention on, one linked layout per pair, emulator only):
+
+| | WA set (TOS) | WA cleared |
+|---|---:|---:|
+| Default 240x224, 265 frames | 318.1 ms | 318.3 ms |
+| Trail 640x400, 160 frames | 322.0 ms | 322.2 ms |
+| Trail, `HATARI_CPU030_TIMING=manual` | 400.8 ms | 402.8 ms |
+
+- Frames are identical, and clearing WA is marginally slower. There is
+  little to protect: a CLUT bank is 512 bytes against a 256-byte data
+  cache, and the texel reads are scattered.
+- The knob was removed again. The default and trail host binaries are
+  byte-identical to the builds before it.
 
 ## 4. Work already assigned to the DSP
 
@@ -9569,12 +9925,18 @@ Results on cycle-exact Hatari (`--cpu-core cycle-exact --videl-contention on
 Emulator figures only; physical Falcon timing is unmeasured.
 
 **Real-time capture.** The viewing build was recorded with Hatari's AVI
-recorder (`--avirecord true --avi-vcodec png`), which writes every emulated
-60 Hz VBL. The capture stays in the git-ignored `blender/tie/` because of the
+recorder (`--avirecord true --avi-vcodec png`), which writes one frame per
+emulated VBL. TREX's 640×400 mode runs at **50 Hz**, although the AVI header
+says 60 fps. The capture stays in the git-ignored `blender/tie/` because of the
 model's licence. The scene starts at VBL 619, after boot and loading. In the
-recording the picture changes on average every 170 ms. That figure is
+recording the picture changes on average every 200 ms. That figure is
 counted from the video and is not a stats measurement; the viewing build has
-no stats code. Hatari stores the 640×400 picture at about 553×339 inside a
+no stats code. (Corrected 2026-11-23: the first figure, 170 ms, counted the
+VBLs at 60 Hz, and every capture encoded at 60 fps played 20% fast. The
+captures are now encoded at 50 fps, 3,000 frames for 60 s. Decode with
+`-fflags +ignidx`, because AVIs past 1 GB lose frames from the legacy
+index, and with `-an`, because the silent audio track breaks the
+timestamps.) Hatari stores the 640×400 picture at about 553×339 inside a
 640×480 frame, with the dummy and offscreen SDL drivers alike and with or
 without `--borders`. The video is therefore cropped and rescaled. For pixel
 comparisons use `fbseq.res`, not the AVI.
@@ -9744,6 +10106,211 @@ blender -b -Y TREX/scene/trex_trail.blend --python-exit-code 1 \
 make MODEL_DIR=./blender/vehicles/snowspeeder/model \
   BLEND=blender/vehicles/snowspeeder/snowspeeder_scene.blend MODEL_OBJECT=Snowspeeder model_export
 make MODEL_DIR=./blender/vehicles/snowspeeder/model trex_m68030_hires_backdrop_run
+```
+
+**The Falcon on Hatari.** The per-part Falcon (1,461 triangles) is scaled
+by 0.35 to 11.9 m, the T-Rex's length, and faces −Y. It flies at a 2.4 m
+centre height with `bob=0.15`, `bank=6.0` and `max_bank=0.3`.
+
+Export and build:
+- **Mesh:** 1,169 vertices, 1,461 triangles and 1,160 normals in two pages,
+  all qualified as opaque.
+- **DSP RAM:** 9,646 of 14,647 X words and 6,701 of 13,888 Y words.
+- **DSP configuration:** `00001101sinfalcon1169v1461t1160n1159y`.
+
+Results on cycle-exact Hatari:
+- **Speed, 160 frames: 445.0 ms/frame (2.25 FPS).**
+  - Packets: 370.0 ms.
+  - Clear: 40.4 ms.
+  - Rasterizer: 28.2 ms, with 180,124 pixels per frame.
+  - set_frame: 5.8 ms.
+- **Why it is slower:** it has 1.7× the snowspeeder's triangles but 4.2× its
+  pixels, and nearly all the extra time is in the packet stage. That stage
+  is not DSP time alone: the 68030 draws streamed triangles and records on
+  arrival inside it (4.1f), and the rasterizer stage is only what is left
+  to draw after the last chunk. 7.4k's sweep shows both processors are busy
+  with these pixels and that the frame is bound by their combined per-pixel
+  cost. A large ship that fills much of the frame costs more than its
+  triangle count suggests.
+- **Capture:** the timing and capture builds give the same frame-100
+  SHA-256 (`d4ebc12c…`).
+- **Loop:** all 6 post-wrap frames are identical.
+- **Blender against Hatari** (the same nine frames):
+  - The background is exact.
+  - Silhouette IoU is 0.979–0.990.
+  - The mean colour difference is 2.9–4.1 green steps.
+
+The real-time capture is kept in the git-ignored `blender/vehicles/falcon/`.
+Emulator figures only.
+
+**The Battlefront II X-wing on Hatari (2026-11-23).** The model comes from
+Star Wars Battlefront II (2017). Headless Frosty reads it with profile
+`starwarsbattlefrontii`, as for the 2015 game. The game's assets and every
+derived file stay in the git-ignored `blender/swbf2/`.
+
+The game stores each vehicle twice: as part meshes ("clusters") and as one
+whole-model `*_static_donotuse_mesh` with six LODs. Of the 68 whole-model
+vehicle meshes, nearly all have a LOD between about 450 and 2,500 triangles.
+
+The T-65's own LODs don't fit as they are:
+- **LOD5:** 568 triangles. It is cheap and has a readable silhouette.
+- **LOD4:** 3,498 triangles and 2,114 vertices after welding, over the
+  exporter's V ≤ 2,048 (6.6h).
+- **LOD UVs:** they run from −1.78 to 1.0, because the game tiles its
+  textures. The game-LOD route used for the 2015 snowspeeder clamps UVs to
+  0..1, so it can't take them.
+
+The model therefore goes through the bake route (the OBJ form of
+`blender_triflow_vehicle.py`):
+- **Bake source:** LOD3 (6,918 triangles). LOD0's red markings are separate
+  alpha-blended decal sections, which an RGB bake can't composite. LOD3 has
+  them in its texture mapping.
+- **Mesh:** LOD4, decimated in Blender with collapse and X symmetry to 1,600
+  triangles.
+- **Pages:** two 256×256 pages, one for the wings and one for the rest
+  (`pages=Mat_XWing_Wings*;*`).
+- **Scale and flight:** scaled to 1.7 m height (8.9 m long, factor 0.716).
+  It flies at 2.4 m with `bob=0.2`, `bank=8.0` and `max_bank=0.6`.
+
+**Fix: the bake wrote textures in linear light.** A textured source baked
+about half as bright as its texture: the T-65 wing texture averages 145, the
+first page 76. Blender decodes an sRGB image to linear before the Emission
+bake, while the page is stored and shown as `Non-Color`. Untextured sources
+were not affected, because their MTL colours pass through raw. The bake now
+marks each source image `Non-Color`.
+
+This affects every textured bake made before the fix. Of the trail models
+that is the Battlefront 2015 TIE (`blender/swbf/tie`). It has been rebaked
+with its original options (`'pages=Wings_Mat;*' two_sided=Wings_Mat`). The
+geometry is unchanged: 1,199 vertices, 2,700 triangles and 971 normals.
+Its page averages rose from 73 and 76 to 103 and 115.
+
+The rebaked TIE was checked the same way:
+- **Speed, manual timing:** 601.7 ms/frame (1.66 FPS), with 123,484 pixels
+  per frame (7.4k).
+- **Capture:** frame 100 is `c0a72fe9…` in both builds.
+- **Loop:** all 6 post-wrap frames are identical.
+- **Blender against Hatari:**
+  - The background is exact.
+  - Silhouette IoU is 0.942–0.989.
+  - The mean colour difference is 3.9–10.0 green steps.
+  - The 10.0 is frame 52, the closest pass, where Hatari is brighter (bias
+    +9.5 green). The pre-fix capture shows the same bias against the
+    pre-fix renders (+10.6), so it predates the fix. It is an open mismatch
+    between the Blender shade model and the Falcon's at that pose, not
+    explained yet.
+
+The scifi3d models used MTL colours and are unaffected.
+
+**Fix: the TIE's wing page was 94% empty.** Texture density measured from
+the bake, as texels per metre of surface:
+
+| Page | Automatic unwrap | Planar wings |
+| --- | ---: | ---: |
+| TIE wings | **4.6** (6% of the page covered) | **49.7** |
+| TIE body | 47.6 (51% covered) | 42.5 |
+| TIE rims and struts (body page) | 4.6 | 13.6 |
+
+For comparison: X-wing wings 11.6 and body 27.1; snowspeeder main page 24.0.
+
+A 2.7 m² panel triangle had 59 texels, so the panels showed as large
+blocks at the close pass. The cause is the automatic unwrap (smart
+project, then pack islands). The wing rims are long, thin, hollow
+hexagonal islands, and their bounding boxes set the scale for every
+island on the page.
+
+`blender_triflow_vehicle.py` has a new option, `planar=<sections>`:
+- **Panels.** Faces of those sections within `planar_angle` (35°) of the
+  area-weighted dominant normal axis are projected onto that plane. Both
+  wings, front and back, then share one hexagon that fills the page.
+- **Rims and struts.** The other faces of those sections (1,128 of 2,144)
+  move to the last page. There each gets one cell in a band at the bottom
+  (`strip_band`, 0.2 of the height), and the page's own islands take the
+  rest.
+
+Two more changes came with it:
+- **Page selection.** Faces are now selected per page with bmesh in
+  face-select mode. `material_slot_select` in vertex-select mode can also
+  pull in other pages' faces whose corners are all selected, and those took
+  space in the earlier page's packing.
+- **Effect on other models.** Rebaked with the new tool and no new option,
+  the X-wing's body UVs are identical and its wing islands move, at the same
+  density (11.6 vs 11.7 texels per metre). Two runs of the new tool bake
+  identical pages. The measured X-wing build keeps the earlier bake.
+
+The game's own wing colour texture has plain dark panels; their fine
+relief is in the normal map, which the colour bake does not use. The planar
+page reproduces the colour texture: frame, spokes and hub.
+
+The TIE rebuilt this way, with the same geometry and `stream.mk`, on manual
+timing:
+- **Speed:** 614.9 ms/frame (1.63 FPS), against 601.7 ms with the
+  automatic unwrap, both on Hatari `19bf994e…`. On the rebuilt
+  `5c5b56fb…`, which adds the ST-RAM long-write wait, it is 620.0 ms (7.4k).
+  - Raster: 120.2 → 129.2 ms.
+  - Packets: 431.1 → 435.3 ms.
+  - The pixel count is identical (123,484 per frame).
+  - Finer texels give fewer repeated texture reads per pixel run. More
+    68030 data-cache misses would explain the +13.2 ms (+2.2%), but this is
+    an inference: no cache counter exists.
+- **Capture:** frame 100 is `1012b3c5…` in both builds.
+- **Loop:** all 6 post-wrap frames are identical.
+- **Blender against Hatari:**
+  - IoU is 0.942–0.990.
+  - The mean colour difference is 3.4–9.4 green steps.
+  - Frame 52's brightness bias remains (+8.8 green).
+
+Rebuild options for the TIE:
+`'pages=Wings_Mat;*' two_sided=Wings_Mat planar=Wings_Mat`.
+
+The baked pages were also checked by eye. At `ambient` 0.55, 0.7 and 0.85
+the X-wing reads white-grey with red markings at 0.55 and 0.7. 0.55, the
+default, was kept.
+
+Export and build:
+- **Mesh:** 1,096 vertices, 1,600 triangles and 1,411 normals in two pages.
+  All triangles qualify as opaque.
+- **DSP RAM:** 9,274 of 14,647 X words and 7,620 of 13,888 Y words.
+- **DSP configuration:** `00001101sinxwing1096v1600t1411n1410yl3072`.
+- **Stream setting:** `stream.mk` holds share 256 and limit 3072 (7.4k).
+
+Results on cycle-exact Hatari with the fork's MC68030 manual timing (2.7b;
+`build-ucrt64-030t`, `HATARI_CPU030_TIMING=manual`, Videl contention, 14 MiB):
+- **Speed, 160 frames: 324.5 ms/frame (3.08 FPS).**
+  - Packets: 252.0 ms.
+  - Clear: 33.8 ms.
+  - Rasterizer: 29.2 ms, with 70,974 pixels per frame.
+  - set_frame: 9.0 ms.
+- **Capture:** the timing and capture builds give the same frame-100
+  SHA-256 (`cb363a36…`).
+- **Loop:** all 6 post-wrap frames are identical.
+- **Blender against Hatari** (the same nine frames as the TIE):
+  - The background is exact.
+  - Silhouette IoU is 0.944–0.975.
+  - The mean colour difference is 2.5–4.4 green steps.
+
+These figures were taken on the manual timing model and are not comparable
+with the default-core TIE, snowspeeder and Falcon figures above. On the
+September build that model is still 1.20× optimistic against the physical
+Falcon (2.7b).
+
+The real-time capture is 60 s at 50 fps, one frame per VBL (see the TIE's
+capture note above). The picture changes 2.95 times a second. It is kept
+in `blender/swbf2/xwing/`. Emulator figures only.
+
+Rebuild, with Frosty's export of
+`gameplay/vehicles/air/xwing_t65/vehicle_air_xwing_t65_static_donotuse_mesh`
+split into one OBJ per LOD, each with an MTL of its RGB colour textures:
+
+```sh
+blender -b --python decimate_obj.py -- xw_lod4.obj xw_lod4d.obj 1600   # collapse, X symmetry
+blender -b -Y TREX/scene/trex_trail.blend --python-exit-code 1 \
+  --python tools/blender_triflow_vehicle.py -- blender/swbf2/xwing/xw_lod3.obj \
+  blender/swbf2/xwing/xw_lod4d.obj blender/swbf2/xwing/xwing_scene.blend \
+  name=XWing height=1.7 altitude=2.4 bob=0.2 bank=8.0 max_bank=0.6 'pages=Mat_XWing_Wings*;*'
+make MODEL_DIR=./blender/swbf2/xwing/model \
+  BLEND=blender/swbf2/xwing/xwing_scene.blend MODEL_OBJECT=XWing model_export
+make MODEL_DIR=./blender/swbf2/xwing/model trex_m68030_hires_backdrop_run
 ```
 
 ### 6.7 Texture and CLUT reads
@@ -11079,8 +11646,9 @@ waits on it.
   acknowledgement arrives (a real record path has a FIFO), and data-cache
   coherency of a window read while DMA is still filling the part behind it.
 - The share is spread evenly along the draw list. The DSP knows each
-  triangle's size and the host does not; a size-aware choice on the DSP is
-  untried.
+  triangle's size and the host does not. A size limit on the DSP was built
+  for the 640x400 images in 7.4k: exact, worth 0 to -7.6% depending on the
+  scene, and not a default.
 - The two clip paths of the walker are unexercised (above).
 
 **Next levers, unmeasured.** A one-unit span header (x and length, with the
@@ -11353,6 +11921,295 @@ the DSP would send no offset for up to 64% of pixels (lossy) and would spend
 less of 2.8's 116.2 ms waiting on the SSI transmitter. Not built, because
 the lossy form changes the image (1-texel errors on ~37% of reused pixels)
 and the lossless form gives up most of the saving.
+
+### 7.4k Large triangles back to the 68030: a size limit on the DSP -- built, exact, 0 to -7.6% by scene, not a default (2026-11-22)
+
+**Question.** 7.4g left one choice untried: the share marks every n-th
+qualified triangle, spread evenly along the draw list, but only the DSP knows
+how big a triangle is. The large-ship runs of 6.6k (the Falcon at 180,124
+pixels a frame, the Battlefront TIE at 123,484) suggested streaming a large
+triangle is the expensive case: every pixel costs the walker and one SSI unit,
+while the 68030's own walker pays its per-triangle and per-row overhead once.
+Does sending the large ones back as records help?
+
+**Mechanism** (640x400 images only: `IF HIRES` on the DSP, `ifd TREX_HIRES`
+on the host; the 240x224 default pair is unchanged).
+
+- `y:span_size_limit` takes the first of the eight pad words in front of
+  `tri_x0` (Y:`$0058`), so no cell moves. It is a `dc`, $7FFFFF in the image,
+  and a sweep patches it in the `.lod` with the new `tools/lod_word.py`
+  (label from the listing, word from the `_DATA` block), as 2.4f patched
+  `probe_units`.
+- In BUILD, after `make_triangle_span`, a marked triangle compares
+  |`span_cross`|, twice its unclipped screen area in pixels, with the limit.
+  Above it, the DSP sends one unit `$FFFE` over SSI and falls through to the
+  ordinary record write. No HIRES span header can equal `$FFFE`: its first
+  unit is the span length minus one, at most 639.
+- `stream_draw_packet` peeks the stream at every marked position. `$FFFE` is
+  consumed and the position draws the next record, exactly like an unmarked
+  one. Records still arrive in draw order, so painter's order and the record
+  count bookkeeping are untouched; the record window's two ends still agree.
+- `spanstat.res` gains a ninth longword in HIRES builds: marked triangles
+  returned by size, summed.
+- Cost: 11 program words (trail image P:`$0951` -> `$095C`, ceiling
+  `$09BF`); five instructions per marked triangle when the limit does not
+  trigger.
+
+With the limit at $7FFFFF the build behaves as before, at a small cost:
+- **T-Rex trail:** 322.0 ms against 321.5 ms for the committed build,
+  measured in the same session over the same 160 frames, with the same
+  frame-100 hash and the same 6,371,399 pixels.
+- **Falcon:** 445.3 ms against 6.6k's 445.0 ms.
+
+**Measured**, 160-frame prefixes, cycle-exact Hatari with Videl contention,
+16 MHz, 14 MiB, TOS 4.02, fork `24cd93e7`, one run per point, the same linked
+host and DSP image per scene with only `span_stream_share` (host) and
+`span_size_limit` (`.lod`) patched. Emulator measurements, not
+physical-Falcon timings. "Packet" and "raster" are the 68030's stage timers:
+the 68030 draws on arrival inside the packet stage (4.1f), so the raster
+stage is only what is left after the last chunk, not the 68030's drawing time.
+
+| Scene | Share | Limit | ms/frame | Packet | Raster | Stream KB | By size |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Falcon, 180,124 px | 188 | off | **445.3** | 370.6 | 28.4 | 317.9 | 0 |
+| | 256 | off | 543.2 | 485.8 | 12.2 | 430.9 | 0 |
+| | 256 | 512 | 510.3 | 123.1 | 337.2 | 84.7 | 178.4 |
+| | 256 | 1024 | 465.2 | 190.3 | 227.8 | 145.0 | 106.0 |
+| | 256 | 2048 | 445.6 | 285.9 | 113.5 | 229.2 | 50.7 |
+| | 256 | 2560 | 446.8 | 316.7 | 84.4 | 257.2 | 38.6 |
+| | 256 | 4096 | 459.2 | 377.2 | 36.9 | 318.3 | 19.8 |
+| | 224 | 3072 | 445.4 | 301.6 | 97.5 | 244.1 | 26.9 |
+| | 188 | 2048 | 477.3 | 209.8 | 218.9 | 168.6 | 37.3 |
+| Battlefront TIE, 123,484 px | 188 | off | 528.2 | 428.8 | 55.4 | 283.2 | 0 |
+| | 256 | 256 | 523.9 | 288.6 | 190.7 | 143.0 | 147.3 |
+| | 256 | 512 | **488.1** | 368.3 | 76.3 | 195.7 | 65.2 |
+| | 256 | 1024 | 492.3 | 410.3 | 38.8 | 226.0 | 34.4 |
+| | 256 | 2048 | 498.4 | 436.3 | 19.0 | 249.5 | 20.7 |
+| | 224 | 512 | 515.1 | 320.3 | 150.6 | 171.4 | 56.8 |
+| | 188 | 1024 | 559.2 | 298.2 | 215.7 | 166.2 | 25.2 |
+| Battlefront snowspeeder, 38,901 px | 188 | off | 220.1 | 173.1 | 20.9 | 83.5 | 0 |
+| | 256 | 512 | **204.4** | 158.7 | 20.8 | 65.5 | 33.5 |
+| | 256 | 1024 | 212.3 | 180.3 | 7.6 | 82.8 | 13.7 |
+| | 256 | 2048 | 223.8 | 195.9 | 3.4 | 96.7 | 4.6 |
+| | 224 | 1024 | 211.4 | 168.1 | 17.6 | 72.7 | 12.1 |
+| T-Rex trail, 39,821 px | 188 | off | **322.0** | 219.9 | 60.4 | 93.7 | 0 |
+| | 256 | 1024 | 336.8 | 295.2 | 4.2 | 121.9 | 3.6 |
+| | 256 | 2048 | 341.2 | 300.4 | 4.1 | 127.3 | 0.2 |
+| | 188 | 1024 | 322.9 | 213.8 | 67.4 | 89.2 | 2.7 |
+| | 188 | 2048 | 322.0 | 219.4 | 60.9 | 93.3 | 0.1 |
+| | 208 | 1024 | 325.7 | 252.9 | 32.4 | 99.3 | 2.9 |
+
+"Stream KB" is the SSI stream per frame, "By size" the marked triangles per
+frame the limit returned as records. The limit is twice the area in pixels.
+
+**Gates.** Every point of every scene reproduces its scene's frame-100
+`fb.res` (Falcon `d4ebc12c…`, TIE `fa5c3913…`, snowspeeder `fea3d0f1…`,
+T-Rex `0dc7213b…`), and the record address equals the consumer's read
+position in every streamed frame. The frame-sequence builds were run at the
+default and at share 256 with limit 512 for the Falcon, the TIE and the
+snowspeeder: each pair writes a byte-identical 160-frame `fbseq.res`
+(81,920,000 bytes), and the Falcon's first 120 frames equal 6.6k's reference
+capture byte for byte.
+
+**What it says.**
+
+- **It helps where triangles are large and few.** The TIE gains 40.1 ms
+  (-7.6%) and the snowspeeder 15.7 ms (-7.1%), both at share 256 with limit
+  512.
+- **It does nothing for the Falcon.** Every setting near the balance point
+  measures 445 to 447 ms, the even share's figure. Its pixels are spread over
+  many middle-sized triangles, and moving them between processors only moves
+  the bottleneck.
+- **It hurts the T-Rex at share 256** (+4.6%), whose triangles are small:
+  nearly all of them stream, and the DSP becomes the limit. At share 188 the
+  limit barely triggers (0.1 to 2.7 triangles a frame) and the frame stays at
+  322.0 ms.
+- **At 640x400 the two processors cost about the same per pixel.** Fully
+  streamed, the Falcon's DSP side takes about 2.8 us per pixel; with nearly
+  every pixel returned to the 68030 (limit 512, raster stage 337.2 ms after
+  the DSP finished at 123.1 ms) the 68030 takes about 2.6 us. These are
+  divisions of frame time by pixels, an estimate, not a profile; they include
+  the clear stage's share of the bus and the Videl's 640x400 fetch. Neither
+  side is much cheaper per pixel, so the size criterion can only save the
+  per-triangle and per-row overheads, which is what the TIE and snowspeeder
+  figures show.
+- **The best setting depends on the scene**, and the two knobs interact: a
+  limit tuned at share 256 is wrong at share 188 (TIE: 488.1 against
+  559.2 ms). No single pair beats the default everywhere, so the shipped
+  default stays share 188 with the limit off.
+
+**Not established.** No physical Falcon has run it. The limit uses the
+unclipped area, so a triangle mostly off screen counts as large; no run here
+clips much. A balance chosen at run time from which processor waited is not
+built.
+
+**Per-model setting.** A model directory may carry a hand-written
+`stream.mk`, which the exporter never writes, so a re-export keeps it:
+
+```make
+MODEL_SPAN_SHARE=256   # -DSPAN_STREAM_SHARE for every host build of the model
+MODEL_SPAN_LIMIT=512   # SPAN_SIZE_LIMIT in dspconf.inc, the dc's initial value
+```
+
+- Both values are part of the build's identity. The share goes into the
+  host's model stamp (`model-<tag>-s256.stamp`) and the limit into the DSP
+  image name (`...yl512`), so changing either one rebuilds the image that
+  carries it.
+- Without the file, nothing changes: the T-Rex trail's `TREXBGND.LOD` is
+  byte-identical to the image built before the file existed.
+- `trex_dsp.asm` defaults `SPAN_SIZE_LIMIT` to `$7FFFFF` when an older
+  `dspconf.inc` lacks it.
+- The Battlefront TIE and snowspeeder directories carry share 256 and limit
+  512, their optima above. Built that way, with no patching, they measure
+  488.3 and 204.5 ms against 488.1 and 204.4 ms for the patched runs (same
+  setup, 160 frames). They also give the same frame-100 hashes and
+  byte-identical stream totals, 31,311,098 and 10,483,636 bytes.
+  `spanstat.res` reports share 256.
+- Under the fork's opt-in MC68030 timing (`HATARI_CPU030_TIMING=manual`,
+  2.7b; branch binary `build-ucrt64-030t`), the snowspeeder built this way
+  measures 242.8 ms/frame (4.12 FPS) against 204.5 ms on the default core.
+  Frame 100 is unchanged; the stages are packet 148.7, clear 21.9 and raster
+  62.9 ms. The share and limit were tuned on the default core, where the
+  68030 is cheaper.
+
+**Re-tuned for the manual 68030 timing (2026-11-22).** The project's test
+runs now use the branch binary with `HATARI_CPU030_TIMING=manual`. Under
+that model the snowspeeder sweep, 160 frames, cycle-exact with contention,
+one linked layout with only the share and limit patched, gives:
+
+| Share | Limit | ms/frame | Packet | Raster | By size per frame |
+|---:|---:|---:|---:|---:|---:|
+| 188 | off | 270.1 | 149.7 | 86.9 | 0 |
+| 224 | 512 | 262.3 | 127.1 | 102.0 | 29.8 |
+| 224 | 1024 | 249.4 | 145.5 | 71.6 | 12.1 |
+| 256 | 256 | 255.9 | 124.0 | 99.4 | 66.4 |
+| 256 | 512 | 242.8 | 148.7 | 62.9 | 33.5 |
+| 256 | 768 | 241.2 | | | |
+| 256 | 1024 | 240.0 | 176.4 | 32.7 | 13.7 |
+| 256 | 1280 | 238.9 | | | |
+| 256 | **1536** | **238.8** | | | |
+| 256 | 2048 | 241.0 | 193.4 | 16.5 | 4.6 |
+| 256 | off | 249.9 | 211.4 | 7.5 | 0 |
+
+- Frame 100 is `fea3d0f1...` at every point.
+- The optimum moves from limit 512 to about 1,500. The 68030 is dearer
+  under this model, so fewer triangles should go back to it.
+- The curve is flat from 768 to 2048 (within 2.4 ms).
+- `blender/swbf/snowspeeder/model/stream.mk` now carries share 256 and
+  limit 1536. Built that way, unpatched, the snowspeeder measures
+  **238.6 ms (4.19 FPS)** with the same frame-100 hash, and 6.9 triangles
+  per frame return by size.
+- On the default core the old 512 remains that model's optimum (204.4 ms),
+  so the setting follows whichever timing model the measurements use.
+- Emulator figures only.
+- The Battlefront TIE, rebaked after 6.6k's colour fix (same geometry),
+  re-swept the same way:
+
+  | Share | Limit | ms/frame | Packet | Raster |
+  |---:|---:|---:|---:|---:|
+  | 188 | off | 767.0 | 432.7 | 282.6 |
+  | 224 | 1024 | 706.3 | 358.6 | 296.3 |
+  | 256 | 512 | 649.8 | 366.2 | 232.8 |
+  | 256 | 1024 | 613.3 | 403.8 | 159.4 |
+  | 256 | 1536 | 604.6 | 421.2 | 133.8 |
+  | 256 | **2048** | **601.7** | 431.4 | 120.2 |
+  | 256 | 3072 | 603.9 | 449.0 | 105.3 |
+  | 256 | off | 644.0 | 573.1 | 21.7 |
+
+  - Frame 100 is `c0a72fe9...` at every point.
+  - Its `stream.mk` now carries share 256 and limit 2048. Built that way,
+    unpatched, it measures **601.7 ms (1.66 FPS)**. With 6.6k's planar wing
+    page (same geometry) it measures 614.9 ms.
+  - Hatari binary for every figure above: `hatari.exe` sha256 `19bf994e…`.
+
+  **The planar-wing TIE, re-swept (2026-11-23).** Between the runs above and
+  this sweep, the fork branch was committed (`1fd48884`) and `hatari.exe`
+  was rebuilt (sha256 `5c5b56fb…`). That build adds a 2-clock wait between
+  the two word cycles of a long ST-RAM write, which moves dspmark's long-write
+  line from 8.60 to 10.66 (hardware 10.44); the manual timing is also on by
+  default there. The same planar build measures 614.9 ms on `19bf994e…` and
+  **620.0 ms** on `5c5b56fb…`. The difference is mostly the clear stage
+  (39.8 → 44.1 ms), which is all long writes. Three repeat runs on
+  `5c5b56fb…` gave 620.0 ms each, so the run is deterministic. All eight
+  points below ran on `5c5b56fb…`:
+
+  | Share | Limit | ms/frame | Packet | Raster |
+  |---:|---:|---:|---:|---:|
+  | 224 | 2048 | 712.1 | 381.9 | 274.6 |
+  | 256 | 1024 | 633.0 | 403.8 | 174.6 |
+  | 256 | 1536 | 622.9 | 419.5 | 148.8 |
+  | 256 | **2048** | **620.0** | 432.2 | 133.5 |
+  | 256 | 2560 | 620.3 | 438.9 | 126.9 |
+  | 256 | 3072 | 621.3 | 448.6 | 118.2 |
+  | 256 | 4096 | 624.7 | 464.3 | 106.2 |
+  | 256 | off | 651.4 | 574.4 | 23.4 |
+
+  - Frame 100 is `1012b3c5...` at every point.
+  - The optimum stays at share 256 and limit 2048, so `stream.mk` is
+    unchanged. 2048 to 3072 lie within 1.3 ms of each other.
+  - The built binaries are byte-identical to the 2048 point.
+  - The X-wing and the snowspeeder, re-measured on `5c5b56fb…` (a frozen
+    copy, so a rebuild during the runs could not change it), same builds as
+    above:
+
+    | Model | Setting | `19bf994e…` | `5c5b56fb…` | Neighbours on `5c5b56fb…` |
+    | --- | --- | ---: | ---: | --- |
+    | X-wing | 256 / 3072 | 324.5 | **327.4** | 2048: 328.6, 4096: 327.4 |
+    | Snowspeeder | 256 / 1536 | 238.6 | **240.8** | 1024: 242.0, 2048: 242.8 |
+
+    - Both rise by 0.9%, like the TIE (614.9 → 620.0 ms, +0.8%).
+    - The X-wing's clear goes from 33.8 to 37.6 ms.
+    - Frame-100 hashes are unchanged (`cb363a36…`, `fea3d0f1…`).
+    - Neither optimum moves (the X-wing's 3072 ties with 4096), so both
+      `stream.mk` files stay.
+  - Emulator figures only.
+  - The old default-core setting, limit 512, costs 8% here.
+
+**The Battlefront II X-wing, manual timing (2026-11-23).** The same sweep
+on the X-wing (6.6k; 1,600 triangles, about 71,000 pixels per frame), 160
+frames, one linked layout built at share 256 and limit 1536, with only the
+share and limit patched:
+
+| Share | Limit | ms/frame | Packet | Raster |
+|---:|---:|---:|---:|---:|
+| 188 | off | 371.4 | 191.3 | 133.7 |
+| 224 | 1024 | 353.7 | 176.2 | 131.8 |
+| 224 | 1536 | 344.3 | 190.8 | 108.1 |
+| 240 | 2048 | 330.0 | | |
+| 256 | 512 | 354.9 | 160.2 | 149.5 |
+| 256 | 1024 | 332.3 | 205.5 | 83.4 |
+| 256 | 1536 | 326.8 | 227.2 | 56.5 |
+| 256 | 2048 | 325.7 | 240.9 | 41.4 |
+| 256 | **3072** | **324.5** | | |
+| 256 | 4096 | 325.2 | | |
+| 256 | off | 328.6 | 270.3 | 15.6 |
+| 272 | 2048 | 325.6 | | |
+
+- Frame 100 is `cb363a36...` at every point.
+- The optimum is share 256 (all marked) with limit 3072. Limits from 1536
+  up, and no limit at all, are within 4.1 ms of it.
+- Size returns are worth only 1.3% here, against 4.5% for the
+  snowspeeder. The X-wing's triangles are smaller relative to its
+  pixel count.
+- Share 272 behaves like 256, because a share of 256 already marks every
+  triangle.
+- `blender/swbf2/xwing/model/stream.mk` carries share 256 and limit 3072.
+  Built that way, unpatched, it measures **324.5 ms**, the same as the
+  patched point, with the same hash.
+- Emulator figures only.
+
+**Reproduction.** Build the scene (`make MODEL_DIR=<dir>
+trex_m68030_hires_backdrop`, plus `_fbseq` for the picture gate), copy
+`trex_hires_bg.tos`, its listing, `TREXBGND.LOD` and `TREX/dsp/build/TREXDSP.LST`,
+then per point:
+
+```sh
+python3 tools/patch_data_flag.py trex_hires_bg.tos trex_hires_bg.lst span_stream_share 256
+python3 tools/lod_word.py TREXBGND.LOD TREXDSP.LST span_size_limit 512
+python3 tools/measure_frames.py trex_hires_bg.tos TREXBGND.LOD <new dir> \
+  --dsp-name TREXBGND.LOD --cpu-core cycle-exact --videl-contention on \
+  --memsize 14 --frames 160
+```
 
 ## 8. When SSI/crossbar streaming is worthwhile
 

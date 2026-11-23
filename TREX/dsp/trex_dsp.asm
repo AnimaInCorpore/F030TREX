@@ -87,6 +87,11 @@
 
 	include	'ioequ.inc'
 	include	'dspconf.inc'
+; A dspconf.inc written before the size split (OPTIMIZATION.md 7.4k) has no
+; SPAN_SIZE_LIMIT; default it to "off" rather than fail the assembly.
+	IF	!@DEF(SPAN_SIZE_LIMIT)
+SPAN_SIZE_LIMIT	equ	$7fffff
+	ENDIF
 
 ; SSIPROBE=2 selects live packet DMA; 1 is the ramp probe.
 SSIRECORD	equ	SSIPROBE/2
@@ -501,6 +506,13 @@ PREPASS_STATUS_WORDS	= 8
 	org	p:$40
 
 main
+	; Port A: no wait states on any external area (OPTIMIZATION.md 2.7b).
+	; A Falcon starts the DSP with BCR $FFFF, fifteen wait states: 17
+	; clocks per external P fetch or X/Y access instead of 2, measured by
+	; F030MXDRV's dspprobe.  Nearly all of this program and its resident
+	; arrays are external.  Hatari ignores the register, so this changes
+	; nothing in the emulator.
+	movep	#0,x:m_bcr
 	; Host-port mode, same setup as the original 3d.asm program.
 	movep	#1,x:m_pbc
 	IF	SPANSTREAM
@@ -1357,8 +1369,25 @@ build_triangle_not_killed
 	IF	SPANSTREAM
 	; A marked triangle leaves as spans and texel offsets and has no record.
 	jclr	#12,x:(r3),build_keeps_record
+	IF	HIRES
+	; Size split (OPTIMIZATION.md 7.4k): a marked triangle whose doubled
+	; area exceeds y:span_size_limit is returned as a record after all, so
+	; the 68030 draws it with its own walker and its pixels never cross the
+	; SSI.  One $FFFE unit in the stream tells the host which way it went;
+	; no span header can equal it (HIRES lengths are at most 639).
+	move	y:span_cross,a
+	abs	a
+	move	y:span_size_limit,x0
+	cmp	x0,a
+	jgt	<build_size_escape
+	ENDIF
 	jsr	<span_stream_walk
 	jmp	<triangle_advance
+	IF	HIRES
+build_size_escape
+	jclr	#m_tde,x:m_sr,build_size_escape
+	movep	#$fffe00,x:m_tx		; "this one is a record"
+	ENDIF
 build_keeps_record
 	ENDIF
 
@@ -4981,7 +5010,20 @@ shade_cz
 ; power of two.  Seven of the eight are retired cells -- the shade_nx..nz
 ; and animation_vertex_x..z staging triples and the tri_near_flags
 ; accumulator -- whose values are register-resident now.
+	IF	HIRES
+; The size split's limit (OPTIMIZATION.md 7.4k) takes the first pad word, so
+; the layout is unchanged.  Twice the screen area in pixels; a marked
+; triangle above it keeps its record.  SPAN_SIZE_LIMIT comes from
+; dspconf.inc: MODEL_SPAN_LIMIT in the model directory's stream.mk, or
+; 8388607 ($7FFFFF), which streams every marked triangle -- the behaviour
+; before the split existed.  A `dc` so a sweep patches ONE word of the
+; .lod (tools/lod_word.py).
+span_size_limit
+	dc	SPAN_SIZE_LIMIT
+	ds	7
+	ELSE
 	ds	8
+	ENDIF
 tri_x0
 	ds	1
 tri_y0

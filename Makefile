@@ -6,11 +6,21 @@ DOSBOX=dosbox
 # files through vasm's include path, the DSP gets the sizes in dspconf.inc.
 MODEL_DIR=./TREX/model
 -include $(MODEL_DIR)/model.mk
-VASM_MODEL=-I$(MODEL_DIR) -I$(MODEL_TEXTURES)
-MODEL_KEY=$(if $(MODEL_TAG),$(MODEL_TAG),trex)
+# Optional, hand-written, and kept apart from the exported model.mk so a
+# re-export does not lose it (OPTIMIZATION.md 7.4k): the model's stream
+# balance for the 640x400 builds.
+#   MODEL_SPAN_SHARE=256   span_stream_share, 0..256 (the host default if unset)
+#   MODEL_SPAN_LIMIT=512   y:span_size_limit, twice the screen area in pixels
+#                          above which a marked triangle keeps its record
+#                          (8388607, i.e. off, if unset)
+-include $(MODEL_DIR)/stream.mk
+VASM_MODEL=-I$(MODEL_DIR) -I$(MODEL_TEXTURES) $(if $(MODEL_SPAN_SHARE),-DSPAN_STREAM_SHARE=$(MODEL_SPAN_SHARE))
+SPAN_SIZE_LIMIT=$(if $(MODEL_SPAN_LIMIT),$(MODEL_SPAN_LIMIT),8388607)
+MODEL_KEY=$(if $(MODEL_TAG),$(MODEL_TAG),trex)$(if $(MODEL_SPAN_SHARE),-s$(MODEL_SPAN_SHARE))
 # Names the DSP image of a non-T-Rex model; it carries the sizes, so a re-exported
-# model with other counts gets a fresh dspconf.inc and image.
-MODEL_ID=$(if $(MODEL_TAG),$(MODEL_TAG)$(MODEL_VERTICES)v$(MODEL_PRIMITIVES)t$(MODEL_NORMALS)n$(MODEL_NORMAL_Y)y)
+# model with other counts gets a fresh dspconf.inc and image.  A size limit
+# from stream.mk is part of the image too, so it is part of the name.
+MODEL_ID=$(if $(MODEL_TAG),$(MODEL_TAG)$(MODEL_VERTICES)v$(MODEL_PRIMITIVES)t$(MODEL_NORMALS)n$(MODEL_NORMAL_Y)y)$(if $(MODEL_SPAN_LIMIT),l$(MODEL_SPAN_LIMIT))
 MODEL_STAMP=./TREX/m68030/build/model-$(MODEL_KEY).stamp
 # Assemble the DSP-side SSI transport probe (CMD_SSI_STREAM) into the .lod.
 # It costs P memory the renderer needs, so the shipping and measurement builds
@@ -108,7 +118,7 @@ PHASE_LOD=./TREX/dsp/build/trex_dsp-00001110-$(DSPSRC_ID).lod
 # ./TREX/dsp/trex_dsp.lod, so a variant build can never leave the wrong image
 # in the tree for `make measure` or a release to pick up.
 DSPCONF_DEFAULT_ID=00001101s
-DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\nPRELIGHT\tequ\t%s\nPHASEPROBE\tequ\t%s\nORDERED\tequ\t%s\nSPANSTREAM\tequ\t%s\nHIRES\tequ\t%s\nNOFOG\tequ\t%s\nTREX_VERTICES\tequ\t%s\nTREX_PRIMITIVES\tequ\t%s\nNORMAL_TOTAL\tequ\t%s\nNORMAL_Y_COUNT\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' '$(PRELIGHT)' '$(PHASEPROBE)' '$(ORDERED)' '$(SPANSTREAM)' '$(HIRES)' '$(NOFOG)' '$(MODEL_VERTICES)' '$(MODEL_PRIMITIVES)' '$(MODEL_NORMALS)' '$(MODEL_NORMAL_Y)' > ./TREX/dsp/build/dspconf.inc
+DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\nPRELIGHT\tequ\t%s\nPHASEPROBE\tequ\t%s\nORDERED\tequ\t%s\nSPANSTREAM\tequ\t%s\nHIRES\tequ\t%s\nNOFOG\tequ\t%s\nTREX_VERTICES\tequ\t%s\nTREX_PRIMITIVES\tequ\t%s\nNORMAL_TOTAL\tequ\t%s\nNORMAL_Y_COUNT\tequ\t%s\nSPAN_SIZE_LIMIT\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' '$(PRELIGHT)' '$(PHASEPROBE)' '$(ORDERED)' '$(SPANSTREAM)' '$(HIRES)' '$(NOFOG)' '$(MODEL_VERTICES)' '$(MODEL_PRIMITIVES)' '$(MODEL_NORMALS)' '$(MODEL_NORMAL_Y)' '$(SPAN_SIZE_LIMIT)' > ./TREX/dsp/build/dspconf.inc
 # Extra flags for the DSP assembly run.  Plain DOSBox needs none.  DOSBox-X
 # opens a working-folder prompt and a menu on macOS and then never reaches
 # BUILD.BAT, so it needs:
@@ -217,7 +227,7 @@ dspconf: $(DSPCONF_STAMP)
 
 # One stamp per model directory, as for the DSP configuration: switching
 # MODEL_DIR replaces it, so every host object rebuilds against the new model.
-$(MODEL_STAMP): $(MODEL_DIR)/model.mk $(MODEL_DIR)/model.inc | create_dirs
+$(MODEL_STAMP): $(MODEL_DIR)/model.mk $(MODEL_DIR)/model.inc $(wildcard $(MODEL_DIR)/stream.mk) | create_dirs
 	@rm -f ./TREX/m68030/build/model-*.stamp
 	@touch $@
 
