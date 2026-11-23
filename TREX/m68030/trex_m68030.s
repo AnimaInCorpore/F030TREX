@@ -5019,18 +5019,12 @@ SPAN_STREAM_BYTES = 2048*1024
 SPAN_STREAM_BYTES = 512*1024
 	endc
 	ifnd	SPAN_STREAM_SHARE
-; The cycle-exact emulator's optimum with the chunk hand-over of 2.8a, swept
-; per build; it was 160 for both before (7.4g).  The balance point belongs
-; to the machine that runs it; a physical Falcon will want its own figure.
-	ifd	TREX_HIRES
-	ifd	TREX_BACKDROP
-SPAN_STREAM_SHARE = 188
-	else
-SPAN_STREAM_SHARE = 176
-	endc
-	else
-SPAN_STREAM_SHARE = 184
-	endc
+; Every qualified triangle goes to the DSP: the optimum of all three builds
+; on the fork's Falcon bus model (OPTIMIZATION.md 2.8f), where the 68030's
+; ST-RAM and Videl costs made the old split (184/176/188, 2.8a and 2.8e)
+; leave the DSP idle at the frame start.  The balance point belongs to the
+; machine that runs it; a physical Falcon will want its own figure.
+SPAN_STREAM_SHARE = 256
 	endc
 	ifd	TREX_HIRES
 ; A ninth longword: marked triangles the DSP returned as records because

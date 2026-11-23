@@ -88,7 +88,21 @@ in [`TREX/m68030/trex_m68030.s`](TREX/m68030/trex_m68030.s).
 
 ## 2. Current measured baseline
 
-**Latest active baseline (2026-11-21): section 2.8e.** Exact shortenings of
+**Latest active baseline (2026-11-23): section 2.8f.** Same pipeline and
+picture; the span-stream share is 256 in every build. This is the optimum on the
+fork's Falcon bus model (Hatari `b2d65b04…`), where the 68030's ST-RAM
+and Videl costs moved the balance to the DSP. On that binary, cycle-exact
+with Videl contention, the results are:
+
+- the diagnostic build: **354.3 ms / 2.82 FPS**, against 426.9 ms at share
+  184;
+- the T-Rex trail: **391.8 ms / 2.55 FPS**, against 512.3 ms at 188;
+- the 640x400 build without backdrop: **816.9 ms / 1.22 FPS**, against
+  1043.0 ms at 176.
+
+These figures are not comparable with the earlier binaries' figures below.
+
+**Baseline before it (2026-11-21): section 2.8e.** Exact shortenings of
 DSP per-triangle code (2.8c) and a parallel-move pass over it (2.8e), same
 pipeline and same picture. On the cycle-exact profile with Videl contention
 the diagnostic build measures **317.9 ms / 3.15 FPS** at share 184 (348.5 at
@@ -4247,6 +4261,8 @@ The September-build figures below predate that wait. The vehicle figures
 of 6.6k and 7.4k name the `hatari.exe` SHA-256 they were taken with:
 - `19bf994e…`: before the wait.
 - `5c5b56fb…`: with it, about +0.8–0.9% per frame on the trail vehicles.
+- `b2d65b04…`: adds the f030probe-fitted Falcon bus model (fork `89b455f8`,
+  `f5d5ba11`). It moves every split optimum to share 256 (section 2.8f).
 
 **Why the gap was partly CPU.** The fork's 68030 cycle-exact core charges 2
 clocks per prefetched instruction word and its bus traffic, and nothing of
@@ -5000,6 +5016,202 @@ are still called, and the normal unpack is untouched. Unpriced.
 
 **Not established.** No physical Falcon has run it. The share optima are
 the emulator's.
+
+### 2.8f The split re-balanced on the Falcon bus model: every qualified triangle to the DSP (2026-11-23)
+
+**Question.** The Hatari fork gained a Falcon bus model fitted to
+F030Arcade's `f030probe` on a real Falcon030 (fork commits `89b455f8` and
+`f5d5ba11`, 2026-11-23):
+
+- ST-RAM extras in eighths of a clock: word read +6/8, long read +5/8, word
+  write +3/8, each half of a long write +11/8.
+- Per-device I/O costs.
+- COMBEL's Videl refill at 25 cycles per 17 longwords (19 before).
+- Videl VDB/VDE counting half lines in interlaced modes. Before this fix
+  (per the fork commit) every TOS 640x400 RGB mode failed the 40 Hz check,
+  and **Videl contention was silently off in 640x400 RGB runs** whatever
+  the `--videl-contention` flag. That covers this document's 640x400
+  figures taken before `89b455f8`.
+
+All of these make the 68030's ST-RAM work dearer and leave the DSP's alone.
+Where does the DSP/68030 split belong now?
+
+**What changed.** Data only; no code path, protocol field or DSP word:
+
+- `SPAN_STREAM_SHARE` is **256 for every build** (184 default, 176 640x400,
+  188 trail before). Every qualified triangle is marked for the DSP's span
+  stream. Records remain only for what the stream cannot take
+  (untextured and non-opaque triangles), and for size returns where a
+  model sets a limit.
+- The Battlefront TIE and X-wing drop their size limit (7.4k):
+  `blender/swbf/tie/model/stream.mk` and `blender/swbf2/xwing/model/stream.mk`,
+  which are local and git-ignored, set share 256 and no limit. The
+  snowspeeder keeps limit 1536.
+- A rebuilt default is byte-identical to the measured arm. Each arm was the
+  staged executable with `span_stream_share` patched by
+  `tools/patch_data_flag.py`, and the size limit patched in the `.lod` by
+  `tools/lod_word.py`. This was checked with `cmp` for `trex_m68030.tos`,
+  `trex_framehash.tos`, `trex_hires.tos`, `trex_hires_bg.tos` and
+  `trex_hires_bg_fbseq.tos`.
+
+**Measured.** Cycle-exact Hatari with Videl contention, 16 MHz, TOS 4.02,
+corrected DSP clock, one run per point; emulator only. Two binaries, never
+mixed in one row:
+
+- **`b2d65b04…`** is the fork's `build-ucrt64` of 2026-11-23 14:38, which
+  reports the f030probe bus model at start-up.
+- **`5c5b56fb…`** is 2.7b's manual 68030 timing with the 2-clock ST-RAM
+  long-write wait (fork `1fd48884`), without the bus model.
+
+Default pair 4 MiB, 265 frames; 640x400 builds 14 MiB, 160 frames for the
+trail scenes and 265 for `TREXHIRS.LOD`. Raw figures with input hashes:
+[`docs/performance/sched-2026-11-23.json`](docs/performance/sched-2026-11-23.json).
+
+| Share of 256 | Default `5c5b56fb` | Default `b2d65b04` | Trail `5c5b56fb` | Trail `b2d65b04` | 640x400 `b2d65b04` |
+|---:|---:|---:|---:|---:|---:|
+| 176 | -- | 442.7 | -- | -- | 1043.0 |
+| 184 | 412.1 | 426.9 | -- | -- | -- |
+| 188 | -- | -- | 404.2 | 512.3 | -- |
+| 192 | -- | 412.0 | -- | -- | -- |
+| 200 | -- | 398.8 | -- | -- | -- |
+| 204 | -- | -- | -- | 478.2 | -- |
+| 208 | -- | -- | -- | -- | 951.3 |
+| 216 | 364.9 | 376.2 | -- | -- | -- |
+| 220 | -- | -- | 362.7 | 444.6 | -- |
+| 224 | -- | -- | -- | -- | 905.5 |
+| 232 | 351.4 | 359.8 | -- | -- | -- |
+| 236 | -- | -- | **357.1** | 414.4 | -- |
+| 240 | -- | -- | -- | -- | 859.9 |
+| 256 | **350.7** | **354.3** | 358.8 | **391.8** | **816.9** |
+
+"Default" is the diagnostic `trex_m68030.tos`. "Trail" is the T-Rex trail
+of 6.6i (`trex_hires_bg.tos`, no size limit). "640x400" is the build
+without backdrop (`trex_hires.tos`, no size limit).
+
+At the new defaults, on `b2d65b04…`:
+
+| Build | Old share | ms/frame | Share 256 | ms/frame | Change |
+|---|---:|---:|---:|---:|---:|
+| Diagnostic default | 184 | 426.9 (2.34 FPS) | 256 | **354.3 (2.82 FPS)** | **-17.0%, +20.5% FPS** |
+| Frame-hash build, 512 frames | 184 | 418.3 | 256 | 324.3 | -22.5% |
+| T-Rex trail | 188 | 512.3 (1.95 FPS) | 256 | **391.8 (2.55 FPS)** | **-23.5%, +30.8% FPS** |
+| 640x400, no backdrop | 176 | 1043.0 (0.96 FPS) | 256 | **816.9 (1.22 FPS)** | **-21.7%, +27.7% FPS** |
+
+The vehicles' size limits at share 256, on `b2d65b04…`. The picture is
+identical at every limit (frame 100 of each scene):
+
+| Scene | Limit 1024 | 1536 | 2048 | 3072 | 4096 | None |
+|---|---:|---:|---:|---:|---:|---:|
+| Battlefront snowspeeder | 271.7 | **267.6** | 268.3 | 268.2 | -- | 272.1 |
+| Battlefront TIE | -- | 730.5 | 725.2 | 722.1 | -- | **709.2** |
+| Battlefront X-wing | -- | -- | 379.5 | 375.2 | 373.6 | **369.5** |
+| T-Rex trail | 396.5 | -- | 392.2 | -- | 391.8 | **391.8** |
+| 640x400, no backdrop | -- | -- | 870.7 | -- | -- | **816.9** |
+
+Stages at share 256 on `b2d65b04…` (68030 timers; the 68030 draws on
+arrival inside the packet stage, so "raster" is only the tail after the last
+chunk):
+
+| Build | `set_frame` | Packet | Clear | Raster |
+|---|---:|---:|---:|---:|
+| Diagnostic default | 20.8 | 276.9 | 24.5 | 31.5 |
+| T-Rex trail | 12.5 | 261.0 | 51.1 | 66.2 |
+| 640x400, no backdrop | 23.4 | 551.4 | 41.5 | 200.0 |
+
+**Attribution.**
+
+- **The old shares were already stale on `5c5b56fb…`.** 2.7b's manual
+  timing charges the 68030 its internal clocks and leaves the DSP alone. On
+  that binary the default build gains 61.4 ms from share 256 (412.1 ->
+  350.7), and the trail gains 47.1 ms from share 236 (404.2 -> 357.1). The
+  splits of 2.8a and 2.8e were located on the bare core and never re-swept
+  after 2.7b.
+- **The bus model pushes the optimum to the end of the range.** On
+  `b2d65b04…` the trail's optimum moves from 236 to 256, and the size limits
+  that paid on `5c5b56fb…` (7.4k) now cost 1.5-2.3%. The 68030 has become
+  dearer per pixel than the DSP's walker plus the wire.
+- **The bus model costs the trail 108 ms at the old share and 33 ms at the
+  new one** (404.2 -> 512.3 at 188, 358.8 -> 391.8 at 256). At share 188
+  the raster stage rises 152.2 -> 235.9 ms and the clear 45.7 -> 63.5 ms,
+  while the packet stage moves 194.5 -> 200.2. That is the 68030 drawing
+  and restoring the backdrop under Videl contention, which 640x400 RGB
+  runs had never been charged before.
+
+**The DSP's side** (2.8's PC-range profile, trail on `b2d65b04…`, 160
+frames, listing of the measured image):
+
+| DSP time per frame | Share 188 | Share 256 |
+|---|---:|---:|
+| Host port: waiting for the host to send | 195.7 ms | 48.0 ms |
+| -- of which `PREPASS`, the frame start | 149.7 ms | 8.2 ms |
+| -- of which `BUILD_TRIANGLES`, the next chunk's list | 8.8 ms | 19.8 ms (0.56 ms x 35.1) |
+| -- of which `GET_TRIANGLES` | 25.1 ms | 8.1 ms |
+| Stream walker, waiting on the SSI transmitter | 52.4 ms | 67.8 ms |
+| Stream walker, arithmetic | 66.8 ms | 91.1 ms |
+| Booked | 513.8 ms | 392.6 ms |
+
+At the old share the DSP spent 150 ms of every trail frame waiting for the
+68030 to start the next one. At 256 the frame-start wait is gone. What
+remains is the wire (68 ms; the trail now streams about 64,000 units, or
+125 KB, a frame) and the hand-over (28 ms at `BUILD_TRIANGLES` and
+`GET_TRIANGLES`).
+
+**Gates.**
+
+- Default: all **512 frame hashes** of the frame-hash build match the
+  reference (`frmhash.res` `0a3f2fa1...`) at share 184 and at 256. Frame 100
+  is `d89958b3...3d16` at every share swept, on both binaries.
+- T-Rex trail: the frame-sequence probe writes a `fbseq.res`
+  **byte-identical for all 160 frames** (81,920,000 bytes) at share 188 and
+  at 256. Frame 100 is `0dc7213b...` at every point, on both binaries.
+- TIE (limit 2048 against none) and X-wing (3072 against none): `fbseq.res`
+  byte-identical for all 160 frames. Snowspeeder, all limits: frame 100
+  equal.
+- 640x400 without backdrop: frame 100 is `f8781fbf...630e` at every point.
+  Its frame-sequence probe was not run.
+
+**What it says.**
+
+- The balance point follows the emulator, and the emulator moved twice in
+  two days. A split located on one Hatari binary is not an optimization on
+  the next. Re-sweep `span_stream_share` (and the 640x400 size limit) after
+  every change to the fork's 68030, bus or Videl model, and label each
+  figure with the binary's hash.
+- With share 256 at the end of its range, the share no longer balances the
+  two processors. Further gains have to come from removing work on one side:
+  - the hand-over's 28 ms of DSP idle (2.8a's "left of the hand-over",
+    still unbuilt);
+  - the wire's 68 ms (2.8d's buffered transmit, not adopted);
+  - on the 68030, the trail's 51 ms clear and backdrop restore. That restore
+    is bus-bound (2.8c) and now also pays Videl contention.
+
+**Not established.**
+
+- No physical Falcon has run either split. The bus model brings the
+  emulator closer to the hardware, but a real Falcon may still balance
+  below 256.
+- Not re-measured: the MMU-ledger profile, the release timing copy of
+  `TREX.TOS` (it takes the same share), and the vehicles' old 7.4k tables
+  on the new binary beyond the points above.
+- The frame-hash build's larger gain (-22.5%) over 512 frames, against
+  -17.0% over 265, is a different stretch of the choreography with the
+  hash pass included. It is not a second measurement of the same thing.
+
+**Reproduction.**
+
+```sh
+make trex_m68030 trex_m68030_framehash trex_m68030_hires trex_m68030_hires_backdrop
+python3 tools/measure_frames.py TREX/m68030/trex_m68030.tos TREX/dsp/trex_dsp.lod <new dir> \
+  --cpu-core cycle-exact --videl-contention on --frames 265 \
+  --hatari <fork build-ucrt64 hatari> --tos <tos402.img>
+python3 tools/measure_frames.py TREX/m68030/trex_hires_bg.tos TREX/m68030/TREXBGND.LOD <new dir> \
+  --dsp-name TREXBGND.LOD --cpu-core cycle-exact --videl-contention on \
+  --memsize 14 --frames 160 --hatari <...> --tos <...>
+```
+
+For a sweep arm, patch `span_stream_share` into a copy with
+`tools/patch_data_flag.py <tos> <listing> span_stream_share <n>`. Check
+`run.json`'s `inputs.hatari.sha256` before comparing two figures.
 
 ## 3. Rasterizer cost model
 
@@ -12196,6 +12408,13 @@ share and limit patched:
 - `blender/swbf2/xwing/model/stream.mk` carries share 256 and limit 3072.
   Built that way, unpatched, it measures **324.5 ms**, the same as the
   patched point, with the same hash.
+- **Superseded on the Falcon bus model (2.8f, Hatari `b2d65b04…`).** The
+  68030 got dearer per pixel, so size returns stopped paying:
+  - the TIE measures 709.2 ms with no limit, against 725.2 ms at 2048;
+  - the X-wing measures 369.5 ms with no limit, against 375.2 ms at 3072;
+  - the snowspeeder still measures best at 1536, 267.6 ms.
+
+  Both `stream.mk` files now set no limit.
 - Emulator figures only.
 
 **Reproduction.** Build the scene (`make MODEL_DIR=<dir>

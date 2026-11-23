@@ -188,6 +188,13 @@ cycle-exact and **339.2 ms / 2.95 FPS** on the MMU ledger, and `TREX.TOS`
 cycle-exact diagnostic build to **317.9 ms / 3.15 FPS** and the dinosaur
 trail to **323.4 ms / 3.09 FPS**, with identical frames; the other figures
 here have not been re-measured.
+Since 2026-11-23 (OPTIMIZATION.md 2.8f) the DSP streams every qualified
+triangle. That is the balance on the Hatari fork's new Falcon bus model, which
+charges the 68030 its measured ST-RAM and Videl costs. On that emulator the
+diagnostic build goes from 426.9 to **354.3 ms / 2.82 FPS** and the dinosaur
+trail from 512.3 to **391.8 ms / 2.55 FPS**, with identical frames. These
+figures are not comparable with the ones above, which were taken on the
+older emulator.
 Emulator only; no Falcon has run the stream yet.
 
 The **dinosaur trail** is a fixed-camera, 640×400 live 3D scene from a
