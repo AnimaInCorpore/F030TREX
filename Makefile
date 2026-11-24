@@ -710,7 +710,8 @@ MODEL_OBJECT=T-Rex
 ATAT_DIR=./blender/atat
 # The body is LATO.2's remesh of the source body (OPTIMIZATION.md 6.6j), made
 # outside this tree: LATO.2 at --vert_num 60 on the Y-up body, converted back
-# to Z up and fitted with tools/blender_fit_external.py.
+# to Z up and fitted with tools/blender_fit_external.py mirror=-x triangles=497
+# (LATO.2 is not symmetric; its -X half is mirrored).
 ATAT_BODY=$(ATAT_DIR)/lato/body_lato.obj
 atat_scene:
 	@test -f $(ATAT_BODY) || { echo "no LATO.2 body at $(ATAT_BODY) -- see OPTIMIZATION.md 6.6j"; exit 1; }

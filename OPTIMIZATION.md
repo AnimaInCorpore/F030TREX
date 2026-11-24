@@ -10029,34 +10029,44 @@ like any other part. `make atat_scene` now passes
 (`C:\Arbeit\LATO.2`, MIT; port and limits in F030Arcade DEBUGGING.md), asked
 for 60 vertices from the 115,721-triangle source body: 305 vertices, 497
 triangles, fitted back onto the body's rest-shape box (centre and longest
-side) by `tools/blender_fit_external.py`. At the walker's budgets the body
+side) by `tools/blender_fit_external.py`. LATO.2's output is not symmetric
+(the two sides differ by up to 0.48 units on a 3.4-unit-wide body), which
+looked wrong in motion, so the fit keeps the -X half, mirrors it, welds the
+cut and collapses the result to 496 triangles with Decimate's X symmetry
+(`mirror=-x triangles=497`); the +X half had notches along the sides. At
+the walker's budgets the body
 is worth it and the feet are not: decimated to the hull body's 388
 triangles it keeps the boxy front and rear sections and the side panels,
 where the hull is one rounded lump, while LATO.2's foot at 168 triangles is
 lumpier than the fitted stepped casting.
 
-- Walker 1,492 vertices and 2,470 triangles (2,810 with the hull body); the
-  body keeps all 497 triangles because the 19 hull pieces it replaces cost
-  more. With the bolts: V=1504 T=2486 N=1953, X 13,016/14,647 and Y
-  11,362/13,888 words (hull body: V=1660 T=2826 N=2173, X 14,448 and Y
-  12,822).
+- Walker 1,577 vertices and 2,619 triangles (2,810 with the hull body).
+  The budget pass shares the triangles by surface area, so the body's
+  larger surface takes triangles from the rest: head 304 -> 257, each foot
+  168 -> 146, the other leg parts a little each (the asymmetric body, with
+  more surface, left 241 and 128). With the bolts: V=1589 T=2635 N=2040,
+  X 13,760/14,647 and Y 11,983/13,888 words (hull body: V=1660 T=2826
+  N=2173, X 14,448 and Y 12,822).
 - Hatari `b2d65b04…`, cycle-exact with Videl contention, 14 MiB, 100 frames,
   diagnostic `trex_hires_bg.tos` of each model directory:
 
 | Walker | ms/frame | set_frame | Packet | Clear | Raster |
 |---|---:|---:|---:|---:|---:|
 | Hull body (before) | 500.2 (2.00 FPS) | 15.0 | 346.6 | 66.7 | 71.5 |
-| **LATO.2 body (current)** | **511.8 (1.95 FPS)** | 13.5 | 349.9 | 65.8 | 81.9 |
+| LATO.2 body, asymmetric | 511.8 (1.95 FPS) | 13.5 | 349.9 | 65.8 | 81.9 |
+| **LATO.2 body, mirrored (current)** | **517.1 (1.93 FPS)** | 14.4 | 355.8 | 65.3 | 80.8 |
 
 - Emulator figures only; not comparable with the 431.3 ms above, which
   was taken on an earlier binary.
-- Fewer triangles, yet +11.6 ms (+2.3%): the rasteriser stage grows by
-  10.4 ms. Likely cause (not profiled): the 68030 draws the larger flat
-  body triangles. The scene, rig, gait and camera are unchanged. Adopted
+- Fewer triangles, yet +11.6 ms (+2.3%) for the asymmetric body: the
+  rasteriser stage grows by 10.4 ms. Likely cause (not profiled): the 68030
+  draws the larger flat body triangles. The mirrored body adds 5.3 ms more,
+  in the packet stage, with the 149 triangles the head and legs got back.
+  Current against the hull body: +16.9 ms (+3.4%). The scene, rig, gait and camera are unchanged. Adopted
   for the silhouette; the capture above still shows the hull body.
 - `make atat_scene` rebuilt from the committed inputs gives a
   `trex_hires_bg.tos` and `TREXBGND.LOD` byte-identical to the measured
-  pair (`bf5dda38…`, `d4aace84…`).
+  pair (asymmetric `bf5dda38…`/`d4aace84…`; mirrored `7e9aaab2…`/`6cf8c979…`).
 
 Remake the body (LATO.2 in its own clone, TriFlow's venv; only needed if the
 source body changes):
@@ -10067,7 +10077,7 @@ python win_port/run.py scripts/e2e_inference.py --mesh_dir <dir with Main.obj> \
   --out_dir <out> --vert_num 60 --min_verts 30 --num_workers 0
 # Z-up again: (x, y, z) -> (x, -z, y), saved as Main_zup.obj; then
 blender -b -Y assets/Tutorial.blend --python tools/blender_fit_external.py -- \
-  ATAT Main <out>/Main_zup.obj blender/atat/lato/body_lato.obj
+  ATAT Main <out>/Main_zup.obj blender/atat/lato/body_lato.obj mirror=-x triangles=497
 ```
 
 ### 6.6k Reducing third-party vehicle models with TriFlow (2026-11-22)

@@ -256,9 +256,10 @@ One walker tracks a target and fires twice. Its rig and armour come from
 `assets/Tutorial.blend`. The [mesh comparison](docs/previews/atat-mesh-comparison.png)
 shows the original and the earlier 1,648-vertex, 2,810-triangle reduction under
 the same lighting; the capture and comparison predate the current body. The
-walker's body is now a LATO.2 remesh: 1,492 vertices and 2,470 triangles, at
-511.8 ms/frame in cycle-exact Hatari with Videl contention (Hatari
-`b2d65b04…`; 500.2 ms with the earlier hull body on the same build). To
+walker's body is now a LATO.2 remesh, mirrored for symmetry: 1,577 vertices
+and 2,619 triangles, at 517.1 ms/frame in cycle-exact Hatari with Videl
+contention (Hatari `b2d65b04…`; 500.2 ms with the earlier hull body on the
+same build). To
 rebuild the packed scene and the individual rigged mesh, run
 `make atat_scene` with the supplied asset and `blender/atat/lato/body_lato.obj`
 present.
