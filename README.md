@@ -254,10 +254,14 @@ See [OPTIMIZATION.md 6.6h](OPTIMIZATION.md#66h-any-blender-model-as-a-model-dire
 or [watch the 50-frame Hatari capture at 8 fps](docs/previews/atat-patrol.mp4).
 One walker tracks a target and fires twice. Its rig and armour come from
 `assets/Tutorial.blend`. The [mesh comparison](docs/previews/atat-mesh-comparison.png)
-shows the original and the 1,648-vertex, 2,810-triangle reduction under the
-same lighting. The scene measured 431.3 ms/frame in
-cycle-exact Hatari over two loops. To rebuild the packed scene and the
-individual rigged mesh, run `make atat_scene` with the supplied asset present.
+shows the original and the earlier 1,648-vertex, 2,810-triangle reduction under
+the same lighting; the capture and comparison predate the current body. The
+walker's body is now a LATO.2 remesh: 1,492 vertices and 2,470 triangles, at
+511.8 ms/frame in cycle-exact Hatari with Videl contention (Hatari
+`b2d65b04…`; 500.2 ms with the earlier hull body on the same build). To
+rebuild the packed scene and the individual rigged mesh, run
+`make atat_scene` with the supplied asset and `blender/atat/lato/body_lato.obj`
+present.
 For Falcon export and the earlier column shot, see
 [OPTIMIZATION.md 6.6j](OPTIMIZATION.md#66j-two-walkers-on-a-snowfield-one-model-several-actors-2026-11-20).
 

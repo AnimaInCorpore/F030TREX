@@ -29,6 +29,11 @@ Options (key=value):
                       move together)
   textures=0          1: bake a material's image texture (its first image node,
                       through the source's UVs) instead of its flat colour
+  external=Main:body.obj;...
+                      replace every piece of these bones with a mesh made
+                      elsewhere (an OBJ in the source's world space, Z up,
+                      for example a LATO.2 result), decimated to the bone's
+                      budget share and baked like the hulls
 
 For a model whose parts each follow one bone (machines, robots), every loose
 piece of the mesh becomes the convex hull of its vertices -- which keeps the
@@ -76,6 +81,7 @@ AMBIENT = float(opts.get("ambient", 0.5))
 SIZE = opts.get("size", "height")
 INSIDE_ANY = opts.get("inside", "bone") == "any"
 TEXTURES = opts.get("textures", "0") == "1"
+EXTERNAL = dict(item.split(":", 1) for item in filter(None, opts.get("external", "").split(";")))
 if SIZE not in ("height", "extent"):
     raise SystemExit("size must be height or extent")
 if not 0 <= AMBIENT <= 1:
@@ -207,6 +213,31 @@ for cand in candidates:
         parts.append(cand)
 print("pieces %d, hull candidates %d, kept %d" % (pieces, len(candidates), len(parts)))
 
+
+def load_obj(path):
+    """Triangulated OBJ vertices and faces, moved into the source's local space."""
+    verts, tris = [], []
+    for line in open(path):
+        p = line.split()
+        if p and p[0] == "v":
+            verts.append([float(c) for c in p[1:4]])
+        elif p and p[0] == "f":
+            idx = [int(c.split("/")[0]) - 1 for c in p[1:]]
+            tris.extend([idx[0], idx[i], idx[i + 1]] for i in range(1, len(idx) - 1))
+    inverse = np.array(source.matrix_world.inverted())
+    verts = np.c_[np.array(verts), np.ones(len(verts))] @ inverse.T
+    return verts[:, :3], np.array(tris, int)
+
+
+for bone, path in EXTERNAL.items():
+    dropped = sum(p["bone"] == bone for p in parts)
+    parts = [p for p in parts if p["bone"] != bone]
+    points, tris = load_obj(path)
+    a, b, c = (points[tris[:, i]] for i in range(3))
+    area = 0.5 * np.linalg.norm(np.cross(b - a, c - a), axis=1).sum()
+    parts.append(dict(bone=bone, points=points, tris=tris, area=area, piece=None, external=True))
+    print("external %s: %d triangles from %s, replacing %d pieces" % (bone, len(tris), path, dropped))
+
 # ------------------------------------------------------------------ copies per part
 def copies_of(bone):
     """Bone names of the mirrored copies of a source bone, with their flips."""
@@ -222,7 +253,8 @@ def copies_of(bone):
 
 for part in parts:
     part["copies"] = copies_of(part["bone"])
-    part["use_surface"] = any(fnmatch.fnmatchcase(part["bone"], pattern) for pattern in SURFACES)
+    part["use_surface"] = not part.get("external") and any(
+        fnmatch.fnmatchcase(part["bone"], pattern) for pattern in SURFACES)
 
 # ------------------------------------------------------------------ triangle budget
 areas = np.array([p["area"] for p in parts])

@@ -9978,7 +9978,7 @@ enabled measured 434.1 ms/frame (2.30 fps): set_frame 7.5 ms, packets
 252.8 ms, backdrop restore 69.8 ms, rasterizer 103.5 ms. Physical Falcon
 timing for this revision is unmeasured.
 
-**Single-walker glacier patrol (current).** The [packed scene](TREX/scene/atat_patrol.blend)
+**Single-walker glacier patrol.** (Its body is now LATO.2's, below.) The [packed scene](TREX/scene/atat_patrol.blend)
 contains one rig, one ground shadow and two animated bolts. The 50-sample
 loop uses the same gait and firing times as the lead walker above. Reducing
 the minimum source-piece size to 0.042 of the model height retains 51
@@ -10007,7 +10007,8 @@ cycle-exact run with Videl contention enabled measured **431.3 ms/frame
 (2.32 fps)** over 100 frames. The [capture](docs/previews/atat-patrol.mp4)
 plays at 8 fps. Physical Falcon timing for this build is unmeasured.
 
-**Rebuild the current patrol** with Blender 5.3 and the supplied source file.
+**Rebuild the current patrol** with Blender 5.3, the supplied source file
+and the LATO.2 body `blender/atat/lato/body_lato.obj` (below).
 The first target also leaves a packed, reusable mesh and its original rig in
 `blender/atat/asset_patrol_low.blend`. The earlier two-actor layouts
 require a smaller per-walker mesh to fit the DSP.
@@ -10017,6 +10018,56 @@ make atat_scene
 make model_export BLEND=TREX/scene/atat_patrol.blend MODEL_OBJECT=Walkers \
   MODEL_DIR=./blender/atat/model_patrol
 make MODEL_DIR=./blender/atat/model_patrol trex_m68030_hires_backdrop_run
+```
+
+**The patrol walker's body is LATO.2's (2026-11-24, current).**
+`blender_reduce_rigid.py` takes `external=<bone>:<file.obj>`: every hull
+piece of that bone is replaced by a mesh made elsewhere (world space, Z up),
+which then gets the bone's weights, budget share, UVs, bake and mirroring
+like any other part. `make atat_scene` now passes
+`external=Main:blender/atat/lato/body_lato.obj`. That body came from LATO.2
+(`C:\Arbeit\LATO.2`, MIT; port and limits in F030Arcade DEBUGGING.md), asked
+for 60 vertices from the 115,721-triangle source body: 305 vertices, 497
+triangles, fitted back onto the body's rest-shape box (centre and longest
+side) by `tools/blender_fit_external.py`. At the walker's budgets the body
+is worth it and the feet are not: decimated to the hull body's 388
+triangles it keeps the boxy front and rear sections and the side panels,
+where the hull is one rounded lump, while LATO.2's foot at 168 triangles is
+lumpier than the fitted stepped casting.
+
+- Walker 1,492 vertices and 2,470 triangles (2,810 with the hull body); the
+  body keeps all 497 triangles because the 19 hull pieces it replaces cost
+  more. With the bolts: V=1504 T=2486 N=1953, X 13,016/14,647 and Y
+  11,362/13,888 words (hull body: V=1660 T=2826 N=2173, X 14,448 and Y
+  12,822).
+- Hatari `b2d65b04…`, cycle-exact with Videl contention, 14 MiB, 100 frames,
+  diagnostic `trex_hires_bg.tos` of each model directory:
+
+| Walker | ms/frame | set_frame | Packet | Clear | Raster |
+|---|---:|---:|---:|---:|---:|
+| Hull body (before) | 500.2 (2.00 FPS) | 15.0 | 346.6 | 66.7 | 71.5 |
+| **LATO.2 body (current)** | **511.8 (1.95 FPS)** | 13.5 | 349.9 | 65.8 | 81.9 |
+
+- Emulator figures only; not comparable with the 431.3 ms above, which
+  was taken on an earlier binary.
+- Fewer triangles, yet +11.6 ms (+2.3%): the rasteriser stage grows by
+  10.4 ms. Likely cause (not profiled): the 68030 draws the larger flat
+  body triangles. The scene, rig, gait and camera are unchanged. Adopted
+  for the silhouette; the capture above still shows the hull body.
+- `make atat_scene` rebuilt from the committed inputs gives a
+  `trex_hires_bg.tos` and `TREXBGND.LOD` byte-identical to the measured
+  pair (`bf5dda38…`, `d4aace84…`).
+
+Remake the body (LATO.2 in its own clone, TriFlow's venv; only needed if the
+source body changes):
+
+```sh
+# Y-up input: the body's faces exported in world space, (x, y, z) -> (x, z, -y)
+python win_port/run.py scripts/e2e_inference.py --mesh_dir <dir with Main.obj> \
+  --out_dir <out> --vert_num 60 --min_verts 30 --num_workers 0
+# Z-up again: (x, y, z) -> (x, -z, y), saved as Main_zup.obj; then
+blender -b -Y assets/Tutorial.blend --python tools/blender_fit_external.py -- \
+  ATAT Main <out>/Main_zup.obj blender/atat/lato/body_lato.obj
 ```
 
 ### 6.6k Reducing third-party vehicle models with TriFlow (2026-11-22)
