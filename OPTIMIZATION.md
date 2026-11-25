@@ -10020,7 +10020,7 @@ make model_export BLEND=TREX/scene/atat_patrol.blend MODEL_OBJECT=Walkers \
 make MODEL_DIR=./blender/atat/model_patrol trex_m68030_hires_backdrop_run
 ```
 
-**The patrol walker's body is LATO.2's (2026-11-24, current).**
+**The patrol walker's body is LATO.2's (2026-11-24; holes closed 2026-11-25, current).**
 `blender_reduce_rigid.py` takes `external=<bone>:<file.obj>`: every hull
 piece of that bone is replaced by a mesh made elsewhere (world space, Z up),
 which then gets the bone's weights, budget share, UVs, bake and mirroring
@@ -10040,7 +10040,7 @@ triangles it keeps the boxy front and rear sections and the side panels,
 where the hull is one rounded lump, while LATO.2's foot at 168 triangles is
 lumpier than the fitted stepped casting.
 
-- Walker 1,577 vertices and 2,619 triangles (2,810 with the hull body).
+- Mirrored body: walker 1,577 vertices and 2,619 triangles (2,810 with the hull body).
   The budget pass shares the triangles by surface area, so the body's
   larger surface takes triangles from the rest: head 304 -> 257, each foot
   168 -> 146, the other leg parts a little each (the asymmetric body, with
@@ -10054,7 +10054,8 @@ lumpier than the fitted stepped casting.
 |---|---:|---:|---:|---:|---:|
 | Hull body (before) | 500.2 (2.00 FPS) | 15.0 | 346.6 | 66.7 | 71.5 |
 | LATO.2 body, asymmetric | 511.8 (1.95 FPS) | 13.5 | 349.9 | 65.8 | 81.9 |
-| **LATO.2 body, mirrored (current)** | **517.1 (1.93 FPS)** | 14.4 | 355.8 | 65.3 | 80.8 |
+| LATO.2 body, mirrored | 517.1 (1.93 FPS) | 14.4 | 355.8 | 65.3 | 80.8 |
+| **LATO.2 body, mirrored, holes closed (current, below)** | **524.9 (1.91 FPS)** | 13.8 | 363.7 | 65.1 | 81.5 |
 
 - Emulator figures only; not comparable with the 431.3 ms above, which
   was taken on an earlier binary.
@@ -10062,11 +10063,72 @@ lumpier than the fitted stepped casting.
   rasteriser stage grows by 10.4 ms. Likely cause (not profiled): the 68030
   draws the larger flat body triangles. The mirrored body adds 5.3 ms more,
   in the packet stage, with the 149 triangles the head and legs got back.
-  Current against the hull body: +16.9 ms (+3.4%). The scene, rig, gait and camera are unchanged. Adopted
+  Mirrored against the hull body: +16.9 ms (+3.4%). The scene, rig, gait and camera are unchanged. Adopted
   for the silhouette; the capture above still shows the hull body.
 - `make atat_scene` rebuilt from the committed inputs gives a
   `trex_hires_bg.tos` and `TREXBGND.LOD` byte-identical to the measured
   pair (asymmetric `bf5dda38…`/`d4aace84…`; mirrored `7e9aaab2…`/`6cf8c979…`).
+
+**Holes closed, hidden faces dropped (2026-11-25, current).** LATO.2's
+body is not one closed shell: 18 loose pieces (eleven closed blocks, some
+open shells, three single quads), 66 open edges and 16 edges with three or
+four faces. With back faces culled (DSP, 2.3) a hole shows the background.
+Blender's `holes_fill` closed none of the 17 rims, since they run through the
+non-manifold edges. `blender_fit_external.py` now, by default:
+
+- `fill=1`: after making the winding consistent, it collects the directed
+  half-edges that no opposite half-edge cancels. These always split into
+  closed cycles, since each face enters and leaves each of its vertices
+  once. Each cycle becomes one face wound against it (9 rims filled; 8
+  single triangles sandwiched between other faces stay as they are).
+- `hidden=drop`: rays from 66 directions, 256x256 each, find the faces
+  that can be seen from outside the part at all. The 68 others are deleted.
+  They lie inside, and the ordering table would draw them and then paint
+  over them. Coverage against the undropped body: 0 pixels lost in 12
+  views at 360x360.
+- `two_sided=0|1` (default 0): `1` writes a reversed copy, with its own
+  vertices, of every face that the rays met from behind (41 here: sheets
+  and flaps). This gave 0 see-through pixels in all 12 views, but it is
+  drawn whenever the camera faces that side, hidden or not.
+
+The body is now 278 vertices and 427 triangles. Measured with the same rays
+and renders, from the patrol's own camera (9 frames, 640x400, Workbench with
+culling): the mirrored body showed 116 see-through pixels in total (about
+13 per frame, along the underside); the current one shows 1.
+
+| Body (others fixed at 2,157 shared triangles) | Body tris | Walker V/T (with bolts) | ms/frame | set_frame | Packet | Clear | Raster | Pixels/frame | See-through, 9 game frames |
+|---|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| Mirrored (before) | 496 | 1589/2635 | 517.1 | 14.4 | 355.8 | 65.3 | 80.8 | 75,233 | 116 |
+| Filled + two-sided | 468 | 1670/2597 | 546.0 | 14.8 | 379.1 | 65.7 | 85.7 | 83,644 | 0 |
+| **Filled, hidden dropped (current)** | **427** | **1547/2556** | **524.9** | 13.8 | 363.7 | 65.1 | 81.5 | 78,643 | **1** |
+| Hidden dropped only, not filled | 412 | 1563/2541 | 503.2 | 14.2 | 340.7 | 66.2 | 81.7 | 72,539 | 116 |
+
+- Hatari `b2d65b04…`, cycle-exact with Videl contention, 14 MiB, 100 frames;
+  emulator figures only.
+- Time follows the pixels written, not the triangle count. Each row has
+  fewer triangles than the one before it, but the filled rims are large
+  faces drawn under the outer shell, and the two-sided copies are drawn
+  whenever they face the camera. Packet stage: +23.3 ms (two-sided) and
+  +7.9 ms (current) against the mirrored body. Dropping hidden faces alone
+  saves 15.1 ms in that stage and 13.9 ms overall: LATO.2's overlapping
+  blocks had been drawing inner walls. Closing the holes costs 21.7 ms of
+  that back. Current against the mirrored body: +7.8 ms (+1.5%).
+- Two-sided copies are not needed for this camera. It never looks down onto
+  the sheets that need them (only from above do 8,500 pixels in the
+  12-view check show through).
+- Budget: an external part now comes off the top of `triangles=`, and the
+  rest is shared by area among the other parts (`blender_reduce_rigid.py`;
+  without `external=` the split is unchanged). Before, the body's area sat
+  in the pool although the body never takes more than it has. That share
+  was wasted: `triangles=3450` gave 2,619. Filling the holes then took 191
+  triangles from the head and legs. `make atat_scene` now passes
+  `triangles=2584`: 427 for the body and 2,157 shared by area, which keeps
+  the other parts within one triangle each of the mirrored build (head 200
+  instead of 201; 2,113 instead of 2,123 with copies).
+- DSP X 13,387/14,647 and Y 11,674/13,888 words.
+- `make atat_scene` rebuilt from the committed inputs gives a
+  `trex_hires_bg.tos` and `TREXBGND.LOD` byte-identical to the measured
+  pair (`92e4c029…`/`924865a7…`).
 
 Remake the body (LATO.2 in its own clone, TriFlow's venv; only needed if the
 source body changes):
@@ -10078,6 +10140,7 @@ python win_port/run.py scripts/e2e_inference.py --mesh_dir <dir with Main.obj> \
 # Z-up again: (x, y, z) -> (x, -z, y), saved as Main_zup.obj; then
 blender -b -Y assets/Tutorial.blend --python tools/blender_fit_external.py -- \
   ATAT Main <out>/Main_zup.obj blender/atat/lato/body_lato.obj mirror=-x triangles=497
+# (defaults fill=1 hidden=drop two_sided=0; prints EDGES, HOLES and VISIBILITY)
 ```
 
 ### 6.6k Reducing third-party vehicle models with TriFlow (2026-11-22)

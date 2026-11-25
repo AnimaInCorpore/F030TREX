@@ -32,8 +32,9 @@ Options (key=value):
   external=Main:body.obj;...
                       replace every piece of these bones with a mesh made
                       elsewhere (an OBJ in the source's world space, Z up,
-                      for example a LATO.2 result), decimated to the bone's
-                      budget share and baked like the hulls
+                      for example a LATO.2 result), kept at its own triangle
+                      count (taken off the top of triangles=; the rest is
+                      shared by area) and baked like the hulls
 
 For a model whose parts each follow one bone (machines, robots), every loose
 piece of the mesh becomes the convex hull of its vertices -- which keeps the
@@ -260,13 +261,25 @@ for part in parts:
 areas = np.array([p["area"] for p in parts])
 counts = np.array([len(source_tris[p["piece"]]) if p["use_surface"] else len(p["tris"]) for p in parts])
 multiplicity = np.array([len(p["copies"]) for p in parts])
-share = float(TRIANGLES)
+# An external part arrives reduced: its triangles come off the top and the
+# rest is shared by area among the other parts. In the shared pool its area
+# would only waste budget, since it never takes more than it has (and filled
+# holes or two-sided faces would grow that waste).
+fixed = np.array([bool(p.get("external")) for p in parts])
+budget = TRIANGLES - (counts * multiplicity)[fixed].sum()
+pool = (areas * multiplicity)[~fixed].sum()
+share = float(budget)
 for _ in range(60):
-    wanted = np.minimum(counts, np.maximum(MIN_TRIANGLES, np.rint(share * areas / (areas * multiplicity).sum())))
-    total = (wanted * multiplicity).sum()
-    if total <= TRIANGLES:
+    wanted = np.where(fixed, counts,
+                      np.minimum(counts, np.maximum(MIN_TRIANGLES, np.rint(share * areas / pool))))
+    total = (wanted * multiplicity)[~fixed].sum()
+    if total <= budget:
         break
-    share *= TRIANGLES / total
+    share *= budget / total
+print("budget: %d triangles off the top, %d shared by area (pool %.3f)"
+      % ((counts * multiplicity)[fixed].sum(), budget, pool))
+for part, n, available in zip(parts, wanted, counts):
+    print("budget %s: %d of %d triangles" % (part["bone"], n, available))
 
 collection = scene.collection
 objects = []
