@@ -10737,6 +10737,161 @@ make model_export BLEND=blender/swbf/patrol/afterglow_lo.blend MODEL_OBJECT=ATAT
 make MODEL_DIR=./blender/swbf/patrol/model_lo trex_m68030_lores_backdrop_run
 ```
 
+**The game's LOD4 walker at 256x224 (2026-11-26).** `AFTERGLOW_LOD=4`
+makes `build_scene.py` build the walker from the game's LOD4. The scenes are
+`afterglow_lod4[_lo].blend` and the Falcon pair is in
+`blender/swbf/patrol/falcon_lod4_lo/`. LOD4 has 4,722 triangles (LOD5:
+1,024). Rigged as it comes, it does not fit and does not walk properly.
+`game_lod_mesh` fixes it in six steps, each found in renders:
+
+1. **Weld per part.** Each FBX vertex belongs to one part (`PART_<id>`).
+   Welding only within a part leaves 3,170 vertices.
+2. **Mirror.** The game mesh is not symmetric: 264 vertices have no mirror
+   partner, the body shell by up to 1.08 units. The +X half is kept and
+   mirrored, and the copies take the partner part ids (+23).
+   - The mirrored faces must be reversed explicitly
+     (`bmesh.ops.mirror` keeps their corner order, which turns them
+     inside out).
+   - Recalculating normals is no use on LOD4's open, overlapping parts.
+   - Without this the right side of the body was culled away.
+3. **Loose pieces get their own joints.** A part can hold pieces the rig
+   moves separately:
+   - Each foot pad carries four toe plates. The inner one is parked at the
+     body centre in the bind pose, and pinned to the pad it floated between
+     the feet.
+   - Each thigh carries two pistons and a guide.
+   - A piece now follows a `Toe*`, `LegPiston1/2` or `LegGuide` joint
+     whose pivot lies within 0.25 rig units of it: 28 pieces.
+   - LOD4's other extra parts (hydraulics, hinges, inner back toes) follow
+     the joint nearest their centre. The right side always takes the
+     mirrored joint.
+4. **Ground pieces are dropped.** The weak point, a neck piece and parts
+   23 and 46 lie flat on the ground in the bind pose and follow body or
+   root joints. No joint of the walk lifts them, so they stayed on the snow
+   under the walker. 222 vertices.
+5. **Hidden faces are dropped.** 360 faces are met by no outside ray in six
+   walk poses (42 directions, 128x128 rays). A face is kept if it or its
+   mirror image is seen.
+6. **Symmetric collapse to the budget.** Loose pieces of up to 12 triangles
+   (hatches, plates, rods: 55 pieces, 366 triangles) skip the collapse,
+   which had turned a side hatch's two triangles into one. The big pieces
+   share the rest.
+
+At 2,300 triangles (2,400 overflowed DSP X by 68 words): V=1724 T=2300
+N=1714, X 14,370/14,647 and Y 10,326/13,888 words. The 107 poses take
+1,106,808 bytes of host RAM.
+
+Hatari `b2d65b04…`, cycle-exact with Videl contention, 14 MiB, 100 frames:
+
+| Afterglow 256x224 | ms/frame | Packet | Clear | Raster | Pixels/frame |
+|---|---:|---:|---:|---:|---:|
+| LOD5 (1,024 triangles) | 123.7 (8.08 FPS) | 98.6 | 12.4 | 6.7 | 9,221 |
+| LOD4 as rigged, 2,398 triangles (body inside out on one side) | 258.2 (3.87 FPS) | 227.4 | 12.6 | 2.8 | 13,479 |
+| LOD4 revised, 2,300 triangles | 246.2 (4.06 FPS) | 215.2 | 12.0 | 3.4 | 12,531 |
+| **LOD4 revised, LATO.2 head baked (current, below)** | **244.5 (4.09 FPS)** | 213.8 | 12.2 | 2.8 | 12,531 |
+
+- Emulator figures only.
+- The packet stage (DSP) is 87% of the frame. Measured pair:
+  `9c91e41b…`/`0fd865b2…`.
+- Painter's order is not the problem here. A depth-buffered render
+  and an average-z sorted one (the OT key), both from the scene camera,
+  disagree on 0.04–0.09% of the walker's pixels for LOD5 and LOD4 alike.
+
+**LATO.2 on the body and head shells lost.** The test had the same budget
+for both (body 300, head 160 triangles), rest as above. Switches:
+`AFTERGLOW_SHELLS_DUMP`, `AFTERGLOW_SHELLS`, `AFTERGLOW_SHELL_LOD`; off by
+default.
+
+- **From LOD4's own shells:** the largest pieces are only 284 and 280
+  triangles, below LATO.2's floor. The body was fused from its 662-triangle
+  panels. Copying texture coordinates from the nearest game face then
+  striped it, because the remesh does not follow the panels.
+- **From LOD2 (same atlas; body 5,712, head shell 522 triangles), 60 and
+  120 vertices:** cleanly textured. But the body became large flat facets
+  and lost the recessed side panel and the armour plates that the collapse
+  keeps.
+
+The collapse stays for the body; the head was then redone with a baked page and adopted (below). Comparison: `blender/swbf/patrol/lod4_shell_compare.png`.
+
+Why LATO.2 lost, measured stage by stage. Shape error is against LOD2's
+shell: mean surface distance both ways over 20,000 samples each way, as a
+percentage of the shell's longest side.
+
+| Shell | LATO.2 raw | Mirrored | Collapsed to budget | In scene | Collapse of LOD4, in scene |
+|---|---:|---:|---:|---:|---:|
+| Body (300 triangles) | 0.84% | 0.80% | 0.82% | 0.75% | **0.24%** |
+| Head (160 triangles) | 0.41% | 0.40% | 0.63% | **0.96%** | 1.36% |
+
+| Texel density off by > 4x | Body | Head |
+|---|---:|---:|
+| Collapse | 2% | 2% |
+| LATO.2 from LOD4 | 66% | 42% |
+| LATO.2 from LOD2 | 70% | 34% |
+
+- **Texture coordinates are the main cause.** Taking each corner's
+  coordinate from the nearest game face cannot work for a new topology.
+  - From LOD4, 43-65% of the triangles bridge separate texture islands,
+    which gives the stripes.
+  - From LOD2, 10% of the body triangles shrink to zero texture area,
+    which gives flat smears.
+  - Doing it properly needs new UVs and a bake into the shells' own
+    texture page.
+- **Body shape:** LATO.2's own output is 3.5x further from LOD2 than the
+  collapse of the game's LOD4 body. LOD4 is a hand-made LOD that already
+  follows LOD2 closely. LATO.2 at 60 vertices sits at its floor (about 250
+  vertices; its default minimum is 200, `--vert_num` defaults to 2,000).
+  At 120 vertices it adds sliver triangles across the panels.
+- **Head shape:** LATO.2 is more accurate than the collapse (0.96% against
+  1.36% in scene). Halving it to 160 triangles costs the most (0.41% ->
+  0.63%).
+- **Not causes:**
+  - The conditioning views of the Windows renderer stand-in are clear
+    quarter views.
+  - The mirror step and the box fit add no measurable error.
+
+**The head done properly: LATO.2 shape, a baked page of its own (current
+default of `AFTERGLOW_LOD=4`).** The source is LOD2's head shell and LATO.2
+runs at 60 vertices. Its result is kept in the ignored
+`blender/swbf/patrol/lato/Head_pred.obj`. `AFTERGLOW_SHELLS=` (empty) builds
+the collapsed head instead.
+
+- **Bake:** the head shell is smart-projected onto new texture coordinates.
+  LOD2's atlas colours are baked onto them (emission, selected to active,
+  the atlas read as stored values), grown into the gaps, and written as a
+  second 256x256 page (`afterglow_head_page.png`).
+- **Rest of the walker:** the body and everything else stay on the
+  collapse.
+- **Texture:** the new page has 0% of its triangles off by more than 4x
+  (the atlas page: 2%).
+- **Shape:** the head's error in the scene is 0.96% against 1.36% for the
+  collapse. It is 160 triangles, the same as before.
+- **Budget:** V=1729 T=2299 N=1759, X 14,404 and Y 10,413 words; 2 texture
+  pages, all 2,299 triangles qualified.
+- **Hatari** (`b2d65b04…`, cycle-exact with Videl contention, 100 frames):
+  244.5 ms/frame (4.09 FPS) against 246.2 ms with the collapsed head; set_frame
+  15.1, Packet 213.8, Clear 12.2, Raster 2.8 ms. Emulator figures only;
+  pair `92082450…`/`4687d3ca…`.
+- **At 256x224 the head covers about 30x20 pixels.** The baked head reads
+  slightly rounder and smoother there, and the difference is small.
+- The default build gives the measured pair byte for byte. The Falcon pair
+  is in `blender/swbf/patrol/falcon_lod4_lo/`.
+
+```powershell
+# Only to remake the head: dump LOD2's head shell, run LATO.2 (its clone, TriFlow's venv)
+$env:AFTERGLOW_LOD = 4; $env:AFTERGLOW_SHELLS_DUMP = 'C:/Arbeit/triflow/out/lato_lod2/in'
+& $blender -b blender/swbf/atat/atat_scene.blend --python-exit-code 1 --python three-patrol/build_scene.py
+Remove-Item Env:AFTERGLOW_SHELLS_DUMP
+#   python win_port/run.py scripts/e2e_inference.py --mesh_dir <in> --out_dir <out> --vert_num 60 --min_verts 30 --num_workers 0
+#   copy <out>/Head_pred.obj to blender/swbf/patrol/lato/
+# The scenes (2,300 triangles, LATO.2 head baked) and the Falcon build:
+$env:AFTERGLOW_LOD = 4
+& $blender -b blender/swbf/atat/atat_scene.blend --python-exit-code 1 --python three-patrol/build_scene.py
+# MSYS2 UCRT64 shell:
+make model_export BLEND=blender/swbf/patrol/afterglow_lod4_lo.blend MODEL_OBJECT=ATAT \
+  MODEL_DIR=./blender/swbf/patrol/model_lod4_lo MODEL_BACKDROP=backdrop_256x224.bin
+make MODEL_DIR=./blender/swbf/patrol/model_lod4_lo trex_m68030_lores_backdrop_run
+```
+
 ### 6.7 Texture and CLUT reads
 
 The six native T-Rex texture pages are much larger than the DSP local memory
