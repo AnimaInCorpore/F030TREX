@@ -25,7 +25,7 @@ displayed sample n (Blender frame frame_start + n):
                         group and timing
   backdrop_lights.inc   the DSP light vectors and ambient, camera space, Q1.23
   backdrop_ramp.inc     the 4x16 shade ramp, over 64
-  <backdrop.bin>        640x400 big-endian RGB565 picture
+  <backdrop.bin>        640x400 (or 256x224, TREX_LORES) big-endian RGB565 picture
 
 Deformation that is not a "DSP ..." shape key (the pose cache, an armature,
 other shape keys) is baked into the per-sample pose. The pose is chosen so
@@ -93,10 +93,11 @@ if not 1 <= len(shadows) <= 256:
 
 # ------------------------------------------------------------------ lens
 cam = camera.data
-if (width, height) != (640, 400) or cam.sensor_fit != "HORIZONTAL" or cam.type != "PERSP":
-    fail("the camera must be a horizontal-fit perspective camera at 640x400")
+# 640x400 is the TREX_HIRES backdrop build, 256x224 the TREX_LORES one.
+if (width, height) not in ((640, 400), (256, 224)) or cam.sensor_fit != "HORIZONTAL" or cam.type != "PERSP":
+    fail("the camera must be a horizontal-fit perspective camera at 640x400 or 256x224")
 if cam.shift_x or cam.shift_y:
-    fail("camera shift is not supported (the DSP centre X is fixed at 320)")
+    fail("camera shift is not supported (the DSP centre X is fixed at half the width)")
 focal_x = cam.lens / cam.sensor_width * width
 focal_y = focal_x * render.pixel_aspect_x / render.pixel_aspect_y
 if abs(focal_x - round(focal_x)) > 1e-3 or abs(focal_y - round(focal_y)) > 1e-3:
@@ -315,7 +316,7 @@ for tint in range(4):
 picture = bpy.data.images["backdrop"]
 pixels = np.array(picture.pixels[:]).reshape(picture.size[1], picture.size[0], 4)[::-1, :, :3]
 if pixels.shape[:2] != (height, width):
-    fail("the backdrop must be 640x400")
+    fail("the backdrop must be %dx%d, the render size" % (width, height))
 r5 = np.rint(pixels[..., 0] * 31).astype(np.uint16)
 g6 = np.rint(pixels[..., 1] * 63).astype(np.uint16)
 b5 = np.rint(pixels[..., 2] * 31).astype(np.uint16)

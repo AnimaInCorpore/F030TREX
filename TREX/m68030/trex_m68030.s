@@ -73,6 +73,20 @@ RENDER_STATS_LONGS	= 22+DC_STATS_LONGS
 ; lines are the 224 displayed lines on both monitor types, so the RGB/TV crop
 ; the 320x200 mode forced is gone.
 	ifd	TREX_HIRES
+	ifd	TREX_LORES
+; The lo-res backdrop build (OPTIMIZATION.md 6.6l): the whole TREX_HIRES
+; pipeline -- span stream, DSP band table, backdrop restore -- on the
+; default build's 256x224 true-colour mode and its RGB/TV and VGA timings,
+; rendered in full (no 240-column window).  TREXBGLO.LOD is the HIRES=1
+; LORES=1 DSP image with this size.
+	ifnd	TREX_BACKDROP
+	fail	"TREX_LORES is the backdrop build at 256x224; it needs TREX_BACKDROP"
+	endc
+VIDEO_SCREEN_WIDTH	= 256
+VIDEO_SCREEN_HEIGHT	= 224
+SCREEN_WIDTH		= 256
+SCREEN_HEIGHT		= 224
+	else
 ; 640x400 interlaced (OPTIMIZATION.md 6.6a): TOS's own true-colour 640x400
 ; RGB/TV mode -- 32 MHz clock, two cycles a pixel, interlace -- rendered in
 ; full.  640 of these pixels span the width 256 wide ones do, and each
@@ -81,6 +95,7 @@ VIDEO_SCREEN_WIDTH	= 640
 VIDEO_SCREEN_HEIGHT	= 400
 SCREEN_WIDTH		= 640
 SCREEN_HEIGHT		= 400
+	endc
 	ifd	TREX_OCCL
 	fail	"TREX_HIRES does not support TREX_OCCL"
 	endc
@@ -5917,6 +5932,10 @@ gpu_open
 
 	; --- monitor-specific Videl timing, from snowbros (see the constants) ---
 	cmpi.w	#2,video_monitor_type_shadow
+	ifd	TREX_LORES
+	; 256x224 (6.6l): the default build's own RGB/TV and VGA timings below.
+	beq	.gpu_set_vga_mode
+	else
 	ifd	TREX_HIRES
 	; A 640-wide true-colour picture exists only on RGB/TV: VGA's 25 MHz
 	; scan cannot fetch it.  On VGA the build renders without a display;
@@ -5939,6 +5958,7 @@ gpu_open
 	bra	.gpu_videl_common
 	else
 	beq	.gpu_set_vga_mode
+	endc
 	endc
 
 	; RGB/TV: 256x224 true colour, 50.0 Hz, 15625 Hz.  25.175 MHz clock at
@@ -9205,8 +9225,13 @@ trex_dsp_lod_path
 	; lives under TREXORDR.LOD and never under these names.
 	ifd	TREX_HIRES
 	ifd	TREX_BACKDROP
+	ifd	TREX_LORES
+	; The 256x224 backdrop build (6.6l): HIRES=1 LORES=1, no depth cue.
+	dc.b	'TREXBGLO.LOD',0
+	else
 	; The backdrop build (6.6b): the HIRES=1 image without the depth cue.
 	dc.b	'TREXBGND.LOD',0
+	endc
 	else
 	; 640x400 and the three-unit span header: only the HIRES=1 image.
 	dc.b	'TREXHIRS.LOD',0
@@ -10426,7 +10451,12 @@ backdrop_enabled
 ; 512,000 bytes are a whole number of 4,096-byte pages, so the pinned buffers
 ; in BSS keep their page offsets.
 backdrop_image
+	ifd	TREX_LORES
+	; 256x224 (6.6l): 114,688 bytes, 28 whole pages.
+	incbin	"backdrop_256x224.bin"
+	else
 	incbin	"backdrop_640x400.bin"
+	endc
 	endc
 
 	bss

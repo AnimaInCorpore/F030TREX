@@ -249,6 +249,12 @@ then builds that model's trail scene. Start from a copy of
 `trex_trail.blend`, swap in the model and animate it, then run
 `make model_export BLEND=<file> MODEL_OBJECT=<name> MODEL_DIR=<dir>`.
 See [OPTIMIZATION.md 6.6h](OPTIMIZATION.md#66h-any-blender-model-as-a-model-directory).
+A scene rendered at 256x224 instead of 640x400 builds the same trail in the
+default build's lo-res true-colour mode (RGB/TV and VGA): export it with
+`MODEL_BACKDROP=backdrop_256x224.bin`, then
+`make MODEL_DIR=<dir> trex_m68030_lores_backdrop_run`. Its pixels are about
+1.18 times as wide as tall, so set the scene lens and pixel aspect
+accordingly. See [OPTIMIZATION.md 6.6l](OPTIMIZATION.md#66l-the-backdrop-trail-at-256x224-trex_lores-2026-11-26).
 
 **AT-AT glacier patrol.** Open the [packed Blender scene](TREX/scene/atat_patrol.blend)
 or [watch the 50-frame Hatari capture at 8 fps](docs/previews/atat-patrol.mp4).
@@ -382,3 +388,5 @@ One* (SCES-00048). The 256x224 Videl register sets are Screenspain's
 (Chris/AURA and Scandion/Mugwumps), carried over from the F030Arcade snowbros
 port -- see the video-mode comment in `TREX/m68030/trex_m68030.s`. This is a
 non-commercial hobby port; the original PS1 assets belong to their owners.
+
+**Three.js glacier patrol.** The [Afterglow build recipe](three-patrol/README.md) combines the Battlefront 2015 walker and its original walk clip in an offline browser player and a matching Falcon scene.

@@ -33,7 +33,7 @@ def main():
                                               "TREXSSI.LOD", "TREXPHAS.LOD",
                                               "TREXDMA.LOD", "TREXPIPE.LOD",
                                               "TREXLEGA.LOD", "TREXSPAN.LOD",
-                                              "TREXHIRS.LOD", "TREXBGND.LOD"),
+                                              "TREXHIRS.LOD", "TREXBGND.LOD", "TREXBGLO.LOD"),
                         default="trex_dsp.lod", help="binary-specific DSP loader name")
     parser.add_argument("--cpu-core", choices=("mmu", "cycle-exact"),
                         default="mmu", help="MMU ledger or cycle-exact CPU model")

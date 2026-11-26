@@ -10649,6 +10649,94 @@ make MODEL_DIR=./blender/swbf2/xwing/model \
 make MODEL_DIR=./blender/swbf2/xwing/model trex_m68030_hires_backdrop_run
 ```
 
+### 6.6l The backdrop trail at 256x224: TREX_LORES (2026-11-26)
+
+Before this, the backdrop build existed only at 640x400 (`TREX_BACKDROP`
+failed without `TREX_HIRES`). `-DTREX_HIRES -DTREX_LORES -DTREX_BACKDROP`
+now runs the whole TREX_HIRES pipeline at 256x224: span stream, the DSP's
+band table for the delta clear, backdrop restore and ground shadow. It runs on
+the default build's own true-colour mode, with its RGB/TV and VGA Videl
+timings (6.6). The whole 256x224 is rendered; there is no 240-column window.
+
+- **Host:** `SCREEN_*` and `VIDEO_SCREEN_*` are 256x224 under `TREX_LORES`.
+  The Videl block takes the default build's branch, so VGA works, unlike
+  the 640x400 build. The DSP image is `TREXBGLO.LOD` and the picture
+  `backdrop_256x224.bin` (114,688 bytes, 28 whole 4 KiB pages). Everything
+  else in the TREX_HIRES and TREX_BACKDROP code was already written in
+  `SCREEN_WIDTH`, `SCREEN_HEIGHT` and `FRAMEBUFFER_STRIDE`.
+- **DSP:** `LORES=1` is valid only with `HIRES=1`. It changes only
+  `SCREEN_WIDTH`/`SCREEN_HEIGHT`; the three-unit span header and the band
+  table stay. Its configuration id adds `l` (`00001101sinl...`), and the
+  default identities are unchanged.
+- **Make:** `make model_export MODEL_BACKDROP=backdrop_256x224.bin ...` for
+  a 256x224 scene, then `make MODEL_DIR=... trex_m68030_lores_backdrop[_run]`.
+  `blender_export_falcon.py` accepts a 640x400 or a 256x224 camera, and the
+  backdrop image must match the render size.
+- **Regression:** the committed 640x400 AT-AT patrol build
+  (`MODEL_DIR=./blender/atat/model_patrol trex_m68030_hires_backdrop`) is
+  byte-identical after the change (`92e4c029…`/`924865a7…`).
+
+**Pixel aspect.** A 256x224 pixel is 2.5 640x400 pixels wide and two
+interlaced lines tall. The 640x400 scene lens fx/fy = 892/842 therefore
+becomes 357/421 here (892 x 0.4, 842 / 2): a pixel about 1.18 times as wide
+as tall. The Videl timing agrees: 256 pixels at 25.175 MHz / 4 fill about
+40.7 µs of a 52 µs PAL line, with 288 visible lines, so about 1.17. That is
+an estimate from the timing, like 6.6a's 0.92; it has not been measured on a
+TV. The default T-Rex build uses "256 wide = 320 square" instead (1.25,
+`PS1_PROJECTION_X/Y` 746/933). Hatari draws these pixels at about 0.91 by
+default. The fork's `--pixel-aspect 1.18` shows them as a TV would.
+
+The matte is painted at 256x224 (`make_snow_backdrop.paint(size=,
+row_scale=)`), not squeezed from 640x400. Its 224 lines show 12 rows more
+sky and snow above and below than the 640x400 frame. The 640x400 output of
+`paint` is byte-identical to before.
+
+**First scene: Afterglow** (`three-patrol/`, the Battlefront 2015 AT-AT walk
+on the graded glacier matte; game-derived files stay in the ignored
+`blender/swbf/patrol/`). `build_scene.py` writes `afterglow.blend`
+(640x400) and `afterglow_lo.blend` (256x224) from the same scene.
+
+- The walker now crosses the glacier instead of walking on the spot. The
+  controller's forward travel, 8.5 game units (4.5 m) a stride, used to be
+  subtracted for a tracking shot. It still leaves the per-frame pose but
+  comes back as the object's (and the shadow's) own motion along -Y: two
+  strides centred on the old spot, 214 samples, 26.7 s, then the loop
+  restarts.
+- The stride poses still repeat exactly, so the exporter keeps 107 unique
+  poses of 214 samples (398,040 bytes). The three.js player
+  (`afterglow.html`) shows the same walk: `pack_web.py` reads the
+  per-sample transforms, and the duration is now per stride times strides.
+
+Hatari `b2d65b04…`, cycle-exact with Videl contention, 14 MiB, 100 frames,
+diagnostic `trex_*_bg.tos` of each model directory (620 vertices, 1,024
+triangles):
+
+| Afterglow | ms/frame | set_frame | Packet | Clear | Raster | Pixels/frame |
+|---|---:|---:|---:|---:|---:|---:|
+| 640x400 (`TREXBGND.LOD`) | 279.1 (3.58 FPS) | 5.9 | 157.8 | 54.0 | 60.9 | 46,542 |
+| **256x224 (`TREXBGLO.LOD`)** | **123.7 (8.08 FPS)** | 5.5 | 98.6 | 12.4 | 6.7 | 9,221 |
+
+- Emulator figures only.
+- At 256x224 the frame is DSP-bound: the packet stage is 80%. The
+  rasteriser falls to 6.7 ms and the clear to 12.4 ms with a fifth of the
+  pixels.
+- 8.08 FPS is about the scene's own rate (321/40 = 8.03 samples a
+  second), so the 256x224 build plays the walk at close to real time in
+  Hatari.
+- Measured pair: `72a61dd0…` (`trex_lores_bg.tos`), `60f04584…`
+  (`TREXBGLO.LOD`); 640x400: `88abd021…`, `acea58f6…`.
+- Checked by eye in a 52 s Hatari AVI recording (`--avirecord`): backdrop,
+  shadow and walk are correct.
+
+```powershell
+$blender = 'C:/msys64/ucrt64/bin/blender.exe'
+& $blender -b blender/swbf/atat/atat_scene.blend --python-exit-code 1 --python three-patrol/build_scene.py
+# MSYS2 UCRT64 shell:
+make model_export BLEND=blender/swbf/patrol/afterglow_lo.blend MODEL_OBJECT=ATAT \
+  MODEL_DIR=./blender/swbf/patrol/model_lo MODEL_BACKDROP=backdrop_256x224.bin
+make MODEL_DIR=./blender/swbf/patrol/model_lo trex_m68030_lores_backdrop_run
+```
+
 ### 6.7 Texture and CLUT reads
 
 The six native T-Rex texture pages are much larger than the DSP local memory
@@ -13832,3 +13920,9 @@ The open roadmap, in recommended order (expected effects from the section
 - [Motorola MC68030 User's Manual, instruction timing](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P2.pdf)
 - [DSP56K host-port and historical crossbar software notes](https://www.nocrew.org/sites/dsp56k.nocrew.org/)
 - [Cho Ren Sha 68k Falcon release archive](https://www.atarimania.com/game-atari-st-cho-ren-sha-68k-falcon030_30783.html)
+
+### Battlefront 2015 glacier walk in Three.js and on Falcon
+
+Afterglow uses the Battlefront LOD5 walker, 620 vertices, 1,024 triangles, 405 normals and one 256-square texture page. The standard exporter reports 5,366/14,647 X words and 3,880/13,888 Y words. The 107 full-body poses occupy 398,040 bytes in host memory. The source clip has 101 uneven keys, 135 channels and a 113-joint hierarchy. The shot tracks its 8.5-metre advance against a graded version of the existing glacier matte.
+
+Cycle-exact Hatari with Videl contention and 14 MiB rendered 109 diagnostic frames. Frames 108 and 109 matched frames 1 and 2 byte-for-byte. The Three.js player consumes the exported Falcon data. WebGL uses depth testing, perspective-correct UVs and an approximately 8 Hz preview clock. The capture establishes picture and loop behaviour. See the [build recipe](three-patrol/README.md).

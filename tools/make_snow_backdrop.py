@@ -70,20 +70,26 @@ def outpost(picture, horizon):
     return np.asarray(plate).astype(np.float32) / 255
 
 
-def paint(horizon=320, seed=7, travelling=False):
-    """Paint a distant ice valley with quieter foreground detail for a tracking camera."""
+def paint(horizon=320, seed=7, travelling=False, size=(WIDTH, HEIGHT), row_scale=1.0):
+    """Paint a distant ice valley with quieter foreground detail for a tracking camera.
+
+    The travelling matte can be painted at another size (width, height);
+    row_scale is its line height in 640x400 lines (0.5 for 256x224) and keeps
+    the horizon haze the same height on screen.
+    """
     if travelling:
         # The authored matte has its snowline at 75% height. Reframe sky
         # and ground separately so the painted and projected horizons agree.
+        width, height = size
         path = Path(__file__).resolve().parents[1] / "TREX/textures/atat_glacier.png"
         with Image.open(path) as plate:
-            horizon_row = max(1, min(HEIGHT - 1, horizon))
+            horizon_row = max(1, min(height - 1, horizon))
             split = round(plate.height * 0.75)
-            sky = plate.crop((0, 0, plate.width, split)).resize((WIDTH, horizon_row), Image.Resampling.LANCZOS)
+            sky = plate.crop((0, 0, plate.width, split)).resize((width, horizon_row), Image.Resampling.LANCZOS)
             snow = plate.crop((0, split, plate.width, plate.height)).resize(
-                (WIDTH, HEIGHT - horizon_row), Image.Resampling.LANCZOS)
+                (width, height - horizon_row), Image.Resampling.LANCZOS)
             picture = np.concatenate([np.asarray(sky), np.asarray(snow)]) / 255.0
-            distance = (np.arange(HEIGHT)[:, None, None] - horizon_row) / 95
+            distance = (np.arange(height)[:, None, None] - horizon_row) / (95 * row_scale)
             haze = 0.24 * np.exp(-distance**2)
             picture = picture * (1 - haze) + np.array([0.88, 0.92, 0.93]) * haze
         return rgb565(picture)
@@ -133,7 +139,7 @@ def paint(horizon=320, seed=7, travelling=False):
 def rgb565(picture):
     """Dither before the runtime's integer colour steps become visible bands."""
     bayer = np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]], np.float32) / 16 - 0.47
-    threshold = np.tile(bayer, (HEIGHT // 4, WIDTH // 4))
+    threshold = np.tile(bayer, (picture.shape[0] // 4, picture.shape[1] // 4))
     levels = np.array([31.0, 63.0, 31.0])
     quantized = np.clip(np.rint(np.clip(picture, 0, 1) * levels + threshold[..., None] * 0.9), 0, levels)
     return np.rint(quantized / levels * 255).astype(np.uint8)

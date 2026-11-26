@@ -87,6 +87,10 @@ HIRES=0
 # No depth cue (OPTIMIZATION.md 6.6b): the 640x400 image of the backdrop
 # build, whose host loads it as TREXBGND.LOD.
 NOFOG=0
+# 256x224 (OPTIMIZATION.md 6.6l): the HIRES=1 image at the default build's
+# 256x224 size, for the -DTREX_LORES backdrop host, which loads it as
+# TREXBGLO.LOD.
+LORES=0
 
 # One generator for the assembler-visible build switches, used by every DSP
 # rule so a variant can never assemble against a stale or missing config.
@@ -100,7 +104,7 @@ NOFOG=0
 # asking for one variant could silently leave you the previous one.
 # SPANSTREAM appends a letter instead of a ninth digit, so every identity
 # written down before it existed still names the same image.
-DSPCONF_ID=$(SSIPROBE)$(WINPROBE)$(PIOBURST)$(PREPASSDIAG)$(OBJLIGHTS)$(PRELIGHT)$(PHASEPROBE)$(ORDERED)$(if $(filter 1,$(SPANSTREAM)),s)$(if $(filter 1,$(HIRES)),i)$(if $(filter 1,$(NOFOG)),n)$(MODEL_ID)
+DSPCONF_ID=$(SSIPROBE)$(WINPROBE)$(PIOBURST)$(PREPASSDIAG)$(OBJLIGHTS)$(PRELIGHT)$(PHASEPROBE)$(ORDERED)$(if $(filter 1,$(SPANSTREAM)),s)$(if $(filter 1,$(HIRES)),i)$(if $(filter 1,$(NOFOG)),n)$(if $(filter 1,$(LORES)),l)$(MODEL_ID)
 DSPCONF_STAMP=./TREX/dsp/build/dspconf-$(DSPCONF_ID).stamp
 # Each configuration assembles to its own image, so asking for one names a file
 # that either exists (and is current) or does not (and is built).  Existence is
@@ -118,7 +122,7 @@ PHASE_LOD=./TREX/dsp/build/trex_dsp-00001110-$(DSPSRC_ID).lod
 # ./TREX/dsp/trex_dsp.lod, so a variant build can never leave the wrong image
 # in the tree for `make measure` or a release to pick up.
 DSPCONF_DEFAULT_ID=00001101s
-DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\nPRELIGHT\tequ\t%s\nPHASEPROBE\tequ\t%s\nORDERED\tequ\t%s\nSPANSTREAM\tequ\t%s\nHIRES\tequ\t%s\nNOFOG\tequ\t%s\nTREX_VERTICES\tequ\t%s\nTREX_PRIMITIVES\tequ\t%s\nNORMAL_TOTAL\tequ\t%s\nNORMAL_Y_COUNT\tequ\t%s\nSPAN_SIZE_LIMIT\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' '$(PRELIGHT)' '$(PHASEPROBE)' '$(ORDERED)' '$(SPANSTREAM)' '$(HIRES)' '$(NOFOG)' '$(MODEL_VERTICES)' '$(MODEL_PRIMITIVES)' '$(MODEL_NORMALS)' '$(MODEL_NORMAL_Y)' '$(SPAN_SIZE_LIMIT)' > ./TREX/dsp/build/dspconf.inc
+DSPCONF=printf 'SSIPROBE\tequ\t%s\nWINPROBE\tequ\t%s\nPIOBURST\tequ\t%s\nPREPASSDIAG\tequ\t%s\nOBJLIGHTS\tequ\t%s\nPRELIGHT\tequ\t%s\nPHASEPROBE\tequ\t%s\nORDERED\tequ\t%s\nSPANSTREAM\tequ\t%s\nHIRES\tequ\t%s\nNOFOG\tequ\t%s\nLORES\tequ\t%s\nTREX_VERTICES\tequ\t%s\nTREX_PRIMITIVES\tequ\t%s\nNORMAL_TOTAL\tequ\t%s\nNORMAL_Y_COUNT\tequ\t%s\nSPAN_SIZE_LIMIT\tequ\t%s\n' '$(SSIPROBE)' '$(WINPROBE)' '$(PIOBURST)' '$(PREPASSDIAG)' '$(OBJLIGHTS)' '$(PRELIGHT)' '$(PHASEPROBE)' '$(ORDERED)' '$(SPANSTREAM)' '$(HIRES)' '$(NOFOG)' '$(LORES)' '$(MODEL_VERTICES)' '$(MODEL_PRIMITIVES)' '$(MODEL_NORMALS)' '$(MODEL_NORMAL_Y)' '$(SPAN_SIZE_LIMIT)' > ./TREX/dsp/build/dspconf.inc
 # Extra flags for the DSP assembly run.  Plain DOSBox needs none.  DOSBox-X
 # opens a working-folder prompt and a menu on macOS and then never reaches
 # BUILD.BAT, so it needs:
@@ -706,6 +710,8 @@ backdrop:
 # The scene needs the camera, "Ground shadow", the "Falcon DSP shade" group and
 # a "lap" marker of TREX/scene/trex_trail.blend (start from a copy of it).
 MODEL_OBJECT=T-Rex
+# A 256x224 scene (TREX_LORES) exports with MODEL_BACKDROP=backdrop_256x224.bin.
+MODEL_BACKDROP=backdrop_640x400.bin
 .PHONY: atat_scene
 ATAT_DIR=./blender/atat
 # The body is LATO.2's remesh of the source body (OPTIMIZATION.md 6.6j), made
@@ -731,7 +737,7 @@ atat_scene:
 model_export:
 	@[ -n "$(BLEND)" ] || { echo "model_export needs BLEND=<file.blend>"; exit 1; }
 	$(BLENDER) -b $(BLEND) --python ./tools/blender_export_model.py -- $(MODEL_OBJECT) $(MODEL_DIR)
-	$(BLENDER) -b $(BLEND) --python ./tools/blender_export_falcon.py -- $(MODEL_DIR) $(MODEL_DIR)/backdrop_640x400.bin $(MODEL_OBJECT)
+	$(BLENDER) -b $(BLEND) --python ./tools/blender_export_falcon.py -- $(MODEL_DIR) $(MODEL_DIR)/$(MODEL_BACKDROP) $(MODEL_OBJECT)
 
 .PHONY: blender_pillow
 blender_pillow:
@@ -773,6 +779,28 @@ trex_m68030_hires_backdrop_direct: create_dirs $(VASM) $(VLINK) ./TREX/m68030/tr
 	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_FB_SEQUENCE -DTREX_BACKDROP -o $@ -L ./TREX/m68030/build/trex_hires_bg_fbseq.lst
 
 ./TREX/m68030/trex_hires_bg.tos ./TREX/m68030/trex_hires_bg_run.tos ./TREX/m68030/trex_hires_bg_fbseq.tos: ./TREX/m68030/%.tos: ./TREX/m68030/build/%.o ./TREX/m68030/build/ssi_dma4.o
+	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
+
+# The same trail at 256x224 (OPTIMIZATION.md 6.6l): the TREX_HIRES pipeline
+# on the default build's lo-res mode, from a model directory exported from a
+# 256x224 scene (make model_export MODEL_BACKDROP=backdrop_256x224.bin). Both
+# load TREXBGLO.LOD: HIRES=1 NOFOG=1 LORES=1.
+BACKDROP_LORES_LOD=./TREX/dsp/build/trex_dsp-00001101sinl$(MODEL_ID)-$(DSPSRC_ID).lod
+BACKDROP_LORES_ASSETS=$(MODEL_DIR)/backdrop_256x224.bin $(filter-out $(BACKDROP_BIN),$(BACKDROP_ASSETS))
+.PHONY: trex_m68030_lores_backdrop trex_m68030_lores_backdrop_run trex_dsp_backdrop_lores
+trex_dsp_backdrop_lores: create_dirs
+	@$(MAKE) --no-print-directory SSIPROBE=0 WINPROBE=0 PIOBURST=0 PREPASSDIAG=0 OBJLIGHTS=1 PRELIGHT=1 PHASEPROBE=0 ORDERED=1 SPANSTREAM=1 HIRES=1 NOFOG=1 LORES=1 trex_dsp
+	cp $(BACKDROP_LORES_LOD) ./TREX/m68030/TREXBGLO.LOD
+trex_m68030_lores_backdrop: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_lores_bg.tos trex_dsp_backdrop_lores
+trex_m68030_lores_backdrop_run: create_dirs $(VASM) $(VLINK) ./TREX/m68030/trex_lores_bg_run.tos trex_dsp_backdrop_lores
+
+./TREX/m68030/build/trex_lores_bg.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin $(BACKDROP_LORES_ASSETS)
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_LORES -DTREX_DELTA_DSP -DTREX_BACKDROP -o $@ -L ./TREX/m68030/build/trex_lores_bg.lst
+
+./TREX/m68030/build/trex_lores_bg_run.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin $(BACKDROP_LORES_ASSETS)
+	$(VASM) $(VASM_MODEL) ./TREX/m68030/trex_m68030.s -quiet -Felf -m68030 -DTREX_HIRES -DTREX_LORES -DTREX_DELTA_DSP -DTREX_BACKDROP -DTREX_RUN -o $@ -L ./TREX/m68030/build/trex_lores_bg_run.lst
+
+./TREX/m68030/trex_lores_bg.tos ./TREX/m68030/trex_lores_bg_run.tos: ./TREX/m68030/%.tos: ./TREX/m68030/build/%.o ./TREX/m68030/build/ssi_dma4.o
 	$(VLINK) $^ -tos-fastload -b ataritos -s -e start -o $@
 
 ./TREX/m68030/build/trex_plain.o: ./TREX/m68030/trex_m68030.s ./src/gemdos.s ./src/xbios.s $(TREX_MESH_DEPS) ./TREX/model/trex_animation.bin

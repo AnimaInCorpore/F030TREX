@@ -138,9 +138,19 @@ ORDERED_PLAIN equ ORDERED-SPANSTREAM
 ; interlaced true-colour RGB mode.  Its spans can be longer than 256 pixels
 ; and its rows longer than 256 bytes, so the span stream sends three header
 ; units instead of two (ss_header).
+; LORES=1 (OPTIMIZATION.md 6.6l) is the same image for the host's 256x224
+; backdrop build: the three-unit span header and the band table, at 256x224.
+	IF	LORES*(1-HIRES)
+	FAIL	'LORES is the HIRES image at 256x224'
+	ENDIF
 	IF	HIRES
+	IF	LORES
+SCREEN_WIDTH	= 256
+SCREEN_HEIGHT	= 224
+	ELSE
 SCREEN_WIDTH	= 640
 SCREEN_HEIGHT	= 400
+	ENDIF
 	ELSE
 SCREEN_WIDTH	= 240
 SCREEN_HEIGHT	= 224
