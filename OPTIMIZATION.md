@@ -9544,6 +9544,8 @@ that directory's TMD, and refuses a topology that changes during the
 animation. `make model_export BLEND=… MODEL_OBJECT=… MODEL_DIR=…` runs both
 exporters.
 
+The [mesh tool and conversion guide](docs/asset-conversion.md) records the workstation tools and the handoff into these exporters.
+
 **Build plumbing.**
 - **Host:** every vasm call gets `-I$(MODEL_DIR) -I$(MODEL_TEXTURES)`. The
   host includes `model.inc` and `incbin`s the model and scene files by bare
@@ -10891,6 +10893,16 @@ make model_export BLEND=blender/swbf/patrol/afterglow_lod4_lo.blend MODEL_OBJECT
   MODEL_DIR=./blender/swbf/patrol/model_lod4_lo MODEL_BACKDROP=backdrop_256x224.bin
 make MODEL_DIR=./blender/swbf/patrol/model_lod4_lo trex_m68030_lores_backdrop_run
 ```
+
+**Walking fixture rebuild (2026-11-27).** Fresh Battlefront (2015) FBX and
+Arctic/Walker Assault bank extraction reproduced the LOD4 walking model with
+1,729 vertices, 2,299 triangles and 1,759 deduplicated corner normals. The
+exporter wrote 107 unique poses across 214 scene samples, with 14,404 X words
+and 10,413 Y words. The rebuilt 256x224 TOS and DSP LOD matched the saved
+LOD4 pair byte for byte. Hatari 2.6.1-devel ran 2,700 VBLs, exited with
+status zero and recorded the walker moving through distinct poses. See the
+[asset conversion guide](docs/asset-conversion.md#walking-at-at-conversion-fixture)
+for the source and conversion entry points.
 
 ### 6.7 Texture and CLUT reads
 

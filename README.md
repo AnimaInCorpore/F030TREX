@@ -249,6 +249,7 @@ then builds that model's trail scene. Start from a copy of
 `trex_trail.blend`, swap in the model and animate it, then run
 `make model_export BLEND=<file> MODEL_OBJECT=<name> MODEL_DIR=<dir>`.
 See [OPTIMIZATION.md 6.6h](OPTIMIZATION.md#66h-any-blender-model-as-a-model-directory).
+See the [mesh tool and conversion guide](docs/asset-conversion.md) for Battlefront extraction, retopology, texture baking and the Windows launch paths.
 A scene rendered at 256x224 instead of 640x400 builds the same trail in the
 default build's lo-res true-colour mode (RGB/TV and VGA): export it with
 `MODEL_BACKDROP=backdrop_256x224.bin`, then
