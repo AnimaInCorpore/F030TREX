@@ -84,10 +84,15 @@ def main():
     manifest_path = output / "run.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     start = time.monotonic()
+    env = {**os.environ, "SDL_VIDEODRIVER": "dummy"}
+    # The UCRT64 Hatari build needs its runtime DLLs (libz-1.dll, SDL2...).
+    # Without them on the path it exits at once with nothing in the log, which
+    # used to surface only as "Hatari exited before the target".
+    ucrt = Path(r"C:\msys64\ucrt64\bin")
+    if ucrt.is_dir() and str(ucrt).lower() not in env.get("PATH", "").lower():
+        env["PATH"] = str(ucrt) + os.pathsep + env.get("PATH", "")
     with (output / "hatari.log").open("w") as log:
-        process = subprocess.Popen(command, cwd=output,
-                                   env={**os.environ, "SDL_VIDEODRIVER": "dummy"},
-                                   stdout=log, stderr=log)
+        process = subprocess.Popen(command, cwd=output, env=env, stdout=log, stderr=log)
         try:
             while time.monotonic() - start < args.timeout:
                 try:

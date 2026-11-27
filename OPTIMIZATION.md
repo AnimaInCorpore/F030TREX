@@ -10905,6 +10905,208 @@ status zero and recorded the walker moving through distinct poses. See the
 [asset conversion guide](docs/asset-conversion.md#walking-at-at-conversion-fixture)
 for the source and conversion entry points.
 
+**The mesh lab: every walker variant scored at 256x224 (2026-11-27,
+offline).** The question was whether AI tools can raise the LOD4 walker's
+quality within the DSP limits. A three.js page (`three-patrol/lab.js`, bundled
+by `lab_build.mjs` into the ignored `blender/swbf/patrol/lab/`) draws every
+variant at 256x224 and scores it against a reference.
+
+- **Variant data.** `lab_pack.py` reads a Falcon model directory: TMD, pose
+  bank, sample path and CLUT pages. Each candidate therefore went through
+  `blender_export_model.py` and `blender_export_falcon.py` and passed their
+  DSP limits.
+- **Reference.** `lab_reference.py` writes a Blender scene with the same
+  transforms and no limits. Its camera-space vertices agree with the Falcon
+  export to within 0.5 model units.
+- **The reference mesh** is the game's LOD2, built by `build_scene.py`
+  (`AFTERGLOW_LOD=2`, no collapse): 15,880 triangles after the same cleaning
+  steps, drawn with the 512x512 atlas and 4x4 supersampled.
+  - Unmapped LOD2 parts now follow the joint of the nearest mapped geometry.
+    LOD4 has no unmapped parts, so it is unaffected.
+- **Rendering.** Candidates are drawn like the Falcon: nearest-texel CLUT
+  pages, 5-bit texels, one sample per pixel. All variants share the camera,
+  lights and shade ramp.
+- **Scores.** Silhouette IoU against the reference's half-covered pixels,
+  and mean CIE76 ΔE over the union of both silhouettes. Part columns
+  average over the reference's own head, body or other pixels. 36 samples:
+  every 6th of 214.
+- **Ceiling row.** The LOD2 geometry drawn through the Falcon atlas page
+  shows what any 256x224 Falcon mesh could reach.
+- These are image scores in the browser only; no Hatari timing was taken
+  for the new variants.
+
+| Variant (2,279–2,300 triangles unless noted) | IoU | ΔE | Head | Body | Legs etc. |
+|---|---:|---:|---:|---:|---:|
+| Ceiling: LOD2 through the Falcon page (15,880, not deployable) | 98.96% | 5.25 | 5.29 | 4.58 | 5.60 |
+| **LOD4 head collapsed to 124, fitted to LOD2, baked** | **94.34%** | **7.75** | 7.05 | 5.72 | 8.89 |
+| LOD4 head collapsed to 124, baked | 94.23% | 7.76 | 7.20 | 5.72 | 8.89 |
+| LOD4 collapse everywhere | 94.13% | 7.76 | 7.22 | **5.69** | 8.90 |
+| LOD4 head at 160, fitted, baked | 93.97% | 7.86 | 6.25 | 6.26 | 8.98 |
+| MeshAnything V2 from the LOD4 head, at 160, baked | 93.95% | 7.87 | **6.24** | 6.27 | 8.98 |
+| The same, fitted | 94.01% | 7.86 | 6.30 | 6.27 | 8.98 |
+| LOD4 head at 160, baked | 93.87% | 7.88 | 6.46 | 6.26 | 8.98 |
+| LOD2 head shell collapsed to 160, baked | 93.56% | 8.02 | 7.47 | 6.27 | 8.98 |
+| LATO.2 head, baked (the default since 2026-11-26) | 93.78% | 8.06 | 7.74 | 6.27 | 8.98 |
+| LATO.2 body and head, baked (2,279; 3 pages) | 93.47% | 8.28 | 7.73 | 6.52 | 8.96 |
+| Game LOD5 (1,024) | 91.42% | 9.14 | 9.86 | 7.26 | 9.51 |
+| Voxel fuse + TriFlow body and head, baked (3 pages) | 88.15% | 9.93 | 20.92 | 6.51 | 8.84 |
+
+- **The default LATO.2 head is worse than the plain collapse.** In the x5
+  head close-up it is lumpy and has a hole near the top. LOD4's collapse
+  keeps the boxy head of the reference. Its earlier 0.96% shape error
+  measured surface distance, not flat sides.
+- **The head budget must not grow.** The collapse gives the main head shell
+  about 124 triangles. Every 160-triangle shell took 36 from the body and
+  the legs. The head improved, but the body lost more (5.69 → 6.26) and the
+  walker got worse overall.
+- **What helped the head, at the collapse's own 124 triangles:**
+  - Its own baked page: 7.22 → 7.20.
+  - Fitting LOD4's collapsed head onto LOD2's surface: → 7.05.
+  - The fit (`three-patrol/fit_shell.py`, PyTorch on the GPU, about a
+    minute) moves only the vertices. It keeps X symmetry, the Laplacian
+    coordinates and coplanar triangle pairs (LOD4's flat box sides).
+  - Surface distance to LOD2: 1.33% → 0.92% at 124 triangles, 1.12% →
+    0.79% at 160.
+- **MeshAnything V2 works when it starts from the artist's LOD.** From the
+  LOD4 head (`--mc --mc_level 8`) it gave 179 faces in the right proportions,
+  and its head is as good as the fitted LOD4 head. From LOD2's fused body and
+  head it stopped before covering the shape (a quarter of the body's height
+  missing, the head truncated), as on the large vehicles (6.6k).
+- **TriFlow ignores `--face_count` on these shells.** It gave 5,439 faces for
+  340 asked and still 4,163 with `--qem_threshold 100000`, because each
+  panel stays a component. After a voxel fuse it gave 750 and 456. Its head
+  was then misplaced (bake hit 69%, head ΔE 20.9).
+- **The legs are where the error is:** 8.9 against the ceiling's 5.6, and
+  1,631–1,654 of the 2,300 triangles. The body is next.
+
+**Without the hand-made LOD the collapse cannot build the walker.** Building
+straight from the game's LOD3 or LOD2 (`AFTERGLOW_LOD=3` or `2`, 2,300
+triangles), no candidate passes the model exporter:
+
+| Source | Result at 2,300 triangles | At 2,200 |
+|---|---|---|
+| LOD3 | V=2,281, X 18,267/14,647 words | V=2,224, X 17,770 |
+| LOD2 | 5,596 triangles: the pieces of up to 12 triangles kept whole already exceed the budget; X 58,208 | unchanged |
+
+- The detailed LODs are many separate panels, and a collapse never merges
+  separate pieces. The LOD2 body shell collapsed to 304 triangles kept far
+  too many vertices for the same reason.
+- What the artist did for LOD4 was mostly merging and dropping pieces,
+  not only removing triangles. Reproducing a hand-made low LOD
+  automatically therefore needs that step first: fuse or drop the pieces of
+  each rigid part. Only then can a collapse, fit and bake work.
+
+**Appearance bake: the detail goes into the texture pages (2026-11-27,
+offline).** `three-patrol/appearance_bake.py` takes a packed variant and
+draws it with nvdiffrast exactly as the Falcon and `lab.js` draw it:
+nearest texels, 5-bit texels times the per-corner shade gain, floored and
+clamped. It draws the LOD2 reference the same way, unquantised and 4x4
+supersampled. Then it optimises only the page texels (Adam, 600 steps of
+12 samples, about a minute on the RTX 5090) against the reference in all
+214 walk samples. Floors pass gradients straight through.
+
+- The geometry and budget are unchanged.
+- `set_pages.py` puts the pages back into the scene. The model exporter then
+  quantises them to its 255-colour CLUTs, as for any page.
+- nvdiffrast 0.4.0 comes from the prebuilt wheel saved with the ComfyUI 3D
+  profile (F030MeshLab README).
+
+| LOD4 head fitted (124), 2,299 triangles | IoU | ΔE | Head | Body | Legs etc. |
+|---|---:|---:|---:|---:|---:|
+| Pages as built | 94.34% | 7.75 | 7.05 | 5.72 | 8.89 |
+| **Pages appearance-baked** | 94.34% | **6.03** | **5.17** | **4.68** | **6.91** |
+| Ceiling (LOD2, 15,880 triangles) | 98.96% | 5.25 | 5.29 | 4.58 | 5.60 |
+
+- The bake's own error, over the whole frame: 0.00904 → 0.00551 mean absolute.
+  It changed 9% of the atlas texels and 17% of the head page.
+- The baked body is within 0.1 ΔE of the ceiling. The head scores below the
+  ceiling, because the bake also absorbs what the Falcon's flat page loses.
+- **Limits:**
+  - The bake is fitted to this scene's camera and lights in the same 214
+    samples that are scored. A different shot needs a new bake.
+  - At x2 zoom, rarely seen texels show colour speckle (purple and green
+    tints on the legs). A smoothness term would damp it.
+  - Image scores only; this variant has not run on Hatari.
+
+```powershell
+C:\Arbeit\triflow\.venv\Scripts\python.exe three-patrol/appearance_bake.py lod4fit124 600
+& $blender -b blender/swbf/patrol/afterglow_lod4_lod4fit124_lo.blend --python three-patrol/set_pages.py -- <abs>/afterglow_lod4_lod4fit124_baked_lo.blend <abs>/lab/lod4fit124_bake_page0.png <abs>/lab/lod4fit124_bake_page1.png
+# then blender_export_model.py, blender_export_falcon.py and lab_pack.py as for any variant
+```
+
+Remake the variants (the inputs in `C:\Arbeit\triflow\out\lab`; the scenes,
+model directories and lab data are game-derived and stay in the ignored
+`blender/swbf/patrol/`):
+
+```powershell
+# The reference: LOD2, rigged and cleaned, no collapse
+$env:AFTERGLOW_LOD='2'; $env:AFTERGLOW_TRIANGLES='1000000'; $env:AFTERGLOW_SHELLS=''; $env:AFTERGLOW_SUFFIX='_ref'
+& $blender -b blender/swbf/atat/atat_scene.blend --python-exit-code 1 --python three-patrol/build_scene.py
+& $blender -b blender/swbf/patrol/afterglow_lod2_ref_lo.blend --python three-patrol/lab_reference.py -- reference "Game LOD2 (reference)"
+# A candidate: a head shell from <dir>/Head_pred.obj (here the LOD4 head, collapsed and fitted)
+#   dump: AFTERGLOW_SHELL_LOD=0 AFTERGLOW_SHELLS_DUMP=<dir>; collapse to 124 with X symmetry; then
+#   C:\Arbeit\triflow\.venv\Scripts\python.exe three-patrol/fit_shell.py Head_124.obj <LOD2 dump>/Head.obj Head_pred.obj
+$env:AFTERGLOW_LOD='4'; $env:AFTERGLOW_TRIANGLES='2300'; $env:AFTERGLOW_SHELLS='<dir>'; $env:AFTERGLOW_SHELL_JOINTS='Head'
+$env:AFTERGLOW_SHELL_BAKE='Head'; $env:AFTERGLOW_HEAD_TRIANGLES='124'; $env:AFTERGLOW_SUFFIX='_lod4fit124'
+& $blender -b blender/swbf/atat/atat_scene.blend --python-exit-code 1 --python three-patrol/build_scene.py
+& $blender -b blender/swbf/patrol/afterglow_lod4_lod4fit124_lo.blend --python tools/blender_export_model.py -- ATAT blender/swbf/patrol/model_lod4fit124
+& $blender -b blender/swbf/patrol/afterglow_lod4_lod4fit124_lo.blend --python tools/blender_export_falcon.py -- blender/swbf/patrol/model_lod4fit124 blender/swbf/patrol/model_lod4fit124/backdrop_256x224.bin ATAT
+python three-patrol/lab_pack.py lod4fit124 blender/swbf/patrol/model_lod4fit124 "LOD4 head fitted, 124"
+# The page (server config "afterglow" in .claude/launch.json): node three-patrol/lab_build.mjs, then /lab/index.html
+```
+
+**Automatic LODs for any model: F030MeshLab's `auto_lod.py`, and an X-wing on
+Hatari (2026-11-27).** The private F030MeshLab repository now has a
+hands-off workflow:
+- It reduces a detailed mesh to a triangle budget with several strategies:
+  voxel fuse; thickened voxel fuse; separate pieces with small and enclosed
+  ones dropped.
+- Each candidate gets one UV atlas and a joint fit of geometry and a
+  256x256 page against the textured detailed model (nvdiffrast, 48 views).
+  The fit uses:
+  - the page baked as its start;
+  - smoothness inside UV islands;
+  - a flatness term;
+  - exact mirror symmetry;
+  - a one-sided pull onto the detailed surface.
+- It keeps the candidate with the lowest error on the training views.
+
+Benchmarked on seven Battlefront (2015) models against their hand-made
+LOD5s (same triangle count, the hand LOD given the same UV step and fit):
+from 7% behind to 16% ahead, with no per-model setting. Numbers and method
+are in F030MeshLab's README.
+
+The X-wing's result went through the Falcon pipeline unchanged:
+- `bench/to_blend.py` turns it into a `.blend`.
+- `tools/blender_triflow_vehicle.py` flies it along the trail route: half
+  scale (6.4 m long), `altitude=2.9`, `bob=0.25`, `max_bank=0.4`, as for
+  the TIE (6.6k).
+- `make model_export` and `make trex_m68030_hires_backdrop` build it.
+
+The model:
+- 253 vertices, 486 triangles, 484 normals, one page.
+- DSP RAM: X 2,259/14,647 and Y 2,424/13,888 words.
+- DSP configuration `00001101sinxwing253v486t484n483y`.
+
+Hatari `e05af5aa…` (the build of the Afterglow runs above), cycle-exact
+with Videl contention, 14 MiB, 100 frames:
+
+| X-wing, 640x400 trail | ms/frame | set_frame | Packet | Clear | Raster | Pixels/frame |
+|---|---:|---:|---:|---:|---:|---:|
+| Automatic LOD, 486 triangles | **109.5 (9.13 FPS)** | 2.1 | 43.4 | 32.0 | 31.6 | 14,442 |
+
+- Emulator figures only.
+- Measured pair: `e008b554…` (`trex_hires_bg.tos`) and `e7d836c9…`
+  (`TREXBGND.LOD`).
+- A 30-second recording of the viewing build shows the X-wing intact
+  along the route: S-foils, cannons, nose and red stripes read from the
+  side and three-quarter views. It is weakest from behind and below,
+  where it reads as a grey mass.
+- `tools/measure_frames.py` now puts `C:\msys64\ucrt64\bin` on Hatari's
+  path. Without it the UCRT64 build exits at once (missing
+  `libz-1.dll`), and the tool only reported "Hatari exited before the
+  target" with an empty log.
+
 ### 6.7 Texture and CLUT reads
 
 The six native T-Rex texture pages are much larger than the DSP local memory
