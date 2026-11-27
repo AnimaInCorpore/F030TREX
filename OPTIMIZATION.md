@@ -11107,6 +11107,50 @@ with Videl contention, 14 MiB, 100 frames:
   `libz-1.dll`), and the tool only reported "Hatari exited before the
   target" with an empty log.
 
+**Texture space by screen size, and more pages (2026-11-28).**
+`tools/blender_screen_coverage.py` measures, for every face of a scene's
+model, the largest area it covers on screen over the shot, and the texels
+its UVs give it. The X-wing as built had 0.21 texels per pixel at its
+largest views (pixel-weighted median), so each texel spread over about
+five pixels at the close pass.
+
+F030MeshLab's `bench/uv_blender.py` now takes those areas and a page count:
+- It scales each UV island by the screen area of its faces (unseen faces
+  keep a tenth of the median density).
+- It shares the islands over N pages, balanced by screen area, and packs
+  each page on its own (concave shapes, 1% margin).
+- `appearance_fit.py` bakes and fits every page.
+
+Same geometry (486 triangles), page fit only:
+
+| X-wing layout | Texels/pixel, median / worst 10% | ms/frame | Raster |
+|---|---|---:|---:|
+| A: 1 page by 3D area | 0.31 / 0.22 | 110.9 | 32.6 |
+| B: 1 page by screen area | 0.47 / 0.34 | 110.5 | 32.6 |
+| **C: 2 pages by screen area** | **0.90 / 0.66** | **112.8** | 34.6 |
+| D: 4 pages by screen area | 1.62 / 0.89 | 114.7 | 36.2 |
+
+- Hatari `e05af5aa…`, cycle-exact with Videl contention, 14 MiB, 100
+  frames; emulator only.
+- Screen weighting costs nothing. Each extra page costs about 1 ms per frame
+  in the rasteriser, which presumably switches pages between triangles.
+- In the recordings the stripes and panel lines go from blocky (A) to crisp
+  (C, D). D shows no gain over C, so C (2 pages, about one texel per pixel at
+  the close pass) is the choice.
+- Two smaller findings:
+  - The tighter packing alone took the first layout from 0.21 to 0.31.
+  - The generic 128-pixel fit scores do not separate the layouts (test
+    error 0.403-0.410): only the shot's own close views show texel size.
+- Seen in every layout: a few loose triangles near the cannon tips, where
+  the voxel fuse broke the thin cannons into fragments.
+
+```powershell
+& $blender -b <scene.blend> --python tools/blender_screen_coverage.py -- XWing coverage.json
+& $blender -b --factory-startup --python C:\Arbeit\F030MeshLab\bench\uv_blender.py -- best.obj C_uv.obj coverage.json 2
+C:\Arbeit\triflow\.venv\Scripts\python.exe C:\Arbeit\F030MeshLab\bench\appearance_fit.py export/xwing_mesh.obj <mapping> C_uv.obj C/fit --mode texture
+# then to_blend.py, blender_triflow_vehicle.py, make model_export, as above
+```
+
 ### 6.7 Texture and CLUT reads
 
 The six native T-Rex texture pages are much larger than the DSP local memory
