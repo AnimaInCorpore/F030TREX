@@ -11,7 +11,7 @@ has passed its export and render checks.
 | --- | --- | --- |
 | Recover a game mesh or identify its LODs | `C:\Arbeit\FrostyToolsuite\release\FrostyEditor\FrostyLods.exe`. Select the Battlefront profile and export the mesh resource and its textures. | Both EA profiles indexed and exported a fresh OBJ and four decodable PNGs after the Samsung T5 became readable again. |
 | Generate a mesh from an image | ComfyUI Portable on `F:` runs **TRELLIS.2** and **Hunyuan3D 2**. Use the mesh GLB output. **LATO.2** also has an image-to-OBJ path. | TRELLIS.2 GLB, Hunyuan3D standard, multiview and Turbo GLBs, and LATO.2 OBJ. |
-| Run original TRELLIS | `C:\Arbeit\triflow\win_port\trellis_image.py`. Import the geometry GLB, or keep the Gaussian PLY as an appearance reference. | Standalone GLB with 580,282 faces and PLY with 474,336 Gaussians. |
+| Run original TRELLIS | `F030MeshLab\run.ps1 trellis`, from TriFlow's TRELLIS submodule. Import the geometry GLB, or keep the Gaussian PLY as an appearance reference. | Standalone GLB with 580,282 faces and PLY with 474,336 Gaussians. |
 | Rebuild topology from a source mesh | **LATO.2** targets vertex count. **TriFlow** uses `--face_count`. **MeshAnything V2** and the legacy V1 both accept a source mesh with `--input_type mesh` and export OBJ. | All four produced fresh OBJ meshes. Check the returned counts against the converter after fitting and cleanup. |
 | Create a base-color atlas for a prepared mesh | `H:\ComfyUI\run_3d_nodes.bat`, **Hunyuan3D Wrapper**. UV unwrap if needed, render normal and position views, run Paint, bake, inpaint, apply the atlas, then export GLB. Delight can preprocess the reference image. | Single-view and multiview renders, depth, Paint, baking, inpainting, textured GLB, PBR round-trip and nvdiffrast previews. |
 | Create view or appearance references | **MV-Adapter** in the 3D profile on `H:` generates multiview images. **TripoSplat** in ComfyUI Portable exports an SPZ. Use these as references or generate a polygon mesh before the Falcon export. | Six MV-Adapter views and a TripoSplat SPZ. |
@@ -77,34 +77,29 @@ saved LOD4 package byte for byte. Hatari 2.6.1-devel replayed the rebuilt
 package for 2,700 VBLs and exited successfully. The recording shows the
 walker progressing through distinct leg poses.
 
-### Local command-line retopology
+### Local command-line tools
 
-Run these from the named tool checkout, using a scratch output folder.
+The command-line tools run through the private F030MeshLab repository at
+`C:\Arbeit\F030MeshLab`. It pins each upstream checkout (LATO.2, TriFlow
+with original TRELLIS, MeshAnything V2 and V1) to a commit, and holds the
+Windows stand-ins, the patches, the venv package lists, one entry point and
+a smoke test per tool. Give your own files as absolute paths.
 
 ```powershell
-# From C:\Arbeit\LATO.2, using an input directory of meshes
-& C:\Arbeit\triflow\.venv\Scripts\python.exe win_port/run.py scripts/e2e_inference.py --mesh_dir tmp_ex --out_dir "$env:TEMP/trex-lato-check" --vert_num 1000 --num_workers 0
-# From C:\Arbeit\triflow, using an input directory of OBJ files
-& .\.venv\Scripts\python.exe win_port/run.py inference.py -i data/dummy_input/multi_component -o "$env:TEMP/trex-triflow-check" --face_count 800
-# From C:\Arbeit\MeshAnythingV2
-& .\.venv\Scripts\python.exe main.py --input_type mesh --input_path examples/wand.obj --out_dir "$env:TEMP/trex-meshanything-check"
+Set-Location C:\Arbeit\F030MeshLab
+.\run.ps1 list
+.\run.ps1 lato scripts/e2e_inference.py --mesh_dir C:\in --out_dir C:\out --vert_num 1000 --num_workers 0
+.\run.ps1 triflow inference.py -i C:\in -o C:\out --face_count 800
+.\run.ps1 meshanything --input_type mesh --input_path C:\in\part.obj --out_dir C:\out
+.\run.ps1 trellis C:\in\image.png C:\out --steps 12
+.\run.ps1 smoke
 ```
 
 For LATO.2 image-to-mesh use `scripts/image_e2e_inference.py --image_dir <dir>`
 in place of the mesh script and omit `--num_workers`. That path uses the
-locally cached TRELLIS sparse-structure and BiRefNet checkpoints. MeshAnything
-V1 uses the V2 Python environment from its own checkout. Original TRELLIS's
-launcher, checkpoint layout and sample command are recorded in
-`C:\Arbeit\triflow\win_port\TRELLIS.md`.
-
-The Windows ports are committed on a local `win-port` branch in each clone,
-not pushed: `LATO.2` (`win_port/` and the `tmp_ex/dragon.glb` smoke input),
-`MeshAnythingV2` (eager attention instead of flash-attn) and `triflow`
-(`win_port/`, with `third_party/TRELLIS` and its FlexiCubes submodule on their
-own `win-port` branches so FlexiCubes runs without kaolin). Model weights,
-virtual environments, outputs and the pyfqmr Cython build stay untracked. To
-rebuild on another machine, clone upstream, fetch these branches and switch to
-`win-port` (`git submodule update` in TriFlow).
+locally cached TRELLIS sparse-structure and BiRefNet checkpoints. Setting up
+another machine, the venvs, the weights and the licences are covered in
+F030MeshLab's README.
 
 ## Handoff to the Falcon exporter
 

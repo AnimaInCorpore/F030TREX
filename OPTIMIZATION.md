@@ -10132,12 +10132,13 @@ culling): the mirrored body showed 116 see-through pixels in total (about
   `trex_hires_bg.tos` and `TREXBGND.LOD` byte-identical to the measured
   pair (`92e4c029…`/`924865a7…`).
 
-Remake the body (LATO.2 in its own clone, TriFlow's venv; only needed if the
-source body changes):
+Remake the body (LATO.2 through `C:\Arbeit\F030MeshLab\run.ps1 lato`, which
+pins the clone and runs it in TriFlow's venv; only needed if the source body
+changes):
 
 ```sh
 # Y-up input: the body's faces exported in world space, (x, y, z) -> (x, z, -y)
-python win_port/run.py scripts/e2e_inference.py --mesh_dir <dir with Main.obj> \
+run.ps1 lato scripts/e2e_inference.py --mesh_dir <dir with Main.obj> \
   --out_dir <out> --vert_num 60 --min_verts 30 --num_workers 0
 # Z-up again: (x, y, z) -> (x, -z, y), saved as Main_zup.obj; then
 blender -b -Y assets/Tutorial.blend --python tools/blender_fit_external.py -- \
@@ -10150,8 +10151,8 @@ blender -b -Y assets/Tutorial.blend --python tools/blender_fit_external.py -- \
 The survey below is offline: twelve models were reduced and priced, but
 not built. One of them, the TIE fighter, was then taken end to end
 through bake, export, build and Hatari (end of this section).
-The question was whether TriFlow (`C:\Arbeit\triflow`, run through
-`win_port/run.py inference.py` on the RTX 5090) can bring 1990s fan models
+The question was whether TriFlow (`C:\Arbeit\triflow`, run on the RTX 5090
+through its Windows launcher, now `F030MeshLab\run.ps1 triflow inference.py`) can bring 1990s fan models
 down to the 6.6h budget. Twelve vehicles from a scifi3d Star Wars 3DS pack
 were tested, at 6,230 to 122,910 source triangles. The budget figures below
 were computed with the exporter's formula. They used Q12 corner normals at
@@ -10879,11 +10880,11 @@ the collapsed head instead.
   is in `blender/swbf/patrol/falcon_lod4_lo/`.
 
 ```powershell
-# Only to remake the head: dump LOD2's head shell, run LATO.2 (its clone, TriFlow's venv)
+# Only to remake the head: dump LOD2's head shell, run LATO.2 through F030MeshLab
 $env:AFTERGLOW_LOD = 4; $env:AFTERGLOW_SHELLS_DUMP = 'C:/Arbeit/triflow/out/lato_lod2/in'
 & $blender -b blender/swbf/atat/atat_scene.blend --python-exit-code 1 --python three-patrol/build_scene.py
 Remove-Item Env:AFTERGLOW_SHELLS_DUMP
-#   python win_port/run.py scripts/e2e_inference.py --mesh_dir <in> --out_dir <out> --vert_num 60 --min_verts 30 --num_workers 0
+#   C:\Arbeit\F030MeshLab\run.ps1 lato scripts/e2e_inference.py --mesh_dir <in> --out_dir <out> --vert_num 60 --min_verts 30 --num_workers 0
 #   copy <out>/Head_pred.obj to blender/swbf/patrol/lato/
 # The scenes (2,300 triangles, LATO.2 head baked) and the Falcon build:
 $env:AFTERGLOW_LOD = 4
