@@ -248,6 +248,9 @@ depending on the normals. `make MODEL_DIR=<dir> trex_m68030_hires_backdrop_run`
 then builds that model's trail scene. Start from a copy of
 `trex_trail.blend`, swap in the model and animate it, then run
 `make model_export BLEND=<file> MODEL_OBJECT=<name> MODEL_DIR=<dir>`.
+An unrigged generated mesh can be rigged and walked along the trail first:
+`tools/blender_rig_creature.py` for four legs, `tools/blender_rig_biped.py`
+for two.
 See [OPTIMIZATION.md 6.6h](OPTIMIZATION.md#66h-any-blender-model-as-a-model-directory).
 
 **AT-AT glacier patrol.** Open the [packed Blender scene](TREX/scene/atat_patrol.blend)

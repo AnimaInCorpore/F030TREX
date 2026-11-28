@@ -9484,10 +9484,10 @@ generators (`make_backdrop.py`, `make_backdrop_path.py`,
   now carries `--python-exit-code 1`.
 - **Pillow:** the Python bundled with Blender's macOS build has no Pillow.
   `blender_seed_data.py` now imports it only where it writes PNGs, so
-  `make backdrop` needs none. `blender_export_model.py` and
-  `blender_rig_creature.py` still need it; `make blender_pillow` installs
-  it into Blender's user `scripts/modules` directory, which Blender puts on
-  `sys.path` itself.
+  `make backdrop` needs none. `blender_export_model.py`,
+  `blender_rig_creature.py` and `blender_rig_biped.py` still need it;
+  `make blender_pillow` installs it into Blender's user `scripts/modules`
+  directory, which Blender puts on `sys.path` itself.
 - **DSP image:** DOSBox-X needs the `DOSBOX_FLAGS` given in the Makefile, or
   it waits at a start-up prompt and never runs `BUILD.BAT`.
 
@@ -9670,6 +9670,102 @@ On cycle-exact Hatari:
 - **Loop:** all 159 post-wrap frames match.
 - **Speed:** 320 frames averaged **346.6 ms/frame (2.89 FPS)**: packets
   215.4 ms, clear 47.4 ms, rasterizer 77.8 ms.
+
+*Generated two-legged characters* (LATO.2's three example glTFs: a
+spaceman, a rearing dragon and an upright cartoon crocodile, 11,222–12,364
+triangles and one texture each, 2026-11-28). All three stand on two feet.
+`blender_rig_creature.py` misreads them: it takes a tail, or a boot's toe
+and heel, as four feet. The spaceman's head-to-tail axis came out vertical,
+so it walked sideways.
+[`tools/blender_rig_biped.py`](tools/blender_rig_biped.py) rigs and walks
+an upright two-legged mesh. It takes the same arguments, and the import,
+decimation, texture page and Q12 normals are shared with the four-legged
+script.
+
+How it works:
+- **Facing:** taken from `forward=`, default −Y. That is glTF's front
+  after import and the trail's forward axis, and all three models face it.
+- **Feet:** the ground contacts whose geodesic to the torso climbs at once:
+  height gained over the first 0.3 of the model height along the path. Feet
+  score 0.74–0.94 here. A tail lying on the ground starts out level and
+  scores 0.43–0.61. Steep contacts within 0.2 of the height of the best one
+  on a side merge, as toe and heel.
+- **Crotch:** the highest point of the shortest surface path from one foot
+  to the other, which must climb one leg and descend the other. Low
+  vertices away from the feet are barred, so the path cannot cross a stand
+  between the boots or a tail. It found 0.37, 0.26 and 0.36 of the height.
+  The path's halves run up the inner legs and guide the hip and knee
+  cross-sections.
+- **Skeleton and skin:** a five-bone pelvis-to-head spine and a thigh and
+  shin per leg. Each foot is everything its ground contacts reach without
+  climbing above the knee, so long claws follow the shin and a tail beside
+  the foot does not. Above that, a vertex joins a leg only when it is
+  nearer that leg than 0.7 of its distance to the other leg. Loose pieces
+  copy the weights of their nearest main-piece vertex and move rigidly.
+  Weights diffuse over the mesh in six rounds, as in the four-legged
+  script.
+- **Gait:** forward kinematics only. The thighs sweep about the
+  side-to-side axis by ±atan(duty·stride/2/leg), with duty 0.6 and stride
+  1.3 leg lengths. The knee flexes up to 0.55 rad in the swing. The body
+  drops by the shortfall of the most upright stance leg, leg·(1 − cos θ),
+  so a planted foot touches the ground. The pelvis twists by ±0.06 rad
+  and the chest turns back. Arms, wings and tails are not animated and
+  move with the chest or pelvis.
+
+What was rejected:
+- *Geodesic length over height climbed* as the foot test: one of the
+  dragon's tail contacts passed (1.45 against a cut-off of 1.53). For the
+  crocodile it picked the tail as the right foot, 3.67 m from the left one.
+- *Scanning slices up from the ground for mesh between the legs:* it
+  stopped at a stand between the spaceman's boots (0.27 m) and below the
+  dragon (0.675 m).
+- *Scanning down for the first empty slice between the legs:* it put the
+  spaceman's and crocodile's hips at 0.60 and 0.63 of the height, in the
+  chest. Above the crotch the legs' paths wander over the torso surface.
+
+**Stretch** is counted per frame over the 114-sample trail: triangles whose
+longest edge-length ratio to the rest mesh exceeds 1.8×, measured on the
+`.blend` with the armature evaluated (mean and maximum per frame, then the
+worst ratio). The four-legged rows are the same models through
+`blender_rig_creature.py` on the same trail.
+
+| Model | Rig | > 1.8× per frame (mean / max) | Worst |
+|---|---|---:|---:|
+| Spaceman | four-legged | 19.3 / 64 | 7.01× |
+| Spaceman | two-legged | 9.0 / 27 | 5.49× |
+| Dragon | four-legged | 14.1 / 77 | 4.27× |
+| Dragon | two-legged | 0.0 / 0 | 1.78× |
+| Crocodile | four-legged | 51.1 / 214 | 8.55× |
+| Crocodile | two-legged | 0.0 / 2 | 1.89× |
+
+The spaceman's remaining stretch is mostly slivers with 2–3 cm rest edges at
+the knees and on a strap between the legs, on a 4.5 m figure.
+
+Each model is 1,188–1,198 vertices and 2,400 triangles in one 256×256 page.
+They use 10,718–10,788 X and 9,574–9,594 Y DSP words.
+
+On cycle-exact Hatari:
+- **Build:** F030Arcade's `build-ucrt64`, v2.6.1-devel of 2026-11-24.
+- **Settings:** Videl contention on, 14 MB, 320 frames, `measure_frames.py`
+  on `trex_hires_bg.tos`.
+- **Loop:** the post-wrap frames of each FBSEQ capture all match the frame
+  one lap (72 samples) earlier: 24, 19 and 22 frames.
+
+| Model | Rig | ms/frame | FPS | Packets | Clear | Rasterizer |
+|---|---|---:|---:|---:|---:|---:|
+| Spaceman | two-legged | **329.7** | 3.03 | 246.7 | 48.9 | 22.6 |
+| Dragon | two-legged | **305.4** | 3.27 | 224.9 | 47.0 | 22.3 |
+| Crocodile | two-legged | **319.7** | 3.13 | 211.6 | 59.6 | 37.1 |
+| Spaceman | four-legged | 298.9 | 3.35 | 217.4 | 45.5 | 24.5 |
+| Dragon | four-legged | 301.4 | 3.32 | 220.9 | 46.5 | 22.5 |
+| Crocodile | four-legged | 322.2 | 3.10 | 217.7 | 58.8 | 34.0 |
+
+The two-legged spaceman costs 30.8 ms more than the sideways one, almost all
+in packets (+29.3 ms). Facing the camera, it shows the screen more of its
+triangles. These are emulator measurements; no Falcon has run these models.
+Not done: the Blender-against-Hatari comparison
+(`compare_blender_render.py` reads the T-Rex's backdrop and shadow, not a
+model directory's).
 
 ### 6.6i Wider lap, secondary motion and random gestures
 
