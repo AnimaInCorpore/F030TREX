@@ -26,9 +26,12 @@ Faces keep their material's colour as a "ps1_colour" corner attribute and get
 the Falcon untextured material. Flat Q12 corner normals of the rest mesh are
 stored as "ps1_normal" for the DSP light model. The model follows the
 T-Rex's route (ground-level location and yaw per frame). Its action is
-replayed through an NLA strip whose time advances with the distance walked,
-divided by the action's own stance-foot speed, to keep foot slip small on
-straight stretches. The T-Rex object is removed. Export it afterwards with
+replayed through an NLA strip whose time follows the distance walked: the
+planted (lower) foot's backward slide is tabled over one cycle, and each
+trail frame plays the action time at which that slide equals the distance,
+so a planted foot stays put on straight stretches even where the clip eases
+its feet in and out. Without foot bones it plays at the median stance
+speed. The T-Rex object is removed. Export it afterwards with
 make model_export (OPTIMIZATION.md 6.6h).
 """
 import fnmatch
@@ -339,7 +342,9 @@ if FEET:
             if prev.z < floor + 0.03 * HEIGHT and point.z < floor + 0.03 * HEIGHT:
                 speeds.append((prev - point).length)
     print("feet %s" % feet)
+warp_feet = feet if FEET else []
 feet = [] if FEET else [b.name for b in rig.pose.bones if b.name.lower().startswith("foot")]
+warp_feet = warp_feet or feet
 for name in feet:
     prev = None
     for f in range(int(cycle_start), int(cycle_end) + 1):
@@ -352,6 +357,37 @@ for name in feet:
 stance = float(np.median(speeds)) if speeds else 0.05
 print("stance speed %.4f m per action frame" % stance)
 
+# Planted-foot travel over one cycle, in quarter frames: at each step the
+# lower foot is the planted one, and its backward slide (+Y: the model faces
+# -Y) is the ground the body covers. Played back by distance, so that the
+# action time at each trail frame is where this travel equals the distance
+# walked, a planted foot stays put on straight stretches even though clips
+# ease their feet in and out. A step where no foot slides back still costs a
+# sliver of distance, so the table rises and can be read backwards. Without
+# feet the action plays at the constant stance speed.
+TIME_STEP = 0.25
+times = np.arange(cycle_start, cycle_end + 1e-6, TIME_STEP)
+travel = None
+if warp_feet:
+    samples = []
+    for t in times:
+        strip.strip_time = float(t)
+        scene.frame_set(scene.frame_current)
+        ev = rig.evaluated_get(bpy.context.evaluated_depsgraph_get())
+        points = []
+        for name in warp_feet:
+            pb = ev.pose.bones[name]
+            ends = [ev.matrix_world @ pb.head, ev.matrix_world @ pb.tail] if FEET else [ev.matrix_world @ pb.head]
+            points.append(min(ends, key=lambda p: p.z))
+        samples.append(points)
+    travel = [0.0]
+    floor_step = 0.02 * stance * TIME_STEP
+    for a, b in zip(samples[:-1], samples[1:]):
+        k = min(range(len(a)), key=lambda i: a[i].z)
+        travel.append(travel[-1] + max(b[k].y - a[k].y, floor_step))
+    travel = np.array(travel)
+    print("planted-foot travel %.3f m per cycle (constant speed: %.3f m)" % (travel[-1], stance * cycle))
+
 route_keys = {}
 for curve in trex.animation_data.action.layers[0].strips[0].channelbags[0].fcurves:
     route_keys[(curve.data_path, curve.array_index)] = curve
@@ -360,13 +396,19 @@ for curve in trex.animation_data.action.layers[0].strips[0].channelbags[0].fcurv
 # refuses the strip_time keys: switch it on again just before keying.
 strip.use_animated_time = True
 phase = float(cycle_start)
+walked = 0.0
 previous = None
 for frame in range(scene.frame_start, scene.frame_end + 1):
     x = route_keys[("location", 0)].evaluate(frame)
     y = route_keys[("location", 1)].evaluate(frame)
     yaw = route_keys[("rotation_euler", 2)].evaluate(frame)
     if previous is not None:
-        phase += math.hypot(x - previous[0], y - previous[1]) / stance
+        step = math.hypot(x - previous[0], y - previous[1])
+        walked += step
+        if travel is not None:
+            phase = float(np.interp(walked % travel[-1], travel, times))
+        else:
+            phase += step / stance
     previous = (x, y)
     while phase >= cycle_end:
         phase -= cycle

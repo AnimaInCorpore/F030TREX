@@ -9885,21 +9885,39 @@ Result:
   words.
 - **Stretch:** 3.4 / 10 triangles per frame beyond 1.8×, worst 3.15×,
   from the source's own skinning.
-- **Foot slip:** a planted foot moves backward in the body's frame at the
-  body's speed on average over a stance. Per frame it ranges from 0.06 to
-  0.94 m against the body's 0.45–0.61 m. The clip eases its feet in and out,
-  and the strip plays it at the median stance speed. Warping the strip
-  time to the planted foot's travel would remove that; not done.
-- **Loop:** in the FBSEQ capture, all 25 post-wrap frames match the frame
-  one lap earlier.
+- **Foot slip:** with the strip played at the median stance speed, a
+  planted foot kept pace with the body over a stance but not per frame. It
+  moved 0.06–0.94 m against the body's 0.45–0.61 m, because the clip eases
+  its feet in and out. The strip time now follows the planted foot's
+  travel:
+  - The lower foot's backward slide is tabled over one cycle in quarter
+    frames: 5.40 m per cycle, against 5.55 m at the constant speed.
+  - Each trail frame plays the action time at which that slide equals the
+    distance walked.
+  - A step where no foot slides back still costs 2% of the stance speed,
+    so the table rises and can be read backwards.
+
+  Planted-foot slip per frame over the lap is measured in the body's
+  frame, for feet below 0.12 m in consecutive frames:
+
+  | Strip time | Median | 90th percentile | Max | Planted frames |
+  |---|---:|---:|---:|---:|
+  | Constant stance speed | 0.178 m | 0.321 m | 0.386 m | 102 |
+  | Planted-foot travel | 0.000 m | 0.000 m | 0.004 m | 93 |
+- **Loop:** in the FBSEQ capture, all post-wrap frames match the frame one
+  lap earlier: 25 at the constant speed, 21 with the travel-following
+  strip time.
 
 On cycle-exact Hatari (as above: `build-ucrt64`, Videl contention on, 14 MB,
 320 frames):
 
 | Quaternius T-Rex | ms/frame | FPS | Packets | Clear | Rasterizer |
 |---|---:|---:|---:|---:|---:|
-| `swatches=1` (textured) | **235.7** | **4.24** | 142.1 | 46.6 | 37.9 |
-| `swatches=0` (flat, mode `0x30`) | 582.0 | 1.72 | 12.2 | 185.3 | 375.2 |
+| `swatches=1`, travel-following strip time | **234.1** | **4.27** | 141.1 | 46.4 | 37.7 |
+| `swatches=1`, constant stance speed | 235.7 | 4.24 | 142.1 | 46.6 | 37.9 |
+| `swatches=0` (flat, mode `0x30`), constant | 582.0 | 1.72 | 12.2 | 185.3 | 375.2 |
+
+The strip-time change only moves the poses; it costs nothing (−1.6 ms).
 
 The swatch page makes the same mesh 2.47× faster, and it is the fastest
 model on this trail so far. The flat build's rasterizer is the 68030 flat
