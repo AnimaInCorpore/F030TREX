@@ -23,6 +23,7 @@ The T-Rex object is removed; export the result with make model_export
 """
 import heapq
 import math
+import os
 import sys
 
 import bmesh
@@ -32,6 +33,9 @@ from mathutils import Matrix, Vector
 
 args = sys.argv[sys.argv.index("--") + 1:]
 SOURCE, OUT = args[:2]
+# Blender resolves a plain relative path against the open .blend's folder
+# (TREX/scene), not the working directory, so make both paths absolute.
+SOURCE, OUT = os.path.abspath(SOURCE), os.path.abspath(OUT)
 opts = dict(a.split("=", 1) for a in args[2:])
 NAME = opts.get("name", "Creature")
 HEIGHT = float(opts.get("height", 4.5))
@@ -225,7 +229,7 @@ if image is not None:
     five = (np.asarray(rgb).astype(np.int32) * 31 + 127) // 255
     rgb = Image.fromarray(((five * 255 + 15) // 31).astype(np.uint8))
     rgb = rgb.quantize(256, Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE).convert("RGB")
-    texture_path = OUT.rsplit("/", 1)[0] + "/%s_page.png" % NAME.lower()
+    texture_path = os.path.join(os.path.dirname(OUT), "%s_page.png" % NAME.lower())
     rgb.save(texture_path)
     page_image = bpy.data.images.load(texture_path)
     page_image.colorspace_settings.name = "Non-Color"
