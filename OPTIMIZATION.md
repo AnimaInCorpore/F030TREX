@@ -11142,7 +11142,52 @@ Same geometry (486 triangles), page fit only:
   - The generic 128-pixel fit scores do not separate the layouts (test
     error 0.403-0.410): only the shot's own close views show texel size.
 - Seen in every layout: a few loose triangles near the cannon tips, where
-  the voxel fuse broke the thin cannons into fragments.
+  the voxel fuse broke the thin cannons into fragments. Fixed below.
+
+**Whole cannons, rigged models and a normal map as colour (2026-11-28).**
+F030MeshLab's `auto_lod.py` has a new strategy, `hybrid`. It takes pieces
+thinner than 3 voxels and longer than 4 out before the voxel fuse; the
+X-wing's cannon barrels are about 1.7 voxels across. Each becomes a 4-sided
+open prism (8 triangles), as the hand-made LODs keep their barrels, and loose
+fuse fragments are dropped. The X-wing's LOD now has 336 vertices and 480
+triangles, with four whole cannons. It scores 0.404 on the benchmark against
+0.416 before and 0.424 for the hand-made LOD5. It now wins on four of seven
+Battlefront models, and on the X-wing from below too. Numbers are in
+F030MeshLab's README.
+
+Through the Falcon pipeline with the 2-page screen-weighted layout (C above):
+
+| X-wing, 640x400 trail | ms/frame | Packet | Clear | Raster | Pixels/frame |
+|---|---:|---:|---:|---:|---:|
+| C, voxel LOD, 253 vertices | 112.8 | - | - | 34.6 | - |
+| **C, hybrid LOD, 336 vertices** | **118.2 (8.46 FPS)** | 45.7 | 31.9 | 36.7 | 15,983 |
+
+- Hatari `e05af5aa…`, cycle-exact with Videl contention, 14 MiB, 100 frames;
+  emulator only.
+- Measured pair: `1065b4e9…` (`trex_hires_bg.tos`) and `b11e2bac…`
+  (`TREXBGND.LOD`).
+- DSP RAM: Y 2,394/13,888 and X 2,834/14,647 words; 478 normals.
+- Texels per pixel 0.84 / 0.57 (median / worst 10%).
+- The 5.4 ms over layout C follow from the content: 83 more vertices (each
+  prism has its own 8) and more pixels (the cannons are drawn now). The
+  rasteriser accounts for 2.1 ms (36.7 against 34.6). Layout C's packet and
+  clear times were not recorded, so the split of the other 3.3 ms is not
+  measured.
+- The recording shows the four cannons as whole barrels with tips at the
+  close pass, as on the hand LOD.
+
+Also new in F030MeshLab:
+- `auto_lod.py --rig` reduces a rigged model of rigid parts without a
+  triangle across two joints. Each part is shaped by the strategy, mirror
+  twins are built from one side, then one collapse runs over all parts,
+  kept apart, so the budget goes where the shape error is. On the game's
+  AT-AT (LOD3 to the LOD5's 1,024 triangles, LOD2 as reference) it scores
+  0.464 against the hand LOD5's 0.409. The result is not yet built into the
+  Afterglow scene.
+- `appearance_fit.py --normals` bakes a normal map and converts it into the
+  colour page under given lights (`--light`, `--ambient`: the target scene's
+  light). That is the form the Falcon can draw, since it has no per-pixel
+  lighting.
 
 ```powershell
 & $blender -b <scene.blend> --python tools/blender_screen_coverage.py -- XWing coverage.json
