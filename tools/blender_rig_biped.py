@@ -7,7 +7,8 @@ Options (key=value): name=Biped  height=4.5 (metres)  triangles=2400
 forward=-Y (the source's facing axis in Blender after the glTF import; glTF's
 front, +Z, arrives as -Y, the trail scene's forward axis)  step=0.65 (stride
 length / leg length)  lift=0.55 (swing knee flex, radians)  twist=0.06 (pelvis
-yaw, radians)  stage=all|landmarks
+yaw, radians)  arm=0.3 (arm swing, radians)  tail=0.12 (tail sway per bone,
+radians)  stage=all|landmarks
 
 The companion of blender_rig_creature.py for characters that stand on two
 feet (a person, a rearing dragon, a cartoon crocodile), which that script's
@@ -15,18 +16,21 @@ four-foot search misreads (OPTIMIZATION.md 6.6h). For an unrigged mesh:
   1. imports it, turns its forward axis to -Y, scales it to the height and
      decimates it to the triangle budget, as blender_rig_creature.py does;
   2. finds the two feet: the ground contacts whose surface path up to the
-     torso climbs like a leg (geodesic length over height gained). A tail
-     lying on the ground climbs too slowly and is left out; toe and heel
-     contacts on one side merge into one foot;
-  3. finds the crotch (scanning up from the ground for the first slice where
-     the two legs join), the hips and knees from the legs' cross-sections,
-     and a vertical spine from the pelvis to the top of the head;
-  4. skins the legs below the hips to thigh and shin and everything else
-     (arms, wings, tail) along the pelvis-spine chain;
-  5. walks it along the T-Rex's route: thighs swing about the side-to-side
+     torso climbs at once, as a leg does. A tail lying on the ground starts
+     out level and is left out; toe and heel contacts on one side merge;
+  3. finds the crotch (the highest point of the shortest surface path from
+     one foot to the other), the hips and knees from the legs'
+     cross-sections, and a vertical spine from the pelvis to the head;
+  4. finds a tail (the farthest low vertex clear of the feet and pelvis) and
+     the arms (per side, the hand farthest from the torso, the shoulder at
+     the top of its path back);
+  5. skins the feet and legs to thigh and shin, blends the tail chain and
+     each arm bone in by geodesic distance, and the rest along the spine;
+  6. walks it along the T-Rex's route: thighs swing about the side-to-side
      axis, knees flex in the swing, the body drops so the stance foot stays
-     on the ground, the pelvis twists and the chest counter-rotates.
-Arms, wings and tails are not animated; they move with the chest or pelvis.
+     on the ground, the pelvis twists and the chest counter-rotates, each
+     arm swings against its leg and the tail sways in a lagging wave.
+Wings are not animated; they move with the chest. Elbows do not bend.
 The T-Rex object is removed; export the result with make model_export.
 """
 import heapq
@@ -52,6 +56,8 @@ FORWARD = opts.get("forward", "-Y")
 STEP = float(opts.get("step", 0.65))
 LIFT = float(opts.get("lift", 0.55))
 TWIST = float(opts.get("twist", 0.06))
+ARM = float(opts.get("arm", 0.3))
+TAIL = float(opts.get("tail", 0.12))
 STAGE = opts.get("stage", "all")
 AXES = {"+X": (1, 0), "-X": (-1, 0), "+Y": (0, 1), "-Y": (0, -1)}
 if FORWARD not in AXES:
@@ -261,8 +267,10 @@ hip_z = crotch + 0.04 * HEIGHT
 def leg_centre(side, z, fallback):
     """The centre of one leg's cross-section just below z, around its path."""
     near = path_at(leg_paths[side], z - 0.03 * HEIGHT)
+    # 0.08 of the height front to back holds a thick thigh but not a backpack.
     band = main[(co[main, 2] > z - 0.05 * HEIGHT) & (co[main, 2] < z - 0.01 * HEIGHT)
-                & (np.linalg.norm(co[main, :2] - near[:2], axis=1) < 0.12 * HEIGHT)]
+                & (np.abs(co[main, 0] - near[0]) < 0.12 * HEIGHT)
+                & (np.abs(co[main, 1] - near[1]) < 0.08 * HEIGHT)]
     mid_x = (feet["L"][0] + feet["R"][0]) / 2
     band = band[(co[band, 0] > mid_x) if side == "L" else (co[band, 0] <= mid_x)]
     return co[band, :2].mean(axis=0) if len(band) else fallback
@@ -296,10 +304,118 @@ print("feet L %s R %s, separation %.2f m" % (np.round(feet["L"], 2), np.round(fe
 print("crotch %.2f m (%.2f of the height), hips at %.2f m" % (crotch, crotch / HEIGHT, hip_z))
 print("spine", [tuple(np.round(p, 2)) for p in spine])
 
+
+def path_between(start, prev_map, end):
+    """Vertex indices of the geodesic from `start`'s tree root back to `end`."""
+    path = [end]
+    while path[-1] != start and prev_map[path[-1]] >= 0:
+        path.append(int(prev_map[path[-1]]))
+    return path[::-1]
+
+
+def centreline(points, radius):
+    """Pull surface path points to the centre of the surrounding body."""
+    return np.array([co[main[np.linalg.norm(co[main] - p, axis=1) < radius]].mean(axis=0)
+                     for p in points])
+
+
+# Tail: the farthest low vertex that is clear of both feet and well away from
+# the pelvis. Its path to the torso runs along the tail to the hips; the tail
+# root is the path point nearest the pelvis. Four bones follow the tail's
+# centreline; its weight fades into the pelvis near the root.
+tail = None
+clear = ((co[main, 2] < hip_z) & np.isfinite(dist[main])
+         & (np.linalg.norm(co[main, :2] - feet["L"][:2], axis=1) > 0.25 * HEIGHT)
+         & (np.linalg.norm(co[main, :2] - feet["R"][:2], axis=1) > 0.25 * HEIGHT)
+         & (np.linalg.norm(co[main, :2] - pelvis[:2], axis=1) > 0.35 * HEIGHT))
+if clear.any():
+    tip = int(main[clear][np.argmax(dist[main[clear]])])
+    from_tip, prev_tip = geodesic(tip)
+    path = path_between(tip, prev_tip, torso)
+    root_at = int(np.argmin(np.linalg.norm(co[path] - pelvis, axis=1)))
+    along = co[path[:root_at + 1]][::-1]               # root -> tip on the surface
+    seg = np.r_[0, np.cumsum(np.linalg.norm(np.diff(along, axis=0), axis=1))]
+    length = float(from_tip[path[root_at]])
+    if len(along) > 4 and length > 0.3 * HEIGHT:
+        samples = [[np.interp(s, seg, along[:, k]) for k in range(3)] for s in np.linspace(0, seg[-1], 5)]
+        chain = centreline(np.array(samples), 0.08 * HEIGHT)
+        chain[-1] = co[tip]
+        weight = np.clip((length - from_tip) / (0.25 * length), 0.0, 1.0)
+        weight[~np.isfinite(weight)] = 0.0
+        # How far along the tail each vertex lies, 0 at the root and 1 at the
+        # tip, by surface distance: unambiguous where the tail curls back.
+        along_tail = np.clip(1.0 - from_tip / length, 0.0, 1.0)
+        along_tail[~np.isfinite(along_tail)] = 0.0
+        tail = dict(chain=chain, weight=weight, along=along_tail)
+        print("tail: tip %s, root %s, %.2f m along the surface" % (
+            np.round(co[tip], 2), np.round(chain[0], 2), length))
+if tail is None:
+    print("no tail")
+
+
+# Arms: per side, the hand is the vertex farthest along the surface from the
+# torso among those
+# - out to the side of the body axis (not the head, horns or snout),
+# - below three quarters of the height (hands rest below the shoulders; a
+#   wing's joint rises above them),
+# - at most 0.1 of the height behind that side's foot (not wings or a
+#   backpack),
+# - outside the tail,
+# - and far from the feet along the surface (not a thigh: a hand's way to the
+#   feet runs over the shoulder and down the torso).
+# The highest point of its path back to the torso is the shoulder: a hanging
+# or raised arm climbs to it before the path drops over the chest. The arm
+# weight fades from the hand to the shoulder over the geodesic distance from
+# the hand.
+#
+# Decimation can cut a glove or forearm loose, so for the arm search each
+# loose piece is bridged to the main piece by one edge between their nearest
+# vertices (after the feet, crotch and tail, so a stand on the ground stays
+# out of those).
+for piece in range(len(sizes)):
+    members = np.flatnonzero(label == piece)
+    if piece == label[main[0]] or not len(members):
+        continue
+    gaps = np.linalg.norm(co[members][:, None, :] - co[main][None, :, :], axis=2)
+    a, b = np.unravel_index(np.argmin(gaps), gaps.shape)
+    a, b = int(members[a]), int(main[b])
+    neighbours[a].append((b, float(gaps.min())))
+    neighbours[b].append((a, float(gaps.min())))
+dist, prev = geodesic(torso)
+from_feet, _ = geodesic(np.concatenate([foot_vertices["L"], foot_vertices["R"]]))
+in_tail = tail["weight"] > 0 if tail else np.zeros(len(co), bool)
+everything = np.arange(len(co))
+arms = {}
+for side in ("L", "R"):
+    offset = (co[:, 0] - pelvis[0]) * (1 if side == "L" else -1)
+    pick = everything[(offset > 0.15 * HEIGHT) & (co[:, 2] > 0.75 * crotch) & (co[:, 2] < 0.75 * top)
+                      & (co[:, 1] < feet[side][1] + 0.1 * HEIGHT) & np.isfinite(dist)
+                      & ~in_tail & (from_feet > 1.3 * hip_z)]
+    if not len(pick):
+        continue
+    tip = int(pick[np.argmax(dist[pick])])
+    if dist[tip] < 0.3 * HEIGHT:
+        continue                                      # nothing sticks out on this side
+    from_hand, prev_hand = geodesic(tip)
+    path = path_between(tip, prev_hand, torso)
+    peak = path[int(np.argmax(co[path, 2]))]
+    reach = float(from_hand[peak])                    # hand to shoulder along the surface
+    if reach < 0.15 * HEIGHT:
+        continue
+    ring = main[(from_hand[main] > 0.8 * reach) & (from_hand[main] < 0.95 * reach)]
+    pivot = co[ring].mean(axis=0) if len(ring) else co[peak]
+    weight = np.clip((reach - from_hand) / (0.35 * reach), 0.0, 1.0)
+    weight[~np.isfinite(weight)] = 0.0
+    arms[side] = dict(shoulder=pivot, hand=co[tip].copy(), weight=weight)
+    print("arm %s: hand %s, shoulder %s, %.2f m along the surface" % (
+        side, np.round(co[tip], 2), np.round(pivot, 2), reach))
+
 if STAGE == "landmarks":
     marker = bpy.data.materials.new("marker")
     marker.diffuse_color = (1, 0, 0, 1)
     points = list(spine) + [p for leg in legs.values() for p in leg.values()]
+    points += [p for arm in arms.values() for p in (arm["shoulder"], arm["hand"])]
+    points += list(tail["chain"]) if tail else []
     for p in points:
         bpy.ops.mesh.primitive_uv_sphere_add(radius=0.08, location=tuple(p))
         bpy.context.active_object.data.materials.append(marker)
@@ -314,6 +430,10 @@ spine -= shift
 for leg in legs.values():
     for key in leg:
         leg[key] = leg[key] - shift
+for arm in arms.values():
+    arm["shoulder"], arm["hand"] = arm["shoulder"] - shift, arm["hand"] - shift
+if tail:
+    tail["chain"] = tail["chain"] - shift
 
 # ------------------------------------------------------------------ texture
 # The Falcon draws 256x256 pages in 15-bit colour; show Blender the same.
@@ -388,8 +508,27 @@ for side, leg in legs.items():
     thigh.parent, shin.parent, shin.use_connect = eb["pelvis"], thigh, True
     leg.update(thigh=thigh.name, shin=shin.name,
                length=float(np.linalg.norm(leg["knee"] - leg["hip"]) + np.linalg.norm(leg["ankle"] - leg["knee"])))
+# One bone per arm, from the shoulder pivot to the hand, hanging from the
+# torso bone nearest the shoulder; a four-bone tail chain from the pelvis.
+for side, arm in arms.items():
+    bone = eb.new("arm_" + side)
+    bone.head, bone.tail = Vector(arm["shoulder"]), Vector(arm["hand"])
+    nearest = min(torso_bones, key=lambda n: np.linalg.norm(
+        (np.array(eb[n].head[:]) + np.array(eb[n].tail[:])) / 2 - arm["shoulder"]))
+    bone.parent = eb[nearest]
+    arm["bone"] = bone.name
+tail_bones = []
+if tail:
+    parent = eb["pelvis"]
+    for k, (a, b) in enumerate(zip(tail["chain"][:-1], tail["chain"][1:])):
+        bone = eb.new("tail%02d" % k)
+        bone.head, bone.tail = Vector(a), Vector(b)
+        bone.parent, bone.use_connect = parent, k > 0
+        parent = bone
+        tail_bones.append(bone.name)
 segments = {name: (np.array(eb[name].head[:]), np.array(eb[name].tail[:]))
-            for name in torso_bones + [leg[k] for leg in legs.values() for k in ("thigh", "shin")]}
+            for name in torso_bones + [leg[k] for leg in legs.values() for k in ("thigh", "shin")]
+            + [arm["bone"] for arm in arms.values()] + tail_bones}
 bpy.ops.object.mode_set(mode="OBJECT")
 
 
@@ -458,6 +597,35 @@ W = np.zeros((len(co), len(bone_names)))
 for v in body.data.vertices:
     for g in v.groups:
         W[v.index, bone_names.index(body.vertex_groups[g.group].name)] = g.weight
+column = {name: k for k, name in enumerate(bone_names)}
+
+
+def blend_in(weight, bones, along=None):
+    """Hand each vertex `weight` of the bones, scaling the torso weights it had.
+
+    With `along` (0 at the chain's root, 1 at its tip) the vertex blends
+    linearly between the two bones it lies between; otherwise all goes to one.
+    """
+    weight = np.where(assigned, 0.0, weight)          # the legs keep theirs
+    for v in np.flatnonzero(weight > 0):
+        W[v] *= 1.0 - weight[v]
+        if along is None:
+            W[v, column[bones[0]]] += weight[v]
+            continue
+        x = float(np.clip(along[v] * len(bones) - 0.5, 0, len(bones) - 1))
+        k = min(int(x), len(bones) - 2) if len(bones) > 1 else 0
+        f = x - k if len(bones) > 1 else 0.0
+        W[v, column[bones[k]]] += weight[v] * (1.0 - f)
+        if len(bones) > 1:
+            W[v, column[bones[k + 1]]] += weight[v] * f
+    return int((weight > 0).sum())
+
+
+# Tail and arms take over from the torso bones by their geodesic fade.
+if tail:
+    print("tail: %d vertices" % blend_in(tail["weight"], tail_bones, tail["along"]))
+for side, arm in arms.items():
+    print("arm %s: %d vertices" % (side, blend_in(arm["weight"], [arm["bone"]])))
 for _ in range(int(opts.get("smooth", 6))):
     mean = np.array([W[[b for b, _ in neighbours[a]]].mean(axis=0) if neighbours[a] else W[a]
                      for a in range(len(co))])
@@ -519,6 +687,7 @@ sweep = min(0.5, math.atan2(duty * stride / 2, leg_length))
 phase_offset = {"L": 0.0, "R": 0.5}
 drops = np.zeros(len(frames))
 stance_angle = {side: np.full(len(frames), np.inf) for side in legs}
+leg_forward = {side: np.zeros(len(frames)) for side in legs}
 for side, leg in legs.items():
     thigh, shin = rig.pose.bones[leg["thigh"]], rig.pose.bones[leg["shin"]]
     thigh.rotation_mode = shin.rotation_mode = "QUATERNION"
@@ -535,6 +704,7 @@ for side, leg in legs.items():
             t = (u - duty) / (1 - duty)
             flex = LIFT * math.sin(math.pi * t)
             forward = sweep * (2 * t - 1) + 0.35 * flex
+        leg_forward[side][idx] = forward
         # Rotating a downward thigh about +X moves the foot to +Y, backwards.
         thigh.rotation_quaternion = local_rotation(thigh, (1, 0, 0), -forward)
         shin.rotation_quaternion = local_rotation(shin, (1, 0, 0), flex)
@@ -562,6 +732,21 @@ for idx, f in enumerate(frames):
     pelvis_bone.keyframe_insert("rotation_quaternion", frame=f)
     for pb in upper:
         pb.rotation_quaternion = local_rotation(pb, (0, 0, 1), -twist / max(len(upper), 1))
+        pb.keyframe_insert("rotation_quaternion", frame=f)
+    # Each arm swings against the leg on its side, about the side-to-side axis.
+    for side, arm in arms.items():
+        pb = rig.pose.bones[arm["bone"]]
+        pb.rotation_mode = "QUATERNION"
+        swing = -ARM * leg_forward[side][idx] / max(sweep, 1e-6)
+        pb.rotation_quaternion = local_rotation(pb, (1, 0, 0), -swing)
+        pb.keyframe_insert("rotation_quaternion", frame=f)
+    # The tail sways about the vertical in a wave running to the tip, so a
+    # tail on the ground stays on it.
+    for k, name in enumerate(tail_bones):
+        pb = rig.pose.bones[name]
+        pb.rotation_mode = "QUATERNION"
+        lag = math.sin(2 * math.pi * cycles[idx] - 0.7 * (k + 1))
+        pb.rotation_quaternion = local_rotation(pb, (0, 0, 1), TAIL * (0.5 + k / max(len(tail_bones) - 1, 1)) * lag)
         pb.keyframe_insert("rotation_quaternion", frame=f)
 
 

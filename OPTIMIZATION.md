@@ -9695,22 +9695,50 @@ How it works:
   vertices away from the feet are barred, so the path cannot cross a stand
   between the boots or a tail. It found 0.37, 0.26 and 0.36 of the height.
   The path's halves run up the inner legs and guide the hip and knee
-  cross-sections.
+  cross-sections. Those take 0.08 of the height front to back around the
+  path, which holds a thick thigh but not the spaceman's backpack.
+- **Tail:** the farthest low vertex at least 0.25 of the height from both
+  feet and 0.35 from the pelvis (none on the spaceman). Its path to the
+  torso runs along the tail to the hips. The path point nearest the pelvis
+  is the root, and a four-bone chain follows the tail's centreline.
+- **Arms:** per side, the hand is the vertex farthest along the surface
+  from the torso among those:
+  - more than 0.15 of the height out from the body axis (not the head,
+    horns or snout);
+  - below 0.75 of the height (the dragon's wing joint is at 0.84);
+  - at most 0.1 of the height behind that side's foot (not the wings or
+    the backpack);
+  - outside the tail;
+  - more than 1.3 hip heights from the feet along the surface (not a
+    thigh).
+
+  The shoulder is the highest point of the hand's path back to the torso.
+  One bone runs from a pivot inside the upper arm to the hand. For this
+  search each loose piece is bridged to the main piece by one edge, in case
+  decimation cuts a glove loose.
 - **Skeleton and skin:** a five-bone pelvis-to-head spine and a thigh and
   shin per leg. Each foot is everything its ground contacts reach without
   climbing above the knee, so long claws follow the shin and a tail beside
   the foot does not. Above that, a vertex joins a leg only when it is
-  nearer that leg than 0.7 of its distance to the other leg. Loose pieces
-  copy the weights of their nearest main-piece vertex and move rigidly.
-  Weights diffuse over the mesh in six rounds, as in the four-legged
-  script.
+  nearer that leg than 0.7 of its distance to the other leg.
+
+  The arm and tail take over from the torso bones by geodesic distance. An
+  arm's weight is 1 up to 0.65 of the way from hand to shoulder and fades
+  to 0 at the shoulder; a tail's fades over its last quarter at the root.
+  Along the tail, a vertex's surface distance from the tip places it on the
+  chain, between two bones. Loose pieces copy the weights of their nearest
+  main-piece vertex and move rigidly. Weights diffuse over the mesh in six
+  rounds, as in the four-legged script.
 - **Gait:** forward kinematics only. The thighs sweep about the
   side-to-side axis by ±atan(duty·stride/2/leg), with duty 0.6 and stride
   1.3 leg lengths. The knee flexes up to 0.55 rad in the swing. The body
   drops by the shortfall of the most upright stance leg, leg·(1 − cos θ),
   so a planted foot touches the ground. The pelvis twists by ±0.06 rad
-  and the chest turns back. Arms, wings and tails are not animated and
-  move with the chest or pelvis.
+  and the chest turns back. Each arm swings ±0.3 rad about the
+  side-to-side axis, against the leg on its side. The tail sways about the
+  vertical, 0.06–0.18 rad per bone toward the tip, in a wave lagging 0.7
+  rad per bone, so a tail on the ground stays on it. Wings are not
+  animated and elbows do not bend.
 
 What was rejected:
 - *Geodesic length over height climbed* as the foot test: one of the
@@ -9722,24 +9750,45 @@ What was rejected:
 - *Scanning down for the first empty slice between the legs:* it put the
   spaceman's and crocodile's hips at 0.60 and 0.63 of the height, in the
   chest. Above the crotch the legs' paths wander over the torso surface.
+- *The farthest vertex per side as the hand*, with fewer filters, chose:
+  - the top of the spaceman's helmet, a dragon horn and the crocodile's
+    snout;
+  - the dragon's flame-tipped tail, which curls forward on its right;
+  - the dragon's right wing joint (z 3.79 m), whose arm is short along the
+    surface (1.3 m);
+  - the bottom of the spaceman's backpack. The spine and the earlier
+    hip-section window (0.12 of the height all round) sat back at the
+    backpack, y = 0.44.
+- *Tail vertices to their nearest bone segment:* where the tail curls, the
+  segments lie close and neighbouring vertices split between them. The
+  dragon reached 7.4 / 65 triangles beyond 1.8× and 4.40×, the crocodile
+  2.3 / 29 and 4.69×. Placing vertices along the tail by surface distance
+  roughly halved the worst ratio.
 
 **Stretch** is counted per frame over the 114-sample trail: triangles whose
 longest edge-length ratio to the rest mesh exceeds 1.8×, measured on the
 `.blend` with the armature evaluated (mean and maximum per frame, then the
 worst ratio). The four-legged rows are the same models through
-`blender_rig_creature.py` on the same trail.
+`blender_rig_creature.py` on the same trail. "Legs only" is the first
+version of this script, without arms or tail.
 
 | Model | Rig | > 1.8× per frame (mean / max) | Worst |
 |---|---|---:|---:|
 | Spaceman | four-legged | 19.3 / 64 | 7.01× |
-| Spaceman | two-legged | 9.0 / 27 | 5.49× |
+| Spaceman | two-legged, legs only | 9.0 / 27 | 5.49× |
+| Spaceman | two-legged, arms | 10.7 / 34 | 5.49× |
 | Dragon | four-legged | 14.1 / 77 | 4.27× |
-| Dragon | two-legged | 0.0 / 0 | 1.78× |
+| Dragon | two-legged, legs only | 0.0 / 0 | 1.78× |
+| Dragon | two-legged, arms and tail | 1.9 / 25 | 2.93× |
 | Crocodile | four-legged | 51.1 / 214 | 8.55× |
-| Crocodile | two-legged | 0.0 / 2 | 1.89× |
+| Crocodile | two-legged, legs only | 0.0 / 2 | 1.89× |
+| Crocodile | two-legged, arms and tail | 1.1 / 20 | 2.88× |
 
 The spaceman's remaining stretch is mostly slivers with 2–3 cm rest edges at
-the knees and on a strap between the legs, on a 4.5 m figure.
+the knees and on a strap between the legs, on a 4.5 m figure; the arms add
+none of its worst triangles. The dragon's and crocodile's new stretch is at
+the outer tail joints, where the sway bends most. Both stay within the
+four-legged reptile's 3.1×.
 
 Each model is 1,188–1,198 vertices and 2,400 triangles in one 256×256 page.
 They use 10,718–10,788 X and 9,574–9,594 Y DSP words.
@@ -9749,17 +9798,22 @@ On cycle-exact Hatari:
 - **Settings:** Videl contention on, 14 MB, 320 frames, `measure_frames.py`
   on `trex_hires_bg.tos`.
 - **Loop:** the post-wrap frames of each FBSEQ capture all match the frame
-  one lap (72 samples) earlier: 24, 19 and 22 frames.
+  one lap (72 samples) earlier: 18, 20 and 24 frames with arms and tail.
 
 | Model | Rig | ms/frame | FPS | Packets | Clear | Rasterizer |
 |---|---|---:|---:|---:|---:|---:|
-| Spaceman | two-legged | **329.7** | 3.03 | 246.7 | 48.9 | 22.6 |
-| Dragon | two-legged | **305.4** | 3.27 | 224.9 | 47.0 | 22.3 |
-| Crocodile | two-legged | **319.7** | 3.13 | 211.6 | 59.6 | 37.1 |
+| Spaceman | two-legged, arms | **330.0** | 3.03 | 247.0 | 49.1 | 22.7 |
+| Dragon | two-legged, arms and tail | **305.4** | 3.27 | 224.8 | 46.9 | 22.2 |
+| Crocodile | two-legged, arms and tail | **319.1** | 3.13 | 211.6 | 59.7 | 36.5 |
+| Spaceman | two-legged, legs only | 329.7 | 3.03 | 246.7 | 48.9 | 22.6 |
+| Dragon | two-legged, legs only | 305.4 | 3.27 | 224.9 | 47.0 | 22.3 |
+| Crocodile | two-legged, legs only | 319.7 | 3.13 | 211.6 | 59.6 | 37.1 |
 | Spaceman | four-legged | 298.9 | 3.35 | 217.4 | 45.5 | 24.5 |
 | Dragon | four-legged | 301.4 | 3.32 | 220.9 | 46.5 | 22.5 |
 | Crocodile | four-legged | 322.2 | 3.10 | 217.7 | 58.8 | 34.0 |
 
+Animating the arms and tail changes no frame time by more than 0.6 ms: the
+mesh and its budget stay the same, only the poses differ.
 The two-legged spaceman costs 30.8 ms more than the sideways one, almost all
 in packets (+29.3 ms). Facing the camera, it shows the screen more of its
 triangles. These are emulator measurements; no Falcon has run these models.
