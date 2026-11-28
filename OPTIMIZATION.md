@@ -9821,6 +9821,92 @@ Not done: the Blender-against-Hatari comparison
 (`compare_blender_render.py` reads the T-Rex's backdrop and shadow, not a
 model directory's).
 
+*A downloaded rigged model: Quaternius's low-poly T-Rex* (Animated Dinosaur
+Bundle, CC0, the glTF from Poly Pizza, 2026-11-28). Its 1,820 triangles and
+912 positions fit the budget as they are. It comes skinned with a 29-bone rig
+and six clips (walk: 33 frames), in five flat-coloured materials and no
+texture. `blender_swap_model.py` had to change for it.
+
+New options:
+- **`hull=0`:** keeps the part's own surface instead of its convex hull.
+  The hull suits the stilt walker's trusses but would make one blob of a
+  single skinned mesh. Seams split by glTF are welded (3,496 → 908
+  vertices); UVs, colours and normals live per corner and merged vertices
+  keep their weights.
+- **`swatches=1`:** the page this section's stilt-walker entry asked for.
+  Each distinct face colour becomes a solid 16×16 cell of one 256×256 page
+  (at most 256 colours), and each corner's UV samples its cell's centre.
+  The faces are then textured triangles on the DSP span stream.
+- **`feet=BackFoot*`:** names the foot bones for the stance speed. Each is
+  tracked by the lower end of its bone and counts as planted within 3% of
+  the height of its lowest point. The default (bones named `foot…`, heads
+  below 5% of the height) finds none here: the ankle heads sit higher.
+
+Bugs the glTF rig exposed, all now fixed:
+- *Relative paths* resolved against the open `.blend`'s folder, as in
+  `blender_rig_creature.py`.
+- *The importer's root empty* was dropped with its transform. The rig's
+  parent chain is now folded into the rig before unused objects are
+  removed.
+- *Part sizes from `Object.dimensions`* still described the untransformed
+  local mesh (0.10 instead of 15.2), so every part fell below `min_part`.
+  They are now measured from the vertices.
+- *The rig's own transform* (×300 here) was overwritten by route × basis,
+  so every bone motion shrank 300-fold and the feet rode along with the
+  body. It is now kept under the route.
+- *Animated strip time* only applies inside the strip's frame range. Past
+  a one-cycle strip, `HOLD_FORWARD` froze the last pose, so the walk
+  stopped after 34 of 114 frames. The strip now repeats past the end of
+  the lap.
+- *Blender 5.3 cleared "animated strip time"* when the stance measurement
+  evaluated the scene before the first time key, and then refused the
+  keys. It is switched on again before keying, and the script fails if the
+  strip ends up with no time curve.
+
+The last three also apply to the default path, so a rebuild of the stilt
+walker may differ from the figures above, wherever its rig carried a
+transform or its action was shorter than the lap. Its source is not in this
+repository and was not rebuilt.
+
+Command:
+
+```sh
+blender -b -Y TREX/scene/trex_trail.blend --python-exit-code 1 \
+  --python tools/blender_swap_model.py -- <glb saved as .blend> Armature \
+  "Armature|TRex_Walk" <out.blend> name=QTRex height=5.03 forward=-Y \
+  hull=0 swatches=1 "feet=BackFoot*"
+```
+
+The height is the trail T-Rex's 5.03 m.
+
+Result:
+- **Mesh:** 908 vertices, 1,812 triangles (8 degenerate after welding),
+  one page of 5 swatches, 1,294 normals. It uses 8,170 X and 8,022 Y DSP
+  words.
+- **Stretch:** 3.4 / 10 triangles per frame beyond 1.8×, worst 3.15×,
+  from the source's own skinning.
+- **Foot slip:** a planted foot moves backward in the body's frame at the
+  body's speed on average over a stance. Per frame it ranges from 0.06 to
+  0.94 m against the body's 0.45–0.61 m. The clip eases its feet in and out,
+  and the strip plays it at the median stance speed. Warping the strip
+  time to the planted foot's travel would remove that; not done.
+- **Loop:** in the FBSEQ capture, all 25 post-wrap frames match the frame
+  one lap earlier.
+
+On cycle-exact Hatari (as above: `build-ucrt64`, Videl contention on, 14 MB,
+320 frames):
+
+| Quaternius T-Rex | ms/frame | FPS | Packets | Clear | Rasterizer |
+|---|---:|---:|---:|---:|---:|
+| `swatches=1` (textured) | **235.7** | **4.24** | 142.1 | 46.6 | 37.9 |
+| `swatches=0` (flat, mode `0x30`) | 582.0 | 1.72 | 12.2 | 185.3 | 375.2 |
+
+The swatch page makes the same mesh 2.47× faster, and it is the fastest
+model on this trail so far. The flat build's rasterizer is the 68030 flat
+path, as for the stilt walker. Its clear stage is also four times the
+textured build's. That ratio is measured; it is not explained here.
+Emulator measurements; no Falcon has run this model.
+
 ### 6.6i Wider lap, secondary motion and random gestures
 
 *2026-11-21.* This replaces the route and the sample, memory and timing
